@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Tasks template for Gas Delivery application modernization. Contains testing, containerization, configuration, security, observability, and compliance tasks.",
+  "tasks": [
+    {
+      "type": "transform",
+      "id": "001-add-testing-infrastructure",
+      "description": "Add Comprehensive Testing Infrastructure",
+      "reason": "Establish a solid testing foundation with unit tests, integration tests, and TestContainers for database testing to improve code quality and reliability before cloud deployment",
+      "requirements": "Integrate JUnit 5, Mockito, and AssertJ testing libraries. Set up TestContainers for PostgreSQL integration tests. Add MockMvc for Spring MVC controller testing. Create test fixtures and builder patterns for common test scenarios. Achieve 70%+ code coverage for all business logic layers. Configure test database initialization with Testcontainers.",
+      "dependencies": [],
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "containerization",
+      "id": "002-containerize-application",
+      "description": "Containerize Application with Docker",
+      "dockerfilePath": "Dockerfile (to be created)",
+      "reason": "Enable cloud-native deployment to Azure Container Apps or AKS. Containerization standardizes the application packaging and simplifies deployment across environments.",
+      "requirements": "Create a multi-stage Dockerfile with separate builder and runtime stages for optimized image size. Implement layer caching strategy to minimize build times. Configure ENTRYPOINT for Spring Boot application startup. Include health check probes (liveness, readiness) for container orchestration. Generate Docker Compose file for local development with PostgreSQL service. Document all build instructions and environment variable requirements.",
+      "dependencies": ["001-add-testing-infrastructure"],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "false",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "003-externalize-configuration",
+      "description": "Externalize Database Configuration and Credentials",
+      "reason": "Remove hardcoded credentials from source code for security compliance. Enable environment-specific configuration (dev, test, prod) without code changes.",
+      "requirements": "Remove database username, password, and URL from application.properties. Implement Spring @ConfigurationProperties and @Value annotations for environment variable binding. Create application-dev.yml, application-test.yml, and application-prod.yml profiles. Document all required environment variables: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_POOL_SIZE. Support .env files for local development.",
+      "dependencies": ["002-containerize-application"],
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "false",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "004-implement-jwt-authentication",
+      "description": "Implement JWT-Based Authentication and RBAC",
+      "reason": "Secure REST APIs with token-based authentication. Implement role-based access control to restrict endpoint access based on user permissions.",
+      "requirements": "Add Spring Security with JWT token generation using JJWT or Spring Cloud Azure Security libraries. Implement JWT token validation filter to extract and verify tokens from Authorization header. Define user roles (ADMIN, CUSTOMER, SUPPLIER, RIDER) and implement @PreAuthorize annotations on controller methods. Create JWT token refresh mechanism with configurable expiration times. Add login endpoint to generate initial tokens. Configure CORS for cross-origin requests. Implement custom UserDetailsService for role loading.",
+      "dependencies": ["003-externalize-configuration"],
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "005-add-rate-limiting",
+      "description": "Add Rate Limiting to API Endpoints",
+      "reason": "Protect APIs from abuse and DoS attacks. Ensure fair resource usage across all clients.",
+      "requirements": "Integrate Resilience4j library (resilience4j-ratelimiter) for rate limiting. Implement @RateLimiter annotations on high-traffic endpoints (order placement, delivery requests, notifications). Configure sliding window rate limiting with limits per minute per endpoint. Create global rate limit handler that returns 429 Too Many Requests with retry-after headers. Add metrics/monitoring for rate limit violations. Document rate limit thresholds per endpoint in Swagger documentation.",
+      "dependencies": ["004-implement-jwt-authentication"],
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "006-add-api-documentation",
+      "description": "Add OpenAPI/Swagger API Documentation",
+      "reason": "Provide automatically generated, interactive API documentation for frontend developers and third-party integrations. Improve API discoverability and usage understanding.",
+      "requirements": "Integrate springdoc-openapi-starter-webmvc-ui library. Annotate all REST controllers with @Operation, @ApiResponse, @Parameter annotations. Document request/response DTOs with @Schema annotations. Configure Swagger UI at /swagger-ui.html endpoint. Generate OpenAPI specification in JSON/YAML formats. Document JWT authentication requirements and bearer token usage. Include examples for successful and error responses. Document all available endpoints, HTTP methods, and status codes.",
+      "dependencies": ["005-add-rate-limiting"],
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "false",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "007-setup-database-migrations",
+      "description": "Setup Flyway Database Migrations",
+      "reason": "Implement version control for database schema changes. Enable automated, repeatable database deployments across environments.",
+      "requirements": "Create V1__Initial_Schema.sql with current database schema. Implement versioning convention (V<number>__<description>.sql) for all migrations. Create migration scripts for each environment-specific setup. Implement Flyway callbacks for data population if needed. Configure baseline migration for existing production schema. Add migration cleanup scripts for rollback scenarios. Document all migration files and the process for creating new migrations.",
+      "dependencies": ["001-add-testing-infrastructure"],
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "false",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "008-add-monitoring-logging-actuator",
+      "description": "Add Monitoring, Logging, and Spring Boot Actuator",
+      "reason": "Enable comprehensive observability for production systems. Provide health checks, metrics, and structured logging for ELK Stack integration and troubleshooting.",
+      "requirements": "Enable Spring Boot Actuator with endpoints: /actuator/health (liveness/readiness probes), /actuator/metrics (application metrics), /actuator/prometheus (Prometheus metrics). Implement structured JSON logging using Logback with JSON encoder. Add correlation IDs to all log entries for distributed tracing. Configure custom metrics for business domain (orders placed, deliveries completed, etc.). Add health indicators for database connectivity, external service health. Configure Logback for ELK Stack JSON ingestion (json-appender). Document how to configure Logstash/Elasticsearch endpoints. Add application name, version, and environment to all log entries.",
+      "dependencies": ["006-add-api-documentation"],
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "false",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "security",
+      "id": "009-security-cve-scanning",
+      "description": "CVE Scanning and Security Remediation",
+      "reason": "Identify and remediate security vulnerabilities in project dependencies. Ensure compliance with security standards before production deployment.",
+      "requirements": "Run Maven dependency:check goal against OWASP CVE database. Identify all high/critical vulnerabilities in transitive dependencies. Update vulnerable dependencies to patched versions while maintaining compatibility. Re-run unit tests and build verification after security patches. Document all CVE fixes and updated dependency versions. Generate final CVE compliance report showing zero high/critical vulnerabilities.",
+      "dependencies": ["008-add-monitoring-logging-actuator"],
+      "cveReport": "Generated after task execution",
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "false",
+        "passUnitTests": "true"
+      }
+    }
+  ],
+  "metadata": {
+    "planName": "Gas Delivery Application Spring Boot Upgrade",
+    "projectName": "Gas Delivery Platform",
+    "language": "java",
+    "createdAt": "2024-07-16T00:00:00Z",
+    "version": "1.0"
+  }
+}

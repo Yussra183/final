@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "Gas Delivery & Supplying",
+    "slug": "mobileapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "mobileapp",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "process.env.GOOGLE_MAPS_API_KEY"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0F766E"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "config": {
+        "googleMaps": {
+          "apiKey": "process.env.GOOGLE_MAPS_API_KEY"
+        }
+      }
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#0F766E",
+          "dark": {
+            "backgroundColor": "#0B5C56"
+          }
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0F766E"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location to enable live delivery tracking.",
+          "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location to enable live delivery tracking.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
