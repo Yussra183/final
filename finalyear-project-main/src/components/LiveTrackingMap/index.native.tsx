@@ -24,7 +24,11 @@ import { Ionicons } from "@expo/vector-icons";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { Colors, FontSize, Radius } from "../../../constants/colors";
 import { LatLng } from "../../lib/location";
-import { ResolvedMapProps } from "../LiveTrackingMap.types";
+import {
+  LiveTrackingMapProps,
+  ResolvedMapProps,
+  resolveLiveTrackingMapProps,
+} from "../LiveTrackingMap.types";
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                   */
@@ -74,7 +78,7 @@ function regionFor(b: BBox, pad = 1.6): {
 /* Real Google Map view                                                      */
 /* -------------------------------------------------------------------------- */
 
-export function LiveTrackingMap(props: ResolvedMapProps) {
+function NativeLiveTrackingMap(props: ResolvedMapProps) {
   const polyline = useMemo<LatLng[]>(
     () => (props.route && props.route.length > 1 ? props.route : [props.origin, props.destination]),
     [props.route, props.origin, props.destination],
@@ -188,6 +192,10 @@ export function LiveTrackingMap(props: ResolvedMapProps) {
       </View>
     </View>
   );
+}
+
+export function LiveTrackingMap(props: LiveTrackingMapProps) {
+  return <NativeLiveTrackingMap {...resolveLiveTrackingMapProps(props)} />;
 }
 
 const styles = StyleSheet.create({

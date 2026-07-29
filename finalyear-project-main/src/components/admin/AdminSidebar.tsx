@@ -23,7 +23,7 @@ import {
   Spacing,
 } from "../../../constants/colors";
 import { Avatar } from "../Avatar";
-import { ADMIN_USER } from "../../store/adminData";
+import { useStore } from "../../store/StoreContext";
 
 export type AdminSidebarRoute = {
   key: string;
@@ -45,15 +45,15 @@ export type AdminSidebarRoute = {
 export const ADMIN_SIDEBAR_ROUTES: AdminSidebarRoute[] = [
   { key: "dashboard", label: "Dashboard", icon: "🏠", path: "/dashboard", section: "primary" },
   { key: "suppliers", label: "Suppliers", icon: "🏭", path: "/suppliers" },
-  { key: "applications-header", label: "Applications", icon: "📝", path: "", screenName: "" },
-  { key: "seller-apps", label: "Seller Applications", icon: "📥", path: "/seller-applications", screenName: "seller-applications", badge: 3 },
-  { key: "rider-apps", label: "Rider Applications", icon: "📥", path: "/rider-applications", screenName: "rider-applications", badge: 3 },
-  { key: "assignments", label: "Rider Assignments", icon: "🛵", path: "/rider-assignments", screenName: "rider-assignments", badge: 1 },
+  { key: "seller-apps", label: "Seller Applications", icon: "📥", path: "/seller-applications", screenName: "seller-applications" },
+  { key: "rider-apps", label: "Rider Applications", icon: "📥", path: "/rider-applications", screenName: "rider-applications" },
+  { key: "assignments", label: "Rider Assignments", icon: "🛵", path: "/rider-assignments", screenName: "rider-assignments" },
   { key: "sellers", label: "Sellers", icon: "🏪", path: "/sellers" },
   { key: "riders", label: "Riders", icon: "🪪", path: "/riders" },
   { key: "customers", label: "Customers", icon: "👥", path: "/customers" },
   { key: "routes", label: "Routes & Schedules", icon: "🗺️", path: "/routes" },
   { key: "orders", label: "Orders", icon: "📦", path: "/orders" },
+  { key: "products", label: "Products", icon: "🛢️", path: "/products" },
   { key: "reports", label: "Reports", icon: "📊", path: "/reports" },
   { key: "settings", label: "Settings", icon: "⚙️", path: "/settings" },
 ];
@@ -66,6 +66,11 @@ interface Props {
 }
 
 export function AdminSidebar({ asPanel, onNavigate }: Props) {
+  const { session } = useStore();
+  // The signed-in admin's name drives the profile chip. Falls back to
+  // a generic label when there is no session (the layout redirects those
+  // cases elsewhere — this only matters for the desktop sidebar panel).
+  const adminName = session?.user?.fullName || session?.user?.username || "Admin";
   const router = useRouter();
   const pathname = usePathname();
 
@@ -121,10 +126,10 @@ export function AdminSidebar({ asPanel, onNavigate }: Props) {
 
       {/* Profile chip */}
       <View style={styles.profileChip}>
-        <Avatar name={ADMIN_USER.fullName} size={44} color={Colors.admin} />
+        <Avatar name={adminName} size={44} color={Colors.admin} />
         <View style={{ marginLeft: Spacing.md, flex: 1 }}>
           <Text style={styles.profileName} numberOfLines={1}>
-            {ADMIN_USER.fullName}
+            {adminName}
           </Text>
           <Text style={styles.profileMeta} numberOfLines={1}>
             Super Admin

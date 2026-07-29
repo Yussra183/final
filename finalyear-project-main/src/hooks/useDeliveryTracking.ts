@@ -17,7 +17,7 @@ import {
   DeliveryRequestOrder,
   Rider,
   acceptDelivery,
-  fetchOnlineRiders,
+  fetchOnlineRidersForSeller,
   getAssignedRiderId,
   listEligibleRiders,
   releaseDelivery,
@@ -113,11 +113,16 @@ export function useDeliveryTracking({
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // 1. Broadcast to all eligible riders on mount.
+  // 1. Broadcast to only the riders assigned to this order's seller.
+  //
+  // The seller↔rider scoping is enforced here exactly the way the
+  // backend's `seller_riders` table does: riders from other sellers
+  // never appear in the competing list, never receive the broadcast,
+  // and therefore can never race for an order outside their team.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const pool = await fetchOnlineRiders();
+      const pool = await fetchOnlineRidersForSeller(order.sellerId);
       if (cancelled) return;
       const eligible = listEligibleRiders(order, pool);
       setState((s) => ({ ...s, competingRiders: eligible }));
@@ -224,7 +229,11 @@ export function useDeliveryTracking({
 
   const debugForceAssign = useCallback(
     (riderId: string) => {
-      const r = state.competingRiders.find((rr) => rr.id === riderId) ?? state.rider;
+      // Only the competing-riders pool carries full GPS coords; the
+      // already-assigned rider (state.rider) is tracked by their queue
+      // entry, not by direct lat/lng. Fall back to the shop if a rider
+      // somehow isn't in the competing pool anymore.
+      const r = state.competingRiders.find((rr) => rr.id === riderId);
       if (!r) return;
       acceptDelivery(order.orderId, r.id);
       setState((s) => ({
@@ -243,7 +252,7 @@ export function useDeliveryTracking({
         tick: s.tick + 1,
       }));
     },
-    [order.orderId, state.competingRiders, state.rider],
+    [order.orderId, state.competingRiders],
   );
 
   return { state, cancel, debugForceAssign };

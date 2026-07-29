@@ -1,18 +1,24 @@
 /**
  * Admin Dashboard – Customers page.
  *
- * Lists all customers with search and filters, including view details
- * and suspend / activate actions.
+ * Reads `GET /api/admin/customers`, which returns every user with
+ * `role = "customer"` joined against a grouped query over `orders` for
+ * the lifetime order count and spend. Search and the active/inactive
+ * filter are passed to the backend as query params, so the filtering
+ * happens against the database rather than a local copy.
+ *
+ * The per-customer order list comes from
+ * `GET /api/admin/customers/{id}/orders` and is fetched on demand when a
+ * row is opened.
+ *
+ * Read-only: the backend exposes no admin write surface for user records,
+ * so this page reports state rather than changing it.
  */
-import React, { useMemo, useState } from "react";
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AdminLayout } from "../../src/components/admin/AdminLayout";
 import {
+  AdminAsyncBoundary,
   AdminAvatar,
   AdminBadge,
   AdminButton,
@@ -24,64 +30,67 @@ import {
   AdminTable,
 } from "../../src/components/admin";
 import { AdminTableColumn } from "../../src/components/admin/AdminTable";
-import {
-  Colors,
-  FontSize,
-  Radius,
-  Spacing,
-} from "../../constants/colors";
-import { CUSTOMERS, Customer } from "../../src/store/adminData";
+import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import { orderStatusLabel } from "../../constants/order";
+import { AdminApi } from "../../src/api/endpoints";
+import { useAdminResource } from "../../src/hooks/useAdminResource";
+import type { AdminCustomer, AdminOrder } from "../../constants/types";
 
 type FilterKey = "all" | "active" | "inactive";
 
+const formatCurrency = (n: number) =>
+  `TZS ${Number(n ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+
+const formatDate = (iso: string | null) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+};
+
 export default function CustomersPage() {
-  const [customers, setCustomers] = useState<Customer[]>(CUSTOMERS);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [viewTarget, setViewTarget] = useState<Customer | null>(null);
-  const [suspendTarget, setSuspendTarget] = useState<Customer | null>(null);
+  const [viewTarget, setViewTarget] = useState<AdminCustomer | null>(null);
+  const [viewOrders, setViewOrders] = useState<AdminOrder[] | null>(null);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return customers.filter((c) => {
-      const matchQ =
-        !q ||
-        c.fullName.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        c.phone.includes(q);
-      const matchF = filter === "all" || c.status === filter;
-      return matchQ && matchF;
-    });
-  }, [customers, search, filter]);
+  // Debounce the search so a keystroke doesn't fire a request per letter.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const counts = useMemo(
-    () => ({
-      all: customers.length,
-      active: customers.filter((c) => c.status === "active").length,
-      inactive: customers.filter((c) => c.status === "inactive").length,
-    }),
-    [customers],
+  const active =
+    filter === "all" ? undefined : filter === "active" ? true : false;
+
+  const { data, loading, error, reload, refreshing } = useAdminResource<
+    AdminCustomer[]
+  >(
+    () =>
+      AdminApi.customers({
+        q: debouncedSearch || undefined,
+        active,
+      }),
+    [debouncedSearch, active],
   );
 
-  const handleSuspend = () => {
-    if (!suspendTarget) return;
-    setCustomers((prev) =>
-      prev.map((c) =>
-        c.id === suspendTarget.id
-          ? {
-              ...c,
-              status: c.status === "active" ? "inactive" : "active",
-            }
-          : c,
-      ),
-    );
-    setSuspendTarget(null);
-  };
+  const customers = data ?? [];
 
-  const formatCurrency = (n: number) =>
-    `KES ${n.toLocaleString("en-KE", { maximumFractionDigits: 0 })}`;
+  // Load the selected customer's orders from the backend on open.
+  const openCustomer = useCallback(async (c: AdminCustomer) => {
+    setViewTarget(c);
+    setViewOrders(null);
+    try {
+      setViewOrders(await AdminApi.customerOrders(c.id));
+    } catch {
+      setViewOrders([]);
+    }
+  }, []);
 
-  const columns: AdminTableColumn<Customer>[] = [
+  const activeCount = customers.filter((c) => c.isActive).length;
+  const totalSpend = customers.reduce((s, c) => s + (c.totalSpent ?? 0), 0);
+
+  const columns: AdminTableColumn<AdminCustomer>[] = [
     {
       key: "name",
       label: "Customer",
@@ -99,14 +108,16 @@ export default function CustomersPage() {
     {
       key: "phone",
       label: "Phone",
-      flex: 1.4,
-      render: (c) => <Text style={styles.cellText}>{c.phone}</Text>,
+      flex: 1.3,
+      render: (c) => <Text style={styles.cellText}>{c.phone ?? "—"}</Text>,
     },
     {
-      key: "location",
-      label: "Location",
-      flex: 1.6,
-      render: (c) => <Text style={styles.cellText}>{c.location}</Text>,
+      key: "joined",
+      label: "Registered",
+      flex: 1.2,
+      render: (c) => (
+        <Text style={styles.cellText}>{formatDate(c.createdAt)}</Text>
+      ),
     },
     {
       key: "orders",
@@ -115,17 +126,19 @@ export default function CustomersPage() {
       align: "center",
       render: (c) => (
         <View style={styles.ordersBubble}>
-          <Text style={styles.ordersText}>{c.totalOrders}</Text>
+          <Text style={styles.ordersText}>{c.orderCount}</Text>
         </View>
       ),
     },
     {
       key: "spent",
       label: "Total Spent",
-      flex: 1.1,
+      flex: 1.2,
       align: "right",
       render: (c) => (
-        <Text style={[styles.cellText, { color: Colors.primary, fontWeight: "800" }]}>
+        <Text
+          style={[styles.cellText, { color: Colors.primary, fontWeight: "800" }]}
+        >
           {formatCurrency(c.totalSpent)}
         </Text>
       ),
@@ -136,99 +149,118 @@ export default function CustomersPage() {
       flex: 0.9,
       render: (c) => (
         <AdminBadge
-          label={c.status[0].toUpperCase() + c.status.slice(1)}
-          tone={c.status === "active" ? "success" : "neutral"}
+          label={c.isActive ? "Active" : "Inactive"}
+          tone={c.isActive ? "success" : "neutral"}
         />
       ),
     },
   ];
 
   return (
-    <AdminLayout title="Customers" subtitle="All customers using the platform">
-      <View style={styles.kpiRow}>
-        <AdminStatTile
-          label="Total Customers"
-          value={counts.all}
-          icon="👥"
-          tone="primary"
-          delta="+12%"
-          deltaTone="up"
+    <AdminLayout
+      title="Customers"
+      subtitle="All customers registered in the database"
+      rightActions={
+        <AdminButton
+          label="Refresh"
+          icon="↻"
+          variant="secondary"
+          onPress={reload}
+          loading={refreshing}
         />
-        <AdminStatTile
-          label="Active"
-          value={counts.active}
-          icon="✅"
-          tone="success"
-        />
-        <AdminStatTile
-          label="Inactive"
-          value={counts.inactive}
-          icon="💤"
-          tone="warning"
-        />
-        <AdminStatTile
-          label="Avg. Spend"
-          value={formatCurrency(
-            customers.reduce((s, c) => s + c.totalSpent, 0) /
-              Math.max(customers.length, 1),
-          )}
-          icon="💰"
-          tone="accent"
-        />
-      </View>
-
-      <AdminCard style={{ marginTop: Spacing.lg }}>
-        <AdminSearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search by name, email or phone"
-          filters={[
-            { key: "all", label: "All", count: counts.all },
-            { key: "active", label: "Active", count: counts.active },
-            { key: "inactive", label: "Inactive", count: counts.inactive },
-          ]}
-          activeFilter={filter}
-          onFilterChange={(k) => setFilter(k as FilterKey)}
-        />
-        {filtered.length === 0 ? (
-          <AdminEmptyState
+      }
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={reload} />
+      }
+    >
+      <AdminAsyncBoundary
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        hasData={!!data}
+        loadingLabel="Loading customers…"
+      >
+        <View style={styles.kpiRow}>
+          <AdminStatTile
+            label="Customers Shown"
+            value={customers.length}
             icon="👥"
-            title="No customers found"
-            message="Try adjusting your search or filters."
+            tone="primary"
           />
-        ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={{ minWidth: 900 }}>
-              <AdminTable
-                columns={columns}
-                rows={filtered}
-                keyExtractor={(c) => c.id}
-                rowActions={(c) => (
-                  <View style={styles.actionRow}>
-                    <AdminButton
-                      label="View"
-                      variant="secondary"
-                      size="sm"
-                      onPress={() => setViewTarget(c)}
-                    />
-                    <AdminButton
-                      label={c.status === "active" ? "Deactivate" : "Activate"}
-                      variant={c.status === "active" ? "warning" : "success"}
-                      size="sm"
-                      onPress={() => setSuspendTarget(c)}
-                    />
-                  </View>
-                )}
-              />
-            </View>
-          </ScrollView>
-        )}
-      </AdminCard>
+          <AdminStatTile
+            label="Active"
+            value={activeCount}
+            icon="✅"
+            tone="success"
+          />
+          <AdminStatTile
+            label="Inactive"
+            value={customers.length - activeCount}
+            icon="💤"
+            tone="warning"
+          />
+          <AdminStatTile
+            label="Combined Spend"
+            value={formatCurrency(totalSpend)}
+            icon="💰"
+            tone="accent"
+          />
+        </View>
+
+        <AdminCard style={{ marginTop: Spacing.lg }}>
+          <AdminSearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search by name, username, email or phone"
+            filters={[
+              { key: "all", label: "All" },
+              { key: "active", label: "Active" },
+              { key: "inactive", label: "Inactive" },
+            ]}
+            activeFilter={filter}
+            onFilterChange={(k) => setFilter(k as FilterKey)}
+          />
+          {customers.length === 0 ? (
+            <AdminEmptyState
+              icon="👥"
+              title="No customers found"
+              message={
+                search || filter !== "all"
+                  ? "No customer in the database matches this search."
+                  : "No customer accounts have been registered yet."
+              }
+            />
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={{ minWidth: 900 }}>
+                <AdminTable
+                  columns={columns}
+                  rows={customers}
+                  keyExtractor={(c) => c.id}
+                  rowActions={(c) => (
+                    <View style={styles.actionRow}>
+                      <AdminButton
+                        label="View"
+                        variant="secondary"
+                        size="sm"
+                        onPress={() => openCustomer(c)}
+                      />
+                    </View>
+                  )}
+                />
+              </View>
+            </ScrollView>
+          )}
+        </AdminCard>
+      </AdminAsyncBoundary>
 
       {viewTarget ? (
         <AdminModal
           visible
-          onClose={() => setViewTarget(null)}
+          onClose={() => {
+            setViewTarget(null);
+            setViewOrders(null);
+          }}
           title={viewTarget.fullName}
           hideFooter
         >
@@ -236,48 +268,59 @@ export default function CustomersPage() {
             <AdminAvatar name={viewTarget.fullName} size={64} />
             <View style={{ flex: 1, marginLeft: Spacing.md }}>
               <Text style={styles.detailTitle}>{viewTarget.fullName}</Text>
-              <Text style={styles.detailMeta}>{viewTarget.location}</Text>
+              <Text style={styles.detailMeta}>@{viewTarget.username}</Text>
               <View style={{ marginTop: 6, flexDirection: "row", gap: 6 }}>
                 <AdminBadge
-                  label={viewTarget.status[0].toUpperCase() + viewTarget.status.slice(1)}
-                  tone={viewTarget.status === "active" ? "success" : "neutral"}
+                  label={viewTarget.isActive ? "Active" : "Inactive"}
+                  tone={viewTarget.isActive ? "success" : "neutral"}
                 />
                 <AdminBadge label="Customer" tone="info" />
               </View>
             </View>
           </View>
+
           <View style={styles.detailGrid}>
             <Row label="Email" value={viewTarget.email} />
-            <Row label="Phone" value={viewTarget.phone} />
-            <Row label="Total Orders" value={String(viewTarget.totalOrders)} />
-            <Row label="Total Spent" value={formatCurrency(viewTarget.totalSpent)} />
-            <Row label="Joined" value={viewTarget.joinedDate} />
+            <Row label="Phone" value={viewTarget.phone ?? "—"} />
+            <Row label="Registered" value={formatDate(viewTarget.createdAt)} />
+            <Row label="Total Orders" value={String(viewTarget.orderCount)} />
+            <Row
+              label="Total Spent"
+              value={formatCurrency(viewTarget.totalSpent)}
+            />
           </View>
+
+          <Text style={styles.subHeading}>Recent Orders</Text>
+          {viewOrders === null ? (
+            <Text style={styles.cellMeta}>Loading orders…</Text>
+          ) : viewOrders.length === 0 ? (
+            <Text style={styles.cellMeta}>
+              This customer has not placed any orders.
+            </Text>
+          ) : (
+            <View style={{ gap: Spacing.sm }}>
+              {viewOrders.map((o) => (
+                <View key={o.id} style={styles.orderRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cellTitle}>#{o.id}</Text>
+                    <Text style={styles.cellMeta}>
+                      {o.sellerName} • {formatDate(o.createdAt)}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={styles.cellTitle}>
+                      {formatCurrency(o.total)}
+                    </Text>
+                    <Text style={styles.cellMeta}>
+                      {orderStatusLabel(o.status)}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </AdminModal>
       ) : null}
-
-      <AdminModal
-        visible={!!suspendTarget}
-        onClose={() => setSuspendTarget(null)}
-        title={
-          suspendTarget?.status === "active"
-            ? "Deactivate Customer?"
-            : "Reactivate Customer?"
-        }
-        subtitle={suspendTarget?.fullName ?? ""}
-        onConfirm={handleSuspend}
-        confirmLabel={
-          suspendTarget?.status === "active" ? "Deactivate" : "Activate"
-        }
-        confirmVariant={
-          suspendTarget?.status === "active" ? "warning" : "success"
-        }
-      >
-        <Text style={styles.dialogText}>
-          Deactivating the customer will prevent them from placing new
-          orders until reactivated.
-        </Text>
-      </AdminModal>
     </AdminLayout>
   );
 }
@@ -333,11 +376,6 @@ const styles = StyleSheet.create({
     gap: 4,
     justifyContent: "flex-end",
   },
-  dialogText: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.sm,
-    fontWeight: "600",
-  },
   detailHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -375,5 +413,19 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: "right",
     marginLeft: Spacing.md,
+  },
+  subHeading: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  orderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
   },
 });

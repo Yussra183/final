@@ -53,15 +53,51 @@ function SellerDrawerContent(props: DrawerContentComponentProps) {
 
 export default function SellerLayout() {
   // Route guard — only signed-in sellers can enter this module.
-  const { session } = useStore();
+  const { session, sellerPermits } = useStore();
   if (!session) return <Redirect href="/auth/login" />;
   if (session.user.role !== "seller") return <Redirect href="/auth/login" />;
+
+  /**
+   * Permit gating: until the seller's permit is APPROVED every
+   * business-facing drawer item is disabled. The seller can still see
+   * the dashboard, profile (where they apply), and notifications —
+   * everything else is greyed out with a "pending verification" tooltip.
+   *
+   * `session.user.permitStatus` is the source of truth; it mirrors the
+   * server's view after every `refresh()` cycle. We also peek the
+   * `sellerPermits` map as a fallback for the very first render before
+   * the session has been hydrated.
+   */
+  const permitStatus =
+    session.user.permitStatus ??
+    sellerPermits[session.user.id]?.status ??
+    null;
+  const permitApproved = permitStatus === "approved";
 
   // We type the drawer as `any` for the JSX below — the upstream
   // `@react-navigation/drawer` typings require a `children` prop on
   // `Drawer.Screen`, but at runtime Expo Router's `Screen` injects
   // children from the file system, so the prop is never needed.
   const TypedDrawer = Drawer as any;
+
+  /**
+   * Drawer entry helper — wraps the standard option block with a
+   * `disabled` flag and a small lock icon when the seller isn't
+   * approved. Stays a single line at each call site.
+   */
+  const businessOptions = (label: string, title: string, icon: keyof typeof Ionicons.glyphMap) => ({
+    drawerLabel: permitApproved ? label : `${label} (locked)`,
+    title,
+    drawerIcon: ({ color, size }: { color: string; size: number }) => (
+      <Ionicons
+        name={permitApproved ? icon : "lock-closed-outline"}
+        size={size}
+        color={color}
+      />
+    ),
+    swipeEnabled: permitApproved,
+    drawerItemStyle: permitApproved ? undefined : { opacity: 0.5 },
+  });
 
   return (
     <TypedDrawer
@@ -108,53 +144,31 @@ export default function SellerLayout() {
       />
       <TypedDrawer.Screen
         name="orders"
-        options={{
-          drawerLabel: "Orders",
-          title: "Orders",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="receipt-outline" size={size} color={color} />
-          ),
-        }}
+        options={businessOptions("Orders", "Orders", "receipt-outline")}
       />
       <TypedDrawer.Screen
         name="inventory"
-        options={{
-          drawerLabel: "Inventory",
-          title: "Inventory",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="cube-outline" size={size} color={color} />
-          ),
-        }}
+        options={businessOptions("Inventory", "Inventory", "cube-outline")}
       />
       <TypedDrawer.Screen
         name="delivery"
-        options={{
-          drawerLabel: "Delivery Tracking",
-          title: "Delivery Tracking",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="car-outline" size={size} color={color} />
-          ),
-        }}
+        options={businessOptions(
+          "Delivery Tracking",
+          "Delivery Tracking",
+          "car-outline",
+        )}
       />
       <TypedDrawer.Screen
         name="live-tracking"
-        options={{
-          drawerLabel: "Live Tracking",
-          title: "Live Tracking",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="navigate-circle-outline" size={size} color={color} />
-          ),
-        }}
+        options={businessOptions(
+          "Live Tracking",
+          "Live Tracking",
+          "navigate-circle-outline",
+        )}
       />
       <TypedDrawer.Screen
         name="reports"
-        options={{
-          drawerLabel: "Sales Reports",
-          title: "Sales Reports",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="bar-chart-outline" size={size} color={color} />
-          ),
-        }}
+        options={businessOptions("Sales Reports", "Sales Reports", "bar-chart-outline")}
       />
       <TypedDrawer.Screen
         name="profile"

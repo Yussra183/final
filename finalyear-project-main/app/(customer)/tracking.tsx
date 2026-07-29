@@ -19,12 +19,36 @@ import {
 } from "../../src/utils/format";
 import { AppButton } from "../../src/components/AppButton";
 import { OrderStatusTimeline } from "../../src/components/OrderStatusTimeline";
+import { LiveDeliveryTracker } from "../../src/components/LiveDeliveryTracker";
+import { useOrderTracking } from "../../src/hooks/useOrderTracking";
+import { LatLng, toLatLng } from "../../src/lib/location";
 
 export default function TrackingScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { orders, session } = useStore();
   const order = orders.find((o) => o.id === id);
+
+  // Subscribe to the rider's real-time position. The hook returns
+  // `idle` while the order is still pending — the surface degrades
+  // gracefully (the map shows the origin/destination markers, the
+  // tracker card shows "Waiting for first signal").
+  const tracking = useOrderTracking({
+    orderId: order?.id,
+    token: session?.token ?? null,
+  });
+
+  // The Order DTO doesn't carry seller coords. We synthesise a small
+  // offset NE of the delivery address so the map has a visible
+  // origin/destination span even before the rider has started moving.
+  // Falls back to a Zanzibar pin if even the delivery address lacks
+  // coordinates (shouldn't happen in production — createOrder requires
+  // lat/lng).
+  const destination: LatLng = toLatLng(order?.deliveryLocation) ??
+    { lat: -6.76, lng: 39.24 };
+  const origin: LatLng = destination.lat !== -6.76
+    ? { lat: destination.lat + 0.018, lng: destination.lng + 0.018 }
+    : { lat: -6.1629, lng: 39.2026 };
 
   if (!order) {
     return (
@@ -46,24 +70,42 @@ export default function TrackingScreen() {
         }}
       />
       <ScrollView contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 120 }}>
-        <Card>
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heading}>Status</Text>
-              <Text style={styles.sub}>
-                Last update: {formatDateTime(order.updatedAt)}
-              </Text>
+        {/* Live rider tracking surface — only render when a rider is
+            actually assigned; otherwise fall through to the legacy
+            status card so we don't show a fake map before the rider
+            has accepted. */}
+        {order.riderId ? (
+          <LiveDeliveryTracker
+            tracking={tracking}
+            origin={origin}
+            destination={destination}
+            liveLabel={order.riderName ?? "Rider"}
+            originLabel={order.sellerName ? `${order.sellerName} shop` : "Shop"}
+            destinationLabel={order.customerName}
+            role="customer"
+            orderStatus={order.status}
+            riderName={order.riderName ?? null}
+          />
+        ) : (
+          <Card>
+            <View style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.heading}>Status</Text>
+                <Text style={styles.sub}>
+                  Last update: {formatDateTime(order.updatedAt)}
+                </Text>
+              </View>
+              <StatusPill
+                label={orderStatusLabel(order.status)}
+                tone={orderTone(order.status)}
+              />
             </View>
-            <StatusPill
-              label={orderStatusLabel(order.status)}
-              tone={orderTone(order.status)}
-            />
-          </View>
 
-          <View style={styles.timelineWrap}>
-            <OrderStatusTimeline order={order} />
-          </View>
-        </Card>
+            <View style={styles.timelineWrap}>
+              <OrderStatusTimeline order={order} />
+            </View>
+          </Card>
+        )}
 
         <Card style={{ marginTop: Spacing.md }}>
           <Text style={styles.heading}>Items</Text>

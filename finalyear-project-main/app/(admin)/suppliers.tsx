@@ -1,170 +1,119 @@
 /**
  * Admin Dashboard – Suppliers page.
  *
- * Lists registered suppliers with search, status filter, view, edit,
- * suspend and delete actions. Includes a "Register Supplier" form
- * modal and per-row confirmation dialogs.
+ * Reads `GET /api/admin/suppliers`, which returns every user with
+ * `role = "supplier"`. Search and the active/inactive filter are passed
+ * to the backend as query params, so the filtering happens against the
+ * database rather than a local copy.
+ *
+ * Suppliers are simply users with `role = "supplier"` — there is no
+ * supplier-profile table in the database. Company name, tax ID, address,
+ * routes, vehicles and delivery schedules are therefore NOT available
+ * here and are surfaced as a small informational note rather than
+ * fabricated from a local mock.
+ *
+ * Read-only: the backend exposes no admin write surface for user records,
+ * so this page reports state rather than changing it.
  */
-import React, { useMemo, useState } from "react";
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import React, { useEffect, useState } from "react";
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AdminLayout } from "../../src/components/admin/AdminLayout";
 import {
-  AdminCard,
+  AdminAsyncBoundary,
   AdminAvatar,
+  AdminBadge,
   AdminButton,
+  AdminCard,
   AdminEmptyState,
-  AdminInput,
-  AdminFormField,
-  AdminFormGrid,
   AdminModal,
   AdminSearchBar,
   AdminStatTile,
   AdminTable,
-  SupplierStatusBadge,
-  AdminBadge,
 } from "../../src/components/admin";
 import { AdminTableColumn } from "../../src/components/admin/AdminTable";
-import {
-  Colors,
-  FontSize,
-  Radius,
-  Spacing,
-} from "../../constants/colors";
-import { Supplier, SUPPLIERS } from "../../src/store/adminData";
+import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import { AdminApi } from "../../src/api/endpoints";
+import { useAdminResource } from "../../src/hooks/useAdminResource";
+import type { AdminUser } from "../../constants/types";
 
-type FilterKey = "all" | "active" | "suspended";
+type FilterKey = "all" | "active" | "inactive";
+
+const formatDate = (iso: string | null) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+};
 
 export default function AdminSuppliersPage() {
-  const [suppliers, setSuppliers] = useState<Supplier[]>(SUPPLIERS);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [showRegister, setShowRegister] = useState(false);
-  const [editTarget, setEditTarget] = useState<Supplier | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null);
-  const [viewTarget, setViewTarget] = useState<Supplier | null>(null);
-  const [suspendTarget, setSuspendTarget] = useState<Supplier | null>(null);
+  const [viewTarget, setViewTarget] = useState<AdminUser | null>(null);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return suppliers.filter((s) => {
-      const matchQ =
-        !q ||
-        s.companyName.toLowerCase().includes(q) ||
-        s.contactPerson.toLowerCase().includes(q) ||
-        s.location.toLowerCase().includes(q);
-      const matchF = filter === "all" || s.status === filter;
-      return matchQ && matchF;
-    });
-  }, [suppliers, search, filter]);
+  // Debounce the search so a keystroke doesn't fire a request per letter.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const counts = useMemo(
-    () => ({
-      all: suppliers.length,
-      active: suppliers.filter((s) => s.status === "active").length,
-      suspended: suppliers.filter((s) => s.status === "suspended").length,
-    }),
-    [suppliers],
+  const active =
+    filter === "all" ? undefined : filter === "active" ? true : false;
+
+  const { data, loading, error, reload, refreshing } = useAdminResource<
+    AdminUser[]
+  >(
+    () =>
+      AdminApi.suppliers({
+        q: debouncedSearch || undefined,
+        active,
+      }),
+    [debouncedSearch, active],
   );
 
-  const handleDelete = () => {
-    if (!deleteTarget) return;
-    setSuppliers((prev) => prev.filter((s) => s.id !== deleteTarget.id));
-    setDeleteTarget(null);
-  };
+  const suppliers = data ?? [];
 
-  const handleSuspend = () => {
-    if (!suspendTarget) return;
-    setSuppliers((prev) =>
-      prev.map((s) =>
-        s.id === suspendTarget.id
-          ? {
-              ...s,
-              status: s.status === "active" ? "suspended" : "active",
-            }
-          : s,
-      ),
-    );
-    setSuspendTarget(null);
-  };
+  const activeCount = suppliers.filter((s) => s.isActive).length;
 
-  const handleSaveEdit = (next: Supplier) => {
-    setSuppliers((prev) => prev.map((s) => (s.id === next.id ? next : s)));
-    setEditTarget(null);
-  };
-
-  const handleRegister = (data: Omit<Supplier, "id" | "joinedDate">) => {
-    const newSupplier: Supplier = {
-      ...data,
-      id: `sup-${Math.floor(Math.random() * 9000 + 1000)}`,
-      joinedDate: new Date().toISOString().slice(0, 10),
-    };
-    setSuppliers((prev) => [newSupplier, ...prev]);
-    setShowRegister(false);
-  };
-
-  const columns: AdminTableColumn<Supplier>[] = [
+  const columns: AdminTableColumn<AdminUser>[] = [
     {
-      key: "company",
-      label: "Company",
+      key: "name",
+      label: "Supplier",
       flex: 2.4,
       render: (s) => (
         <View style={styles.cellRow}>
-          <AdminAvatar name={s.companyName} size={36} />
+          <AdminAvatar name={s.fullName} size={36} />
           <View>
-            <Text style={styles.cellTitle}>{s.companyName}</Text>
-            <Text style={styles.cellMeta}>{s.email}</Text>
+            <Text style={styles.cellTitle}>{s.fullName}</Text>
+            <Text style={styles.cellMeta}>
+              @{s.username} • {s.email}
+            </Text>
           </View>
         </View>
       ),
     },
     {
-      key: "contact",
-      label: "Contact",
-      flex: 1.6,
-      render: (s) => (
-        <View>
-          <Text style={styles.cellText}>{s.contactPerson}</Text>
-          <Text style={styles.cellMeta}>{s.phone}</Text>
-        </View>
-      ),
-    },
-    {
-      key: "location",
-      label: "Location",
+      key: "phone",
+      label: "Phone",
       flex: 1.4,
-      render: (s) => <Text style={styles.cellText}>{s.location}</Text>,
+      render: (s) => <Text style={styles.cellText}>{s.phone ?? "—"}</Text>,
     },
     {
-      key: "routes",
-      label: "Routes",
-      flex: 0.6,
-      align: "center",
+      key: "joined",
+      label: "Registered",
+      flex: 1.2,
       render: (s) => (
-        <View style={styles.routesBubble}>
-          <Text style={styles.routesText}>{s.routes}</Text>
-        </View>
+        <Text style={styles.cellText}>{formatDate(s.createdAt)}</Text>
       ),
     },
     {
       key: "status",
       label: "Status",
-      flex: 0.8,
-      render: (s) => <SupplierStatusBadge status={s.status} />,
-    },
-    {
-      key: "joined",
-      label: "Joined",
-      flex: 0.8,
+      flex: 0.9,
       render: (s) => (
-        <Text style={[styles.cellText, { color: Colors.textSecondary }]}>
-          {s.joinedDate}
-        </Text>
+        <AdminBadge
+          label={s.isActive ? "Active" : "Inactive"}
+          tone={s.isActive ? "success" : "neutral"}
+        />
       ),
     },
   ];
@@ -172,367 +121,159 @@ export default function AdminSuppliersPage() {
   return (
     <AdminLayout
       title="Suppliers"
+      subtitle="All supplier accounts registered in the database"
       rightActions={
         <AdminButton
-          icon="＋"
-          label="Register Supplier"
-          onPress={() => setShowRegister(true)}
+          label="Refresh"
+          icon="↻"
+          variant="secondary"
+          onPress={reload}
+          loading={refreshing}
         />
       }
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={reload} />
+      }
     >
-      {/* KPI strip */}
-      <View style={styles.kpiRow}>
-        <AdminStatTile
-          label="Total Suppliers"
-          value={suppliers.length}
-          icon="🏭"
-          tone="primary"
-        />
-        <AdminStatTile
-          label="Active"
-          value={counts.active}
-          icon="✅"
-          tone="success"
-        />
-        <AdminStatTile
-          label="Suspended"
-          value={counts.suspended}
-          icon="⛔"
-          tone="danger"
-        />
-        <AdminStatTile
-          label="Routes Managed"
-          value={suppliers.reduce((s, x) => s + x.routes, 0)}
-          icon="🗺️"
-          tone="info"
-        />
-      </View>
-
-      <AdminCard style={{ marginTop: Spacing.lg }}>
-        <AdminSearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search by company, contact or location"
-          filters={[
-            { key: "all", label: "All", count: counts.all },
-            { key: "active", label: "Active", count: counts.active },
-            { key: "suspended", label: "Suspended", count: counts.suspended },
-          ]}
-          activeFilter={filter}
-          onFilterChange={(k) => setFilter(k as FilterKey)}
-        />
-        {filtered.length === 0 ? (
-          <AdminEmptyState
+      <AdminAsyncBoundary
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        hasData={!!data}
+        loadingLabel="Loading suppliers…"
+      >
+        <View style={styles.kpiRow}>
+          <AdminStatTile
+            label="Suppliers Shown"
+            value={suppliers.length}
             icon="🏭"
-            title="No suppliers match your search"
-            message="Try clearing your filters or registering a new supplier."
+            tone="primary"
           />
-        ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={{ minWidth: 900 }}>
-              <AdminTable
-                columns={columns}
-                rows={filtered}
-                keyExtractor={(s) => s.id}
-                rowActions={(s) => (
-                  <View style={styles.actionRow}>
-                    <AdminButton
-                      label="View"
-                      variant="secondary"
-                      size="sm"
-                      onPress={() => setViewTarget(s)}
-                    />
-                    <AdminButton
-                      label="Edit"
-                      variant="ghost"
-                      size="sm"
-                      icon="✎"
-                      onPress={() => setEditTarget(s)}
-                    />
-                    <AdminButton
-                      label={s.status === "active" ? "Suspend" : "Activate"}
-                      variant={s.status === "active" ? "warning" : "success"}
-                      size="sm"
-                      onPress={() => setSuspendTarget(s)}
-                    />
-                    <AdminButton
-                      label="Delete"
-                      variant="danger"
-                      size="sm"
-                      onPress={() => setDeleteTarget(s)}
-                    />
-                  </View>
-                )}
-              />
-            </View>
-          </ScrollView>
-        )}
-      </AdminCard>
+          <AdminStatTile
+            label="Active"
+            value={activeCount}
+            icon="✅"
+            tone="success"
+          />
+          <AdminStatTile
+            label="Inactive"
+            value={suppliers.length - activeCount}
+            icon="💤"
+            tone="warning"
+          />
+          <AdminStatTile
+            label="Role"
+            value="supplier"
+            icon="📦"
+            tone="info"
+          />
+        </View>
 
-      {/* Register modal */}
-      {showRegister ? (
-        <SupplierFormModal
-          mode="create"
-          onClose={() => setShowRegister(false)}
-          onSubmit={handleRegister}
-        />
-      ) : null}
+        <View style={styles.infoNote}>
+          <Text style={styles.infoIcon}>ℹ️</Text>
+          <Text style={styles.infoText}>
+            Supplier business details (company name, tax ID, address,
+            vehicles) and delivery schedules are not yet stored in the
+            backend — only user-level fields are available here.
+          </Text>
+        </View>
 
-      {editTarget ? (
-        <SupplierFormModal
-          mode="edit"
-          supplier={editTarget}
-          onClose={() => setEditTarget(null)}
-          onSubmit={(data) =>
-            handleSaveEdit({ ...editTarget, ...data } as Supplier)
-          }
-        />
-      ) : null}
+        <AdminCard style={{ marginTop: Spacing.lg }}>
+          <AdminSearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search by name, username, email or phone"
+            filters={[
+              { key: "all", label: "All" },
+              { key: "active", label: "Active" },
+              { key: "inactive", label: "Inactive" },
+            ]}
+            activeFilter={filter}
+            onFilterChange={(k) => setFilter(k as FilterKey)}
+          />
+          {suppliers.length === 0 ? (
+            <AdminEmptyState
+              icon="🏭"
+              title="No suppliers found"
+              message={
+                search || filter !== "all"
+                  ? "No supplier in the database matches this search."
+                  : "No supplier accounts have been registered yet."
+              }
+            />
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={{ minWidth: 900 }}>
+                <AdminTable
+                  columns={columns}
+                  rows={suppliers}
+                  keyExtractor={(s) => s.id}
+                  rowActions={(s) => (
+                    <View style={styles.actionRow}>
+                      <AdminButton
+                        label="View"
+                        variant="secondary"
+                        size="sm"
+                        onPress={() => setViewTarget(s)}
+                      />
+                    </View>
+                  )}
+                />
+              </View>
+            </ScrollView>
+          )}
+        </AdminCard>
+      </AdminAsyncBoundary>
 
       {viewTarget ? (
-        <SupplierDetailsModal
-          supplier={viewTarget}
+        <AdminModal
+          visible
           onClose={() => setViewTarget(null)}
-        />
+          title={viewTarget.fullName}
+          hideFooter
+        >
+          <View style={styles.detailHeader}>
+            <AdminAvatar name={viewTarget.fullName} size={64} />
+            <View style={{ flex: 1, marginLeft: Spacing.md }}>
+              <Text style={styles.detailTitle}>{viewTarget.fullName}</Text>
+              <Text style={styles.detailMeta}>
+                @{viewTarget.username} • Supplier
+              </Text>
+              <View style={{ marginTop: 6, flexDirection: "row", gap: 6 }}>
+                <AdminBadge
+                  label={viewTarget.isActive ? "Active" : "Inactive"}
+                  tone={viewTarget.isActive ? "success" : "neutral"}
+                />
+                <AdminBadge label="Supplier" tone="info" />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.detailGrid}>
+            <Row label="Email" value={viewTarget.email} />
+            <Row label="Phone" value={viewTarget.phone ?? "—"} />
+            <Row label="Role" value={viewTarget.role} />
+            <Row label="Registered" value={formatDate(viewTarget.createdAt)} />
+            <Row label="Last Updated" value={formatDate(viewTarget.updatedAt)} />
+          </View>
+
+          <Text style={styles.subHeading}>Note</Text>
+          <Text style={styles.detailNote}>
+            Supplier business details (company name, tax ID, address,
+            vehicles, delivery schedules) are not yet stored in the
+            backend.
+          </Text>
+        </AdminModal>
       ) : null}
-
-      <AdminModal
-        visible={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        title="Delete Supplier?"
-        subtitle={`This will permanently remove ${deleteTarget?.companyName ?? ""}.`}
-        onConfirm={handleDelete}
-        confirmLabel="Delete"
-        confirmVariant="danger"
-      >
-        <Text style={styles.dialogText}>
-          Deleting a supplier removes their routes, seller linkages and any
-          historical reports. This action cannot be undone.
-        </Text>
-      </AdminModal>
-
-      <AdminModal
-        visible={!!suspendTarget}
-        onClose={() => setSuspendTarget(null)}
-        title={
-          suspendTarget?.status === "active"
-            ? "Suspend Supplier?"
-            : "Activate Supplier?"
-        }
-        subtitle={
-          suspendTarget?.status === "active"
-            ? `Suspending ${suspendTarget?.companyName ?? ""} will halt all incoming orders.`
-            : `Reactivating ${suspendTarget?.companyName ?? ""} will resume operations.`
-        }
-        onConfirm={handleSuspend}
-        confirmLabel={
-          suspendTarget?.status === "active" ? "Suspend" : "Activate"
-        }
-        confirmVariant={
-          suspendTarget?.status === "active" ? "warning" : "success"
-        }
-      >
-        <Text style={styles.dialogText}>
-          Sellers and riders linked to this supplier will be notified.
-        </Text>
-      </AdminModal>
     </AdminLayout>
   );
 }
 
-interface SupplierFormProps {
-  mode: "create" | "edit";
-  supplier?: Supplier;
-  onClose: () => void;
-  onSubmit: (data: Omit<Supplier, "id" | "joinedDate">) => void;
-}
-
-function SupplierFormModal({
-  mode,
-  supplier,
-  onClose,
-  onSubmit,
-}: SupplierFormProps) {
-  const [companyName, setCompanyName] = useState(supplier?.companyName ?? "");
-  const [contactPerson, setContactPerson] = useState(
-    supplier?.contactPerson ?? "",
-  );
-  const [email, setEmail] = useState(supplier?.email ?? "");
-  const [phone, setPhone] = useState(supplier?.phone ?? "");
-  const [location, setLocation] = useState(supplier?.location ?? "");
-  const [routes, setRoutes] = useState(String(supplier?.routes ?? 0));
-  const [status, setStatus] = useState<"active" | "suspended">(
-    supplier?.status ?? "active",
-  );
-  const [submitted, setSubmitted] = useState(false);
-
-  const valid =
-    companyName.trim() && contactPerson.trim() && phone.trim() && location.trim();
-
-  const handleSubmit = () => {
-    setSubmitted(true);
-    if (!valid) return;
-    onSubmit({
-      companyName: companyName.trim(),
-      contactPerson: contactPerson.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-      location: location.trim(),
-      routes: Number(routes) || 0,
-      status,
-    });
-  };
-
-  return (
-    <AdminModal
-      visible
-      onClose={onClose}
-      title={mode === "create" ? "Register Supplier" : "Edit Supplier"}
-      subtitle={
-        mode === "create"
-          ? "Add a new gas supplier to the platform"
-          : "Update supplier information"
-      }
-      hideFooter
-    >
-      <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
-        <AdminFormGrid columns={2}>
-          <AdminFormField label="Company Name" required>
-            <AdminInput
-              value={companyName}
-              onChangeText={setCompanyName}
-              placeholder="e.g. TotalGas Distributors"
-              invalid={submitted && !companyName.trim()}
-            />
-          </AdminFormField>
-          <AdminFormField label="Contact Person" required>
-            <AdminInput
-              value={contactPerson}
-              onChangeText={setContactPerson}
-              placeholder="Full name"
-              invalid={submitted && !contactPerson.trim()}
-            />
-          </AdminFormField>
-          <AdminFormField label="Email">
-            <AdminInput
-              value={email}
-              onChangeText={setEmail}
-              placeholder="contact@company.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </AdminFormField>
-          <AdminFormField label="Phone" required>
-            <AdminInput
-              value={phone}
-              onChangeText={setPhone}
-              placeholder="+254 7XX XXX XXX"
-              keyboardType="phone-pad"
-              invalid={submitted && !phone.trim()}
-            />
-          </AdminFormField>
-          <AdminFormField label="Location" required>
-            <AdminInput
-              value={location}
-              onChangeText={setLocation}
-              placeholder="Depot / Region"
-              invalid={submitted && !location.trim()}
-            />
-          </AdminFormField>
-          <AdminFormField label="Number of Routes">
-            <AdminInput
-              value={routes}
-              onChangeText={(v) => setRoutes(v.replace(/[^0-9]/g, ""))}
-              placeholder="0"
-              keyboardType="number-pad"
-            />
-          </AdminFormField>
-          <AdminFormField label="Status">
-            <View style={styles.segmented}>
-              {(["active", "suspended"] as const).map((opt) => (
-                <TouchableOpacity
-                  key={opt}
-                  onPress={() => setStatus(opt)}
-                  style={[
-                    styles.segItem,
-                    status === opt && styles.segItemActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.segText,
-                      status === opt && styles.segTextActive,
-                    ]}
-                  >
-                    {opt[0].toUpperCase() + opt.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </AdminFormField>
-        </AdminFormGrid>
-
-        <View style={styles.formFooter}>
-          <AdminButton
-            label="Cancel"
-            variant="secondary"
-            onPress={onClose}
-            style={{ marginRight: Spacing.sm }}
-          />
-          <AdminButton
-            label={mode === "create" ? "Register" : "Save Changes"}
-            onPress={handleSubmit}
-          />
-        </View>
-      </ScrollView>
-    </AdminModal>
-  );
-}
-
-function SupplierDetailsModal({
-  supplier,
-  onClose,
-}: {
-  supplier: Supplier;
-  onClose: () => void;
-}) {
-  return (
-    <AdminModal visible onClose={onClose} title={supplier.companyName} hideFooter>
-      <View style={{ gap: Spacing.md }}>
-        <View style={styles.detailHeader}>
-          <AdminAvatar name={supplier.companyName} size={56} />
-          <View style={{ flex: 1, marginLeft: Spacing.md }}>
-            <Text style={styles.detailTitle}>{supplier.companyName}</Text>
-            <Text style={styles.detailMeta}>
-              {supplier.contactPerson} • {supplier.location}
-            </Text>
-            <View style={{ marginTop: 6 }}>
-              <SupplierStatusBadge status={supplier.status} />
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.detailGrid}>
-          <DetailRow label="Email" value={supplier.email} />
-          <DetailRow label="Phone" value={supplier.phone} />
-          <DetailRow label="Routes Managed" value={String(supplier.routes)} />
-          <DetailRow label="Joined" value={supplier.joinedDate} />
-        </View>
-
-        <View style={styles.detailBadges}>
-          <AdminBadge label={`${supplier.routes} routes`} tone="info" />
-          <AdminBadge label="Verified" tone="success" icon="✓" />
-        </View>
-      </View>
-    </AdminModal>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value || "—"}</Text>
+      <Text style={styles.detailValue}>{value}</Text>
     </View>
   );
 }
@@ -542,6 +283,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: Spacing.md,
+  },
+  infoNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    marginTop: Spacing.lg,
+  },
+  infoIcon: {
+    fontSize: 14,
+    marginTop: 1,
+  },
+  infoText: {
+    flex: 1,
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    fontWeight: "600",
+    lineHeight: 18,
   },
   cellRow: {
     flexDirection: "row",
@@ -563,61 +325,15 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: "600",
   },
-  routesBubble: {
-    backgroundColor: Colors.surfaceMuted,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.pill,
-  },
-  routesText: {
-    fontSize: FontSize.sm,
-    fontWeight: "800",
-    color: Colors.text,
-  },
   actionRow: {
     flexDirection: "row",
     gap: 4,
     justifyContent: "flex-end",
   },
-  dialogText: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.sm,
-    fontWeight: "600",
-  },
-  segmented: {
-    flexDirection: "row",
-    backgroundColor: Colors.surfaceMuted,
-    borderRadius: Radius.md,
-    padding: 4,
-  },
-  segItem: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: 8,
-    borderRadius: Radius.sm,
-  },
-  segItemActive: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  segText: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    fontWeight: "700",
-  },
-  segTextActive: {
-    color: Colors.text,
-    fontWeight: "800",
-  },
-  formFooter: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    marginTop: Spacing.md,
-  },
   detailHeader: {
     flexDirection: "row",
     alignItems: "center",
+    marginBottom: Spacing.md,
   },
   detailTitle: {
     fontSize: FontSize.lg,
@@ -652,8 +368,20 @@ const styles = StyleSheet.create({
     textAlign: "right",
     marginLeft: Spacing.md,
   },
-  detailBadges: {
-    flexDirection: "row",
-    gap: 6,
+  subHeading: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  detailNote: {
+    backgroundColor: Colors.surfaceMuted,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    fontWeight: "600",
+    lineHeight: 18,
   },
 });

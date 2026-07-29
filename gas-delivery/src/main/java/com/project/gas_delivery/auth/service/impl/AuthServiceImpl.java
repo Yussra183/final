@@ -7,6 +7,7 @@ import com.project.gas_delivery.auth.entity.User;
 import com.project.gas_delivery.auth.exception.BadRequestException;
 import com.project.gas_delivery.auth.repository.UserRepository;
 import com.project.gas_delivery.auth.service.AuthService;
+import com.project.gas_delivery.auth.service.SessionService;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -18,10 +19,12 @@ import java.util.UUID;
 /**
  * Default implementation of {@link AuthService}.
  * <p>
- * Tokens are currently random opaque strings (UUID v4). When JWT lands,
- * replace {@link #issueToken(User)} with a signed-token generator — the
- * rest of the application talks to {@link AuthResponse} and stays
- * unchanged.
+ * Tokens are currently random opaque strings ({@code "tok_<uuid>"}),
+ * registered against the {@link SessionService} so the Order Flow (and any
+ * other module) can resolve {@code Authorization: Bearer <token>} to the
+ * acting user. When JWT lands, replace {@link #issueToken(User)} with a
+ * signed-token generator — the rest of the application talks to
+ * {@link AuthResponse} and stays unchanged.
  * </p>
  */
 @Service
@@ -29,10 +32,14 @@ public class AuthServiceImpl implements AuthService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final SessionService sessionService;
 
-    public AuthServiceImpl(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    public AuthServiceImpl(UserRepository userRepository,
+                           PasswordEncoder passwordEncoder,
+                           SessionService sessionService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.sessionService = sessionService;
     }
 
     @Override
@@ -56,8 +63,18 @@ public class AuthServiceImpl implements AuthService {
                 request.phone() == null ? null : request.phone().trim(),
                 request.role()
         );
+        // Permit gating (added with the seller verification workflow):
+        // a freshly registered SELLER must not appear to customers or
+        // receive orders until an administrator approves their permit
+        // application. Non-seller roles (CUSTOMER, RIDER, SUPPLIER, ADMIN)
+        // remain active by default.
+        if (request.role() == com.project.gas_delivery.auth.enums.Role.SELLER) {
+            user.setActive(false);
+        }
         User saved = userRepository.save(user);
-        return AuthResponse.of(saved, issueToken(saved));
+        String token = issueToken(saved);
+        sessionService.register(token, saved.getId());
+        return AuthResponse.of(saved, token);
     }
 
     @Override
@@ -80,7 +97,9 @@ public class AuthServiceImpl implements AuthService {
             throw new BadCredentialsException("Invalid username/email or password");
         }
 
-        return AuthResponse.of(user, issueToken(user));
+        String token = issueToken(user);
+        sessionService.register(token, user.getId());
+        return AuthResponse.of(user, token);
     }
 
     // --- helpers ---

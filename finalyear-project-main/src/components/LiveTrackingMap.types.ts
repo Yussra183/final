@@ -70,3 +70,14 @@ export type ResolvedMapProps = Omit<
   live: LatLng;
   liveLabel: string;
 };
+
+/** Resolve the public aliases into the shape consumed by each renderer. */
+export function resolveLiveTrackingMapProps(
+  props: LiveTrackingMapProps,
+): ResolvedMapProps {
+  return {
+    ...props,
+    live: props.live ?? props.rider ?? { lat: 0, lng: 0 },
+    liveLabel: props.liveLabel ?? props.riderLabel ?? "Live",
+  };
+}

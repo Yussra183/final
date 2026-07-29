@@ -25,109 +25,13 @@ import { useNearbySellers } from "../../src/hooks/useNearbySellers";
 import type { NearbySeller } from "../../src/utils/sellers";
 
 /**
- * Mock seller pool. Lives at module scope so React doesn't re-create
- * the array on every render, and so future filtering helpers can be
- * unit-tested against a stable fixture.
- *
- * Each entry carries:
- *   • id, name, status, image
- *   • location, district, region (so district/region filtering works)
- *   • lat / lng (so GPS-based distance ranking works in the future)
- *   • gasTypes, cylinderSizes, phone (rendered on the card)
- *   • distanceKm (pre-computed server value; kept for display)
- */
-const MOCK_SELLERS: NearbySeller[] = [
-  {
-    id: "s-1",
-    name: "ABC Gas Supplier",
-    image:
-      "https://images.unsplash.com/photo-1581094288338-2314dddb7ece?w=400&h=300&fit=crop",
-    status: "Active",
-    distanceKm: 1.5,
-    location: "Stone Town, Zanzibar",
-    district: "Stone Town",
-    region: "Zanzibar Urban",
-    lat: -6.1629,
-    lng: 39.2026,
-    gasTypes: ["LPG", "Cooking Gas"],
-    cylinderSizes: ["6kg", "15kg", "38kg"],
-    phone: "+255 712 345 678",
-  },
-  {
-    id: "s-2",
-    name: "Zanzibar Gas Center",
-    image:
-      "https://images.unsplash.com/photo-1605664041952-4a2855dbf953?w=400&h=300&fit=crop",
-    status: "Active",
-    distanceKm: 2.4,
-    location: "Kariakoo, Zanzibar",
-    district: "Stone Town",
-    region: "Zanzibar Urban",
-    lat: -6.165,
-    lng: 39.205,
-    gasTypes: ["LPG", "Cooking Gas", "Industrial Gas"],
-    cylinderSizes: ["6kg", "13kg", "15kg", "38kg"],
-    phone: "+255 713 222 909",
-  },
-  {
-    id: "s-3",
-    name: "SafeGas Supplier",
-    image:
-      "https://images.unsplash.com/photo-1611288875785-f2b4c2d4f0a5?w=400&h=300&fit=crop",
-    status: "Active",
-    distanceKm: 6.2,
-    location: "Mwera, Zanzibar",
-    district: "Mwera",
-    region: "Zanzibar West",
-    lat: -6.21,
-    lng: 39.24,
-    gasTypes: ["LPG", "Cooking Gas"],
-    cylinderSizes: ["6kg", "12.5kg", "15kg"],
-    phone: "+255 715 884 110",
-  },
-  {
-    id: "s-4",
-    name: "Green Flame Gas",
-    image:
-      "https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&h=300&fit=crop",
-    status: "Active",
-    distanceKm: 9.8,
-    location: "Mkocheni, Dar es Salaam",
-    district: "Mkocheni",
-    region: "Dar es Salaam",
-    lat: -6.76,
-    lng: 39.24,
-    gasTypes: ["LPG", "Refill"],
-    cylinderSizes: ["6kg", "15kg", "22kg", "38kg"],
-    phone: "+255 718 003 421",
-  },
-  {
-    id: "s-5",
-    name: "City Gas Distributor",
-    image:
-      "https://images.unsplash.com/photo-1612892483236-52d32a0e0ac1?w=400&h=300&fit=crop",
-    status: "Active",
-    distanceKm: 11.3,
-    location: "Buguruni, Dar es Salaam",
-    district: "Buguruni",
-    region: "Dar es Salaam",
-    lat: -6.83,
-    lng: 39.26,
-    gasTypes: ["LPG"],
-    cylinderSizes: ["6kg", "15kg", "50kg"],
-    phone: "+255 717 550 219",
-  },
-];
-
-/**
  * Customer Home — Dashboard landing page.
  *
  * Architecture:
- *   • `useNearbySellers(MOCK_SELLERS)` returns the recommendation
- *     list, already filtered and ranked by the customer's profile
- *     location. When the customer's address changes (today via
- *     the profile screen, tomorrow via GPS), the list updates
- *     automatically because the hook re-derives on location change.
+ *   • The seller list is read from the store, which is populated by
+ *     `GET /api/sellers` (live backend) on every session bootstrap.
+ *     No mock fallback: the backend is the single source of truth, and
+ *     the empty state surfaces if no sellers are visible.
  *   • Each card has its own "Place Order" button that pushes the
  *     Orders screen with the chosen seller attached as route params.
  *   • The Orders screen reads those params, pre-fills the seller
@@ -136,9 +40,31 @@ const MOCK_SELLERS: NearbySeller[] = [
 export default function CustomerHome() {
   const router = useRouter();
   const drawer = useNavigation<any>();
-  const { session, logout, getNotificationsForUser } = useStore();
+  const { session, logout, getNotificationsForUser, sellers: storeSellers } =
+    useStore();
+
+  // Convert the store's SellerProfile[] (from /api/sellers) into the
+  // NearbySeller shape the home screen expects. Always sourced from
+  // the live store — empty list surfaces the existing empty state.
+  const apiSellers: NearbySeller[] = useMemo(() => {
+    return storeSellers.map((s) => ({
+      id: s.sellerId,
+      name: s.businessName,
+      status: s.openNow ? ("Active" as const) : ("Closed" as const),
+      distanceKm: s.distanceKm,
+      location: s.location,
+      district: undefined,
+      region: undefined,
+      gasTypes: ["LPG"],
+      cylinderSizes: s.availableSizes,
+      phone: s.phone,
+      lat: s.lat,
+      lng: s.lng,
+    }));
+  }, [storeSellers]);
+
   const { sellers, usingDefaultLocation, effectiveLocation } =
-    useNearbySellers(MOCK_SELLERS);
+    useNearbySellers(apiSellers);
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
 
   const user = session?.user;

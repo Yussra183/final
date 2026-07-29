@@ -5,9 +5,13 @@ export {
   AuthApi,
   UsersApi,
   ProductsApi,
+  SellersApi,
+  RidersApi,
   OrdersApi,
   RestockApi,
   PermitsApi,
   NotificationsApi,
   ComplaintsApi,
+  TrackingApi,
+  AdminApi,
 } from "./endpoints";

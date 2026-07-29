@@ -21,7 +21,7 @@ const LOGO = require("../../assets/images/icon.png");
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, error: storeError, loading: storeLoading } = useStore();
+  const { login, error: storeError, errorCode: storeErrorCode, loading: storeLoading } = useStore();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
@@ -32,11 +32,30 @@ export default function LoginScreen() {
   // We can't read `storeError` synchronously after `await login(...)`
   // because React state updates are async — by the time the alert fires
   // the screen would still see the previous render's value.
+  //
+  // For network failures (`storeErrorCode === "NETWORK"` — the
+  // classic "Could not reach backend at http://10.x.x.x:8080" alert)
+  // we surface a one-tap fix: `npm run dev:tunnel` does everything
+  // (backend + tunnel + .env update + Expo) in a single command.
+  //
+  // Pending and rejected sellers are allowed to log in — the seller
+  // portal surfaces their permit status via the dashboard banner and
+  // drawer gating, so we no longer intercept those error codes here.
   useEffect(() => {
-    if (!storeLoading && storeError) {
+    if (storeLoading || !storeError) return;
+    if (storeErrorCode === "NETWORK" || storeErrorCode === "TIMEOUT") {
+      Alert.alert(
+        "Cannot reach the server",
+        `${storeError}\n\n` +
+          "Most likely cause: the URL in .env.local is a LAN IP that no longer matches your Wi-Fi.\n\n" +
+          "Permanent fix — run this once in the project folder:\n" +
+          "  npm run dev:tunnel\n\n" +
+          "It starts the backend, opens a Cloudflare tunnel, writes the new URL into .env.local and launches Expo for you. Switching Wi-Fi after that needs no edits.",
+      );
+    } else {
       Alert.alert("Login failed", storeError);
     }
-  }, [storeLoading, storeError]);
+  }, [storeLoading, storeError, storeErrorCode]);
 
   const handleLogin = async () => {
     const next: typeof errors = {};
@@ -117,7 +136,7 @@ export default function LoginScreen() {
 
             <View style={styles.divider} />
 
-            <Text style={styles.helperText}>Demo accounts (password: 1234)</Text>
+            <Text style={styles.helperText}>Demo accounts (password: Password1!)</Text>
             <View style={styles.demoRow}>
               {[
                 { name: "asha", role: "Customer" },
@@ -131,7 +150,7 @@ export default function LoginScreen() {
                   style={styles.demoChip}
                   onPress={() => {
                     setUsername(d.name);
-                    setPassword("1234");
+                    setPassword("Password1!");
                   }}
                 >
                   <Text style={styles.demoChipText}>{d.role}</Text>

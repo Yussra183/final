@@ -25,6 +25,71 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Backend connectivity (dev tunnel)
+
+The app talks to the Spring Boot backend (port `8080`) through **one**
+configurable URL, `EXPO_PUBLIC_API_BASE_URL`, which drives both the REST
+client and the WebSocket tracking channel. Set it once and switching Wi-Fi
+never requires a source edit again.
+
+### One-time setup
+
+```bash
+cp .env.example .env.local   # .env.local is git-ignored
+```
+
+### Recommended: Cloudflare Tunnel (stable URL, any network)
+
+A LAN IP changes every time you switch network (home / campus / hotspot),
+which is what causes `Network request failed` on a physical device. A dev
+tunnel gives you a fixed public URL instead.
+
+For the **stable URL** path (URL never changes between runs), follow
+[`scripts/setup-named-tunnel.md`](./scripts/setup-named-tunnel.md) — it's
+a one-time `cloudflared login` / `tunnel create` / `route dns` and then
+just `cloudflared tunnel run <name>` per session. **Per-session startup
+(three terminals, no source edits) is in
+[`scripts/start-dev.md`](./scripts/start-dev.md).**
+
+**Fallback — quick-tunnel** (URL changes on every `cloudflared` restart,
+fine for a single afternoon of hacking):
+
+```bash
+# 1. Run the backend
+cd ../gas-delivery && mvn spring-boot:run        # serves http://localhost:8080
+
+# 2. Expose it over a tunnel (in a second terminal)
+cloudflared tunnel --url http://localhost:8080   # prints https://<id>.trycloudflare.com
+```
+
+Put the URL in `.env.local` (named-tunnel hostname OR the printed quick-tunnel):
+
+```
+EXPO_PUBLIC_API_BASE_URL=https://dev-api.your-domain.com
+# or, for the quick-tunnel fallback:
+# EXPO_PUBLIC_API_BASE_URL=https://<id>.trycloudflare.com
+```
+
+Then restart Expo so the value is re-inlined:
+
+```bash
+npx expo start
+```
+
+An `https://` URL automatically yields a secure `wss://` WebSocket — no
+separate configuration. Because the backend is already public through the
+tunnel, `--tunnel` on Expo is optional.
+
+**Ngrok alternative:** `ngrok http 8080` → use its `https://` URL the same way.
+
+**Android emulator / iOS simulator:** leave `EXPO_PUBLIC_API_BASE_URL` unset
+— the app auto-probes the loopback aliases (`10.0.2.2`, `localhost`) and works
+with zero config.
+
+**Staging / production:** just set a different `EXPO_PUBLIC_API_BASE_URL`
+value (EAS env var or a swapped `.env.local`). No source change, no
+`NODE_ENV` switching.
+
 ## Get a fresh project
 
 When you're ready, run:

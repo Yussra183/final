@@ -45,6 +45,7 @@ import {
 } from "../lib/location";
 import { Order } from "../../constants/types";
 import { scheduleLocalNotification } from "../lib/notifications";
+import { useOrderTracking, type OrderTrackingState } from "./useOrderTracking";
 
 /** Seller-facing rider status vocabulary (matches the brief). */
 export type RiderStatus =
@@ -76,6 +77,8 @@ export interface RiderTrackingState {
   events: { at: number; status: RiderStatus; message: string }[];
   /** True while the delivery is still moving. */
   active: boolean;
+  /** Live tracking state from the backend — exposes the socket status. */
+  live: OrderTrackingState;
 }
 
 /** Status timeline steps used by the seller-facing rider UI. */
@@ -175,6 +178,15 @@ export function useRiderTracking(): RiderTrackingState {
     return computeRoute(shopLatLng, customer);
   }, [order, customer, shopLatLng]);
 
+  // Real-time rider position (from /ws/tracking). When the rider app
+  // is sending live GPS, this overrides the simulator below; while
+  // the rider is offline or hasn't started yet, the simulator keeps
+  // advancing so the seller UI isn't blank.
+  const live = useOrderTracking({
+    orderId: order?.id,
+    token: session?.token ?? null,
+  });
+
   // Reuse the existing simulator. We only invoke it when there's a
   // real order + customer + route, so it advances through the
   // rider lifecycle automatically.
@@ -182,6 +194,7 @@ export function useRiderTracking(): RiderTrackingState {
     order: {
       orderId: order?.id ?? "mock",
       orderNumber: order ? order.id.slice(-4).toUpperCase() : "DEMO",
+      sellerId: order?.sellerId ?? "",
       sellerName: order?.sellerName ?? "Seller",
       shopLocation: "My Shop",
       shopLatLng,
@@ -203,8 +216,18 @@ export function useRiderTracking(): RiderTrackingState {
 
   // Map state + logs.
   const status: RiderStatus = deriveStatus(tracking.state.status);
-  const distanceM = tracking.state.distanceRemainingM;
-  const etaSeconds = tracking.state.etaSeconds;
+  // Prefer the live (real) rider position when we have one. The
+  // simulator is only used as a fallback so the UI never blanks out
+  // for a rider who's still on the dispatch queue.
+  const liveRiderLatLng: LatLng = live.riderLatLng ?? tracking.state.riderLatLng;
+  const distanceM = live.riderLatLng && customer
+    ? haversineMetersLive(live.riderLatLng, customer)
+    : tracking.state.distanceRemainingM;
+  // ETA scales with the real distance when we have a live fix, else
+  // fall back to the simulator's projected ETA.
+  const etaSeconds = live.riderLatLng && customer
+    ? Math.round(distanceM / 8.3) // ~30 km/h urban scooter
+    : tracking.state.etaSeconds;
 
   // Local fire-and-forget notifications on key transitions. We only
   // want one push per status, so we track the last-notified status.
@@ -271,7 +294,7 @@ export function useRiderTracking(): RiderTrackingState {
     customerAddress: order?.deliveryLocation?.address ?? null,
     customerLatLng: customer,
     shopLatLng,
-    riderLatLng: tracking.state.riderLatLng,
+    riderLatLng: liveRiderLatLng,
     route,
     distanceM,
     etaSeconds,
@@ -279,7 +302,23 @@ export function useRiderTracking(): RiderTrackingState {
     progress: tracking.state.progress,
     events,
     active: tracking.state.status !== "delivered",
+    live,
   };
+}
+
+// Inline haversine — keeps this hook self-contained without dragging
+// the location util's named export into the public surface.
+function haversineMetersLive(a: LatLng, b: LatLng): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
 }
 
 /* -------------------------------------------------------------------------- */

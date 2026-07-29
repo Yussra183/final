@@ -1,15 +1,18 @@
 /**
  * Admin Dashboard – Seller Applications page.
  *
- * Lists every seller application, supports search, status filter,
- * view details, approve and reject actions. Approved applicants are
- * added to the SELLERS list (mocked in-memory).
+ * Lists every seller application, supports search, status filter, view
+ * details (with document previews), and approve/reject actions. Backed
+ * by the live API (`/api/admin/permits`) through {@link useStore}.
  */
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -33,72 +36,139 @@ import {
   Radius,
   Spacing,
 } from "../../constants/colors";
-import {
-  SellerApplication,
-  SELLER_APPLICATIONS,
-  SELLERS,
-} from "../../src/store/adminData";
+import { useStore } from "../../src/store/StoreContext";
+import { API_CONFIG } from "../../src/api/config";
+import type {
+  PermitDocument,
+  PermitStatus,
+  SellerPermit,
+} from "../../constants/types";
 
-type FilterKey = "all" | "pending" | "approved" | "rejected";
+type FilterKey = "all" | "pending" | "approved" | "rejected" | "under_review";
 
 export default function SellerApplicationsPage() {
-  const [apps, setApps] = useState<SellerApplication[]>(SELLER_APPLICATIONS);
+  const store = useStore();
+
+  // ---- Live state ----------------------------------------------------
+  const [permits, setPermits] = useState<SellerPermit[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // ---- Shared UI state ------------------------------------------------
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [viewTarget, setViewTarget] = useState<SellerApplication | null>(null);
-  const [approveTarget, setApproveTarget] = useState<SellerApplication | null>(
-    null,
-  );
-  const [rejectTarget, setRejectTarget] = useState<SellerApplication | null>(
-    null,
-  );
+  const [viewTarget, setViewTarget] = useState<SellerPermit | null>(null);
+  const [viewDocs, setViewDocs] = useState<PermitDocument[] | null>(null);
+  const [approveTarget, setApproveTarget] = useState<SellerPermit | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<SellerPermit | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+
+  // Fetch the admin queue on mount + whenever the seller permit slice
+  // mutates (admin approves a permit → re-pull so the row updates).
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await store.fetchAdminPermits();
+      setPermits(rows);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError((err as Error)?.message ?? "Couldn't load applications.");
+    } finally {
+      setLoading(false);
+    }
+  }, [store]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return apps.filter((a) => {
+    return permits.filter((a) => {
       const matchQ =
         !q ||
         a.businessName.toLowerCase().includes(q) ||
-        a.ownerName.toLowerCase().includes(q) ||
-        a.location.toLowerCase().includes(q);
+        a.sellerName.toLowerCase().includes(q);
       const matchF = filter === "all" || a.status === filter;
       return matchQ && matchF;
     });
-  }, [apps, search, filter]);
+  }, [permits, search, filter]);
 
   const counts = useMemo(
     () => ({
-      all: apps.length,
-      pending: apps.filter((a) => a.status === "pending").length,
-      approved: apps.filter((a) => a.status === "approved").length,
-      rejected: apps.filter((a) => a.status === "rejected").length,
+      all: permits.length,
+      pending: permits.filter((a) => a.status === "pending").length,
+      under_review: permits.filter((a) => a.status === "under_review").length,
+      approved: permits.filter((a) => a.status === "approved").length,
+      rejected: permits.filter((a) => a.status === "rejected").length,
     }),
-    [apps],
+    [permits],
   );
 
-  const handleApprove = () => {
+  // ---- Actions -------------------------------------------------------
+  const handleApprove = async () => {
     if (!approveTarget) return;
-    setApps((prev) =>
-      prev.map((a) =>
-        a.id === approveTarget.id ? { ...a, status: "approved" } : a,
-      ),
-    );
-    setApproveTarget(null);
+    setActionError(null);
+    setActionBusy(true);
+    try {
+      await store.approveAdminPermit(approveTarget.id);
+      await reload();
+      setApproveTarget(null);
+    } catch (err) {
+      setActionError(
+        (err as Error)?.message ?? "Could not approve this application.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
   };
 
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!rejectTarget) return;
-    setApps((prev) =>
-      prev.map((a) =>
-        a.id === rejectTarget.id ? { ...a, status: "rejected" } : a,
-      ),
-    );
-    setRejectTarget(null);
-    setRejectionReason("");
+    if (!rejectionReason.trim()) {
+      setActionError("Please provide a rejection reason.");
+      return;
+    }
+    setActionError(null);
+    setActionBusy(true);
+    try {
+      await store.rejectAdminPermit(rejectTarget.id, rejectionReason.trim());
+      await reload();
+      setRejectTarget(null);
+      setRejectionReason("");
+    } catch (err) {
+      setActionError(
+        (err as Error)?.message ?? "Could not reject this application.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
   };
 
-  const columns: AdminTableColumn<SellerApplication>[] = [
+  const openDocuments = async (permit: SellerPermit) => {
+    setViewTarget(permit);
+    try {
+      const docs = await (
+        await import("../../src/api/endpoints")
+      ).PermitsApi.listDocumentsForAdmin(permit.id);
+      setViewDocs(docs);
+    } catch {
+      setViewDocs([]);
+    }
+  };
+
+  const formatSubmitted = (iso: string | null | undefined) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleDateString();
+    } catch {
+      return "—";
+    }
+  };
+
+  const columns: AdminTableColumn<SellerPermit>[] = [
     {
       key: "business",
       label: "Business",
@@ -108,7 +178,7 @@ export default function SellerApplicationsPage() {
           <AdminAvatar name={a.businessName} size={36} />
           <View>
             <Text style={styles.cellTitle}>{a.businessName}</Text>
-            <Text style={styles.cellMeta}>{a.license}</Text>
+            <Text style={styles.cellMeta}>#{a.id.slice(-4)}</Text>
           </View>
         </View>
       ),
@@ -119,16 +189,10 @@ export default function SellerApplicationsPage() {
       flex: 1.6,
       render: (a) => (
         <View>
-          <Text style={styles.cellText}>{a.ownerName}</Text>
-          <Text style={styles.cellMeta}>{a.phone}</Text>
+          <Text style={styles.cellText}>{a.sellerName}</Text>
+          <Text style={styles.cellMeta}>ID #{a.sellerId}</Text>
         </View>
       ),
-    },
-    {
-      key: "location",
-      label: "Location",
-      flex: 1.4,
-      render: (a) => <Text style={styles.cellText}>{a.location}</Text>,
     },
     {
       key: "submitted",
@@ -136,7 +200,7 @@ export default function SellerApplicationsPage() {
       flex: 0.9,
       render: (a) => (
         <Text style={[styles.cellText, { color: Colors.textSecondary }]}>
-          {a.submittedDate}
+          {formatSubmitted(a.submittedAt)}
         </Text>
       ),
     },
@@ -162,7 +226,7 @@ export default function SellerApplicationsPage() {
         />
         <AdminStatTile
           label="Pending"
-          value={counts.pending}
+          value={counts.pending + counts.under_review}
           icon="⏳"
           tone="warning"
         />
@@ -184,17 +248,34 @@ export default function SellerApplicationsPage() {
         <AdminSearchBar
           value={search}
           onChange={setSearch}
-          placeholder="Search by business, owner or location"
+          placeholder="Search by business or owner"
           filters={[
             { key: "all", label: "All", count: counts.all },
             { key: "pending", label: "Pending", count: counts.pending },
+            { key: "under_review", label: "Under Review", count: counts.under_review },
             { key: "approved", label: "Approved", count: counts.approved },
             { key: "rejected", label: "Rejected", count: counts.rejected },
           ]}
           activeFilter={filter}
           onFilterChange={(k) => setFilter(k as FilterKey)}
         />
-        {filtered.length === 0 ? (
+        {loadError ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{loadError}</Text>
+            <AdminButton
+              label="Retry"
+              variant="secondary"
+              size="sm"
+              onPress={reload}
+            />
+          </View>
+        ) : null}
+        {loading && permits.length === 0 ? (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="small" color={Colors.primary} />
+            <Text style={styles.loadingText}>Loading applications…</Text>
+          </View>
+        ) : filtered.length === 0 ? (
           <AdminEmptyState
             icon="📋"
             title="No applications found"
@@ -213,9 +294,9 @@ export default function SellerApplicationsPage() {
                       label="View"
                       variant="secondary"
                       size="sm"
-                      onPress={() => setViewTarget(a)}
+                      onPress={() => openDocuments(a)}
                     />
-                    {a.status === "pending" ? (
+                    {a.status === "pending" || a.status === "under_review" ? (
                       <>
                         <AdminButton
                           label="Approve"
@@ -250,22 +331,30 @@ export default function SellerApplicationsPage() {
         )}
       </AdminCard>
 
-      {/* View Details */}
+      {/* View Details + Documents */}
       {viewTarget ? (
         <AdminModal
           visible
-          onClose={() => setViewTarget(null)}
+          onClose={() => {
+            setViewTarget(null);
+            setViewDocs(null);
+          }}
           title={viewTarget.businessName}
           subtitle={`Application #${viewTarget.id}`}
           hideFooter
         >
-          <ScrollView style={{ maxHeight: 460 }} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={{ maxHeight: 460 }}
+            showsVerticalScrollIndicator={false}
+          >
             <View style={styles.detailHeader}>
               <AdminAvatar name={viewTarget.businessName} size={56} />
               <View style={{ flex: 1, marginLeft: Spacing.md }}>
-                <Text style={styles.detailTitle}>{viewTarget.businessName}</Text>
+                <Text style={styles.detailTitle}>
+                  {viewTarget.businessName}
+                </Text>
                 <Text style={styles.detailMeta}>
-                  {viewTarget.ownerName} • {viewTarget.location}
+                  {viewTarget.sellerName}
                 </Text>
                 <View style={{ marginTop: 6 }}>
                   <ApplicationStatusBadge status={viewTarget.status} />
@@ -274,26 +363,72 @@ export default function SellerApplicationsPage() {
             </View>
 
             <View style={styles.detailGrid}>
-              <Row label="Owner" value={viewTarget.ownerName} />
-              <Row label="Phone" value={viewTarget.phone} />
-              <Row label="Email" value={viewTarget.email} />
-              <Row label="License" value={viewTarget.license} />
-              <Row label="Submitted" value={viewTarget.submittedDate} />
-              <Row label="Location" value={viewTarget.location} />
+              <Row label="Owner" value={viewTarget.sellerName} />
+              <Row label="Seller ID" value={viewTarget.sellerId} />
+              <Row label="Business Name" value={viewTarget.businessName} />
+              <Row
+                label="Submitted"
+                value={formatSubmitted(viewTarget.submittedAt)}
+              />
+              <Row
+                label="Reviewed"
+                value={formatSubmitted(viewTarget.reviewedAt)}
+              />
+              {viewTarget.reviewedByName ? (
+                <Row
+                  label="Reviewed By"
+                  value={viewTarget.reviewedByName}
+                />
+              ) : null}
+              {viewTarget.rejectionReason ? (
+                <Row
+                  label="Rejection Reason"
+                  value={viewTarget.rejectionReason}
+                />
+              ) : null}
             </View>
 
             <Text style={styles.subSection}>Documents</Text>
-            <View style={styles.docList}>
-              {viewTarget.documents.map((d) => (
-                <View key={d} style={styles.docItem}>
-                  <Text style={styles.docIcon}>📄</Text>
-                  <Text style={styles.docName}>{d}</Text>
-                  <AdminBadge label="Uploaded" tone="success" />
-                </View>
-              ))}
-            </View>
+            {viewDocs === null ? (
+              <View style={styles.loadingBox}>
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading documents…</Text>
+              </View>
+            ) : viewDocs.length === 0 ? (
+              <Text style={styles.docHelper}>
+                No documents attached yet.
+              </Text>
+            ) : (
+              <View style={styles.docList}>
+                {viewDocs.map((d) => (
+                  <View key={d.id} style={styles.docItem}>
+                    <Text style={styles.docIcon}>📄</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.docName}>
+                        {humanDocumentLabel(d.documentType)}
+                      </Text>
+                      <Text style={styles.docMeta}>
+                        {d.originalName} ·{" "}
+                        {(d.sizeBytes / 1024).toFixed(1)} KB
+                      </Text>
+                    </View>
+                    <AdminButton
+                      label="Open"
+                      variant="secondary"
+                      size="sm"
+                      onPress={() =>
+                        Linking.openURL(
+                          `${API_CONFIG.BASE_URL}${d.downloadUrl}`,
+                        ).catch(() => undefined)
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
 
-            {viewTarget.status === "pending" ? (
+            {viewTarget.status === "pending" ||
+            viewTarget.status === "under_review" ? (
               <View style={styles.detailActions}>
                 <AdminButton
                   label="Approve Application"
@@ -326,16 +461,18 @@ export default function SellerApplicationsPage() {
         visible={!!approveTarget}
         onClose={() => setApproveTarget(null)}
         title="Approve Seller Application?"
-        subtitle={`${approveTarget?.businessName ?? ""} will join the Sellers list.`}
+        subtitle={`${approveTarget?.businessName ?? ""} will become a verified seller.`}
         onConfirm={handleApprove}
         confirmLabel="Approve"
         confirmVariant="success"
       >
         <Text style={styles.dialogText}>
-          The applicant will receive an SMS and email notification. They
-          will then be able to log in, manage orders, and accept assigned
-          riders.
+          The applicant will be notified and immediately become visible to
+          customers. Their account will be activated automatically.
         </Text>
+        {actionError ? (
+          <Text style={styles.actionError}>{actionError}</Text>
+        ) : null}
       </AdminModal>
 
       {/* Reject confirmation */}
@@ -344,27 +481,32 @@ export default function SellerApplicationsPage() {
         onClose={() => {
           setRejectTarget(null);
           setRejectionReason("");
+          setActionError(null);
         }}
         title="Reject Seller Application?"
-        subtitle={`${rejectTarget?.businessName ?? ""} will be notified.`}
+        subtitle={`${rejectTarget?.businessName ?? ""} will be notified with your reason.`}
         onConfirm={handleReject}
         confirmLabel="Reject"
         confirmVariant="danger"
       >
         <Text style={styles.dialogText}>
-          The applicant will be notified with a reason. They can resubmit
-          after addressing the issues.
+          The applicant will receive your reason in their in-app feed and
+          may resubmit after addressing the issues.
         </Text>
         <View style={{ marginTop: Spacing.md }}>
-          <Text style={styles.label}>Rejection reason (optional)</Text>
-          <View style={styles.textarea}>
-            <ScrollView>
-              <Text style={styles.textareaPlaceholder}>
-                {rejectionReason || "Provide a brief reason…"}
-              </Text>
-            </ScrollView>
-          </View>
+          <Text style={styles.label}>Rejection reason</Text>
+          <TextInput
+            value={rejectionReason}
+            onChangeText={setRejectionReason}
+            placeholder="Provide a clear reason…"
+            placeholderTextColor={Colors.textMuted}
+            multiline
+            style={styles.textarea}
+          />
         </View>
+        {actionError ? (
+          <Text style={styles.actionError}>{actionError}</Text>
+        ) : null}
       </AdminModal>
     </AdminLayout>
   );
@@ -374,9 +516,28 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
+      <Text style={styles.detailValue} numberOfLines={2}>
+        {value}
+      </Text>
     </View>
   );
+}
+
+function humanDocumentLabel(t: string): string {
+  switch (t) {
+    case "application_form":
+      return "Signed Application Form";
+    case "national_id":
+      return "National ID Copy";
+    case "business_license":
+      return "Business License";
+    case "passport_photo":
+      return "Passport Photo";
+    case "license":
+      return "Gas Selling Permit";
+    default:
+      return t;
+  }
 }
 
 const styles = StyleSheet.create({
@@ -434,11 +595,13 @@ const styles = StyleSheet.create({
   detailRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    gap: Spacing.md,
   },
   detailLabel: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     fontWeight: "700",
+    minWidth: 110,
   },
   detailValue: {
     fontSize: FontSize.sm,
@@ -446,7 +609,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     flexShrink: 1,
     textAlign: "right",
-    marginLeft: Spacing.md,
   },
   subSection: {
     fontSize: FontSize.md,
@@ -475,6 +637,15 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontWeight: "700",
   },
+  docMeta: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+  },
+  docHelper: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    fontStyle: "italic",
+  },
   detailActions: {
     flexDirection: "row",
     marginTop: Spacing.lg,
@@ -497,9 +668,38 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     padding: Spacing.md,
     minHeight: 80,
-  },
-  textareaPlaceholder: {
-    color: Colors.textMuted,
+    color: Colors.text,
     fontSize: FontSize.sm,
+    textAlignVertical: "top",
+  },
+  loadingBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+  },
+  loadingText: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+  },
+  errorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    backgroundColor: "#FEE2E2",
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  errorText: {
+    color: Colors.danger,
+    fontSize: FontSize.sm,
+    flex: 1,
+  },
+  actionError: {
+    color: Colors.danger,
+    fontSize: FontSize.xs,
+    marginTop: Spacing.sm,
+    fontWeight: "600",
   },
 });

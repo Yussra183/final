@@ -11,10 +11,18 @@ import org.springframework.security.web.SecurityFilterChain;
 /**
  * Spring Security configuration for the auth module.
  * <p>
- * <strong>Temporary setup:</strong> the JWT filter is parked and every
- * request is permitted, because we agreed to keep auth simple until the
- * JWT phase lands. The {@link PasswordEncoder} bean stays so the service
- * layer can hash credentials with BCrypt.
+ * <strong>Temporary setup:</strong> every request is permitted, because we
+ * agreed to keep auth simple until the JWT phase lands. The
+ * {@link PasswordEncoder} bean stays so the service layer can hash
+ * credentials with BCrypt.
+ * </p>
+ * <p>
+ * Token resolution for the Order Flow is handled by {@link AuthFilter},
+ * which is a {@code @Component}-annotated {@code OncePerRequestFilter}
+ * that Spring Boot auto-registers ahead of the security chain. It attaches
+ * {@code actorId} and {@code actorRole} as request attributes; controllers
+ * read them via {@link AuthFilter#currentActorId} /
+ * {@link AuthFilter#currentActorRole}.
  * </p>
  * <p>
  * When JWT is reintroduced, swap the lambda in

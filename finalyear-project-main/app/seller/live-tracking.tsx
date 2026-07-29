@@ -361,6 +361,7 @@ function RiderTab() {
     progress,
     events,
     active,
+    live,
   } = useRiderTracking();
 
   if (!order || !customerLatLng) {
@@ -375,6 +376,17 @@ function RiderTab() {
 
   const tone = riderStatusColor(status as RiderStatus);
   const polylineForMap = route?.polyline ?? [shopLatLng, customerLatLng];
+  // "LIVE" when the rider's GPS socket is OPEN and we've received at
+  // least one fix; "Reconnecting" when the socket is in back-off;
+  // otherwise we fall through to the simulator label.
+  const liveBadge =
+    live.connection === "open" && live.riderLatLng
+      ? "GPS LIVE"
+      : live.connection === "reconnecting"
+        ? "Reconnecting"
+        : live.connection === "open"
+          ? "Connected"
+          : "Connecting";
 
   return (
     <View style={styles.tabBody}>
@@ -391,7 +403,9 @@ function RiderTab() {
         </View>
         <View style={[styles.livePill, { backgroundColor: tone + "22" }]}>
           <View style={[styles.liveDot, { backgroundColor: tone }]} />
-          <Text style={[styles.liveText, { color: tone }]}>LIVE</Text>
+          <Text style={[styles.liveText, { color: tone }]}>
+            {liveBadge}
+          </Text>
         </View>
       </View>
 

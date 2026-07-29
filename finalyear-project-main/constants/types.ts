@@ -15,7 +15,57 @@ export type OrderStatus =
   | "cancelled"
   | "rejected";
 
-export type PermitStatus = "draft" | "pending" | "approved" | "rejected";
+export type PermitStatus =
+  | "draft"
+  | "pending"
+  | "under_review"
+  | "approved"
+  | "rejected";
+
+/**
+ * The PDF slots persisted under `permit_documents.document_type`.
+ * `license` (the Gas Selling Permit) is admin-issued on approval; the
+ * remainder are the seller-uploaded documents required for submission.
+ */
+export type PermitDocumentType =
+  | "application_form"
+  | "national_id"
+  | "business_license"
+  | "passport_photo"
+  | "license";
+
+/**
+ * Metadata for one permit PDF (either seller-uploaded or admin-uploaded).
+ * `downloadUrl` is a server-relative path the client can hit directly when
+ * authenticated.
+ */
+export interface PermitDocument {
+  id: string;
+  documentType: PermitDocumentType;
+  originalName: string;
+  sizeBytes: number;
+  contentType: string;
+  uploadedAt: string;
+  /** Server-relative path under `/api/permits/documents/{id}` etc. */
+  downloadUrl: string;
+}
+
+/**
+ * Server-side projection of a permit application. Mirrors the backend's
+ * `SellerPermitDto` (see `permit.dto.SellerPermitDto`).
+ */
+export interface SellerPermit {
+  id: string;
+  sellerId: string;
+  sellerName: string;
+  businessName: string;
+  status: PermitStatus;
+  documents: PermitDocument[];
+  rejectionReason: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+}
 
 export interface User {
   id: string;
@@ -36,6 +86,19 @@ export interface User {
   region?: string;
   lat?: number;
   lng?: number;
+  /**
+   * Mirror of `users.is_active` from the backend. For SELLER accounts a
+   * false value means the permit is still pending, rejected, or has never
+   * been submitted — the seller UI gates every business operation on
+   * `isActive === true`. Other roles always have `isActive === true`.
+   */
+  isActive?: boolean;
+  /**
+   * Permit status for the current user when their role is SELLER. The
+   * seller layout surfaces a "Pending Verification" banner when this is
+   * anything other than "approved". Populated by `GET /api/permits/me`.
+   */
+  permitStatus?: PermitStatus | null;
 }
 
 /**
@@ -132,7 +195,12 @@ export interface PermitApplication {
   businessAddress: string;
   businessType: string;
   registrationNumber: string;
-  documents: string[]; // document names
+  /**
+   * Kept as `string[]` for backwards compatibility with the in-memory
+   * mock branch. The live backend now returns `PermitDocument[]` (see
+   * {@link SellerPermit}); consumers should migrate to `SellerPermit`.
+   */
+  documents: string[];
   status: PermitStatus;
   submittedAt: string;
   reviewedAt?: string;
@@ -325,4 +393,210 @@ export interface DeliveryTrip {
   progress: number;
   /** Per-stop live state — snapshot of the route's stops at trip creation. */
   stops: RouteStop[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Admin module
+ *
+ * Wire shapes for the `/api/admin/**` endpoints. Every one of these is
+ * a read-only projection the backend computes from live tables — see
+ * `AdminReadService` on the Spring Boot side. They are deliberately
+ * separate from the role-scoped types above (`User`, `Order`, …), which
+ * carry only what a non-admin caller is allowed to see.
+ * ------------------------------------------------------------------ */
+
+/** Order headcount per lifecycle status. Keys match {@link OrderStatus}. */
+export interface AdminOrderStatusCounts {
+  pending: number;
+  accepted: number;
+  assigned: number;
+  picked_up: number;
+  in_transit: number;
+  delivered: number;
+  cancelled: number;
+  rejected: number;
+}
+
+/** Every dashboard tile, from `GET /api/admin/stats`. */
+export interface AdminStats {
+  totalUsers: number;
+  totalCustomers: number;
+  totalSellers: number;
+  totalRiders: number;
+  totalSuppliers: number;
+  totalAdmins: number;
+  totalProducts: number;
+  totalOrders: number;
+  orderStatus: AdminOrderStatusCounts;
+  /** Orders still moving: pending through in-transit. */
+  activeOrders: number;
+  pendingSellerApplications: number;
+  underReviewSellerApplications: number;
+  approvedSellers: number;
+  rejectedSellerApplications: number;
+  totalNotifications: number;
+  /** Sum of totals across delivered orders. */
+  revenueDelivered: number;
+  generatedAt: string;
+}
+
+/** A row of the admin user directory, from `GET /api/admin/users`. */
+export interface AdminUser {
+  id: string;
+  fullName: string;
+  username: string;
+  email: string;
+  phone: string | null;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A customer with lifetime aggregates, from `GET /api/admin/customers`. */
+export interface AdminCustomer {
+  id: string;
+  fullName: string;
+  username: string;
+  email: string;
+  phone: string | null;
+  isActive: boolean;
+  createdAt: string;
+  orderCount: number;
+  totalSpent: number;
+}
+
+/**
+ * A seller with business profile, permit state and catalogue size, from
+ * `GET /api/admin/sellers`. `permitStatus` is null for sellers that
+ * predate the permit flow and have no application row.
+ */
+export interface AdminSeller {
+  id: string;
+  fullName: string;
+  username: string;
+  email: string;
+  phone: string | null;
+  isActive: boolean;
+  createdAt: string;
+  businessName: string | null;
+  address: string | null;
+  district: string | null;
+  region: string | null;
+  rating: number | null;
+  openNow: boolean | null;
+  lat: number | null;
+  lng: number | null;
+  permitStatus: PermitStatus | null;
+  permitSubmittedAt: string | null;
+  permitReviewedAt: string | null;
+  rejectionReason: string | null;
+  productCount: number;
+}
+
+/**
+ * A rider with vehicle details and workload, from `GET /api/admin/riders`.
+ * `lat`/`lng` are the coordinates on the rider's profile, not a live
+ * position — live tracking is a WebSocket stream and isn't persisted.
+ */
+export interface AdminRider {
+  id: string;
+  fullName: string;
+  username: string;
+  email: string;
+  phone: string | null;
+  isActive: boolean;
+  createdAt: string;
+  vehicleType: string | null;
+  vehiclePlate: string | null;
+  vehicleModel: string | null;
+  licenseNo: string | null;
+  available: boolean;
+  lat: number | null;
+  lng: number | null;
+  /** Orders currently in this rider's hands (assigned → in transit). */
+  assignedOrders: number;
+  completedDeliveries: number;
+  assignedSellers: number;
+}
+
+/** A catalogue row, from `GET /api/admin/products`. Includes inactive rows. */
+export interface AdminProduct {
+  id: string;
+  sellerId: string;
+  sellerName: string | null;
+  name: string;
+  size: string;
+  price: number;
+  stock: number;
+  category: string | null;
+  description: string | null;
+  image: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** An order row for the admin order book, from `GET /api/admin/orders`. */
+export interface AdminOrder {
+  id: string;
+  customerId: string;
+  customerName: string;
+  sellerId: string;
+  sellerName: string;
+  riderId: string | null;
+  riderName: string | null;
+  status: OrderStatus;
+  total: number;
+  itemCount: number;
+  deliveryAddress: string;
+  deliveryLat: number | null;
+  deliveryLng: number | null;
+  phone: string | null;
+  rejectReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A notification with its recipient resolved, from `GET /api/admin/notifications`. */
+export interface AdminNotification {
+  id: string;
+  userId: string;
+  userName: string | null;
+  type: string;
+  title: string;
+  message: string;
+  read: boolean;
+  createdAt: string;
+}
+
+/** A seller↔rider pairing, from `GET /api/admin/assignments`. */
+export interface AdminAssignment {
+  sellerId: string;
+  sellerName: string | null;
+  businessName: string | null;
+  riderId: string;
+  riderName: string | null;
+  riderAvailable: boolean;
+  assignedAt: string;
+}
+
+/** Order and revenue statistics over a window, from `GET /api/admin/reports`. */
+export interface AdminReport {
+  from: string;
+  to: string;
+  totalOrders: number;
+  deliveredOrders: number;
+  cancelledOrders: number;
+  rejectedOrders: number;
+  revenue: number;
+  averageOrderValue: number;
+  ordersByDay: { date: string; orders: number; revenue: number }[];
+  topSellers: {
+    sellerId: string;
+    sellerName: string | null;
+    orders: number;
+    revenue: number;
+  }[];
+  statusBreakdown: AdminOrderStatusCounts;
 }

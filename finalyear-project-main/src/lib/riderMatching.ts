@@ -52,18 +52,29 @@ export const DEFAULT_BROADCAST_RADIUS_M = 5_000;
 
 const seededRiders: Rider[] = [
   {
-    id: "r1",
+    id: "11",
+    fullName: "Hassan Rider",
+    phone: "+255700000004",
+    status: "online",
+    available: true,
+    vehicle: "Honda CG125",
+    rating: 4.7,
+    lat: -6.8235,
+    lng: 39.2695,
+  },
+  {
+    id: "13",
     fullName: "Daniel Mwangi",
     phone: "+254712345001",
     status: "online",
     available: true,
-    vehicle: "Motorbike",
+    vehicle: "Boda Boda",
     rating: 4.8,
     lat: -1.2864,
     lng: 36.8172,
   },
   {
-    id: "r2",
+    id: "14",
     fullName: "Brian Otieno",
     phone: "+254712345002",
     status: "online",
@@ -74,18 +85,18 @@ const seededRiders: Rider[] = [
     lng: 36.8219,
   },
   {
-    id: "r3",
+    id: "15",
     fullName: "Esther Wanjiku",
     phone: "+254712345003",
     status: "online",
     available: true,
-    vehicle: "Pickup",
+    vehicle: "Pickup Truck",
     rating: 4.9,
     lat: -1.3002,
     lng: 36.8264,
   },
   {
-    id: "r4",
+    id: "16",
     fullName: "Kelvin Mutiso",
     phone: "+254712345004",
     status: "offline",
@@ -98,10 +109,58 @@ const seededRiders: Rider[] = [
 ];
 
 /**
- * Async-mock of the rider pool. Production: page from `/riders/online`.
+ * Seller↔rider assignment, mirroring the backend's `seller_riders` join
+ * table seeded in V3 (see
+ * gas-delivery/.../V3__seed_users_products_riders.sql). Keys are seller
+ * ids (string-numerics to match `OrderEntity.sellerId`), values are the
+ * `Rider.id`s assigned to that seller.
+ */
+export const seededSellerRiders: Record<string, string[]> = {
+  "2":  ["11", "13", "14"],
+  "3":  ["11", "13"],
+  "4":  ["14", "15"],
+  "5":  ["11", "15"],
+  "6":  ["16"],
+  "7":  ["16"],
+  "8":  ["13", "14"],
+  "9":  ["15"],
+};
+
+/**
+ * Async-mock of the global rider pool. Returns the full seeded list.
+ *
+ * Kept for back-compat with any code path that genuinely needs every
+ * rider (e.g. the admin assignments screen). Broadcast / dispatch code
+ * MUST prefer {@link fetchOnlineRidersForSeller} so the seller-scoping
+ * rule is honored end-to-end (mirrors the backend's `seller_riders`).
  */
 export async function fetchOnlineRiders(): Promise<Rider[]> {
   return Promise.resolve(seededRiders);
+}
+
+/**
+ * Fetch only the riders assigned to a particular seller. Returns `[]`
+ * for sellers with no assignment — the right answer (vs leaking every
+ * rider when the seller has nobody on call).
+ */
+export async function fetchOnlineRidersForSeller(
+  sellerId: string,
+): Promise<Rider[]> {
+  const allowedIds = new Set(seededSellerRiders[sellerId] ?? []);
+  if (allowedIds.size === 0) return [];
+  return seededRiders.filter((r) => allowedIds.has(r.id));
+}
+
+/**
+ * Inverse helper: which sellers is this rider assigned to?
+ * Used by the rider app and the in-memory dispatch filter.
+ */
+export function sellersForRider(riderId: string): string[] {
+  const out: string[] = [];
+  for (const [seller, riders] of Object.entries(seededSellerRiders)) {
+    if (riders.includes(riderId)) out.push(seller);
+  }
+  return out;
 }
 
 /**
@@ -118,7 +177,8 @@ export function buildDeliveryRequest(
     { lat: rider.lat, lng: rider.lng },
     order.shopLatLng,
   );
-  if (meterDistance > order.radiusMeters) return null;
+  const radius = order.radiusMeters ?? DEFAULT_BROADCAST_RADIUS_M;
+  if (meterDistance > radius) return null;
   return {
     orderId: order.orderId,
     orderNumber: order.orderNumber,
@@ -138,6 +198,10 @@ export function buildDeliveryRequest(
 export interface DeliveryRequestOrder {
   orderId: string;
   orderNumber: string;
+  /** String-numeric id of the seller, e.g. "2" or "u-sell-2". Used by the
+   * broadcast path to scope to that seller's rider team — mirrors the
+   * backend's `seller_riders` rule. */
+  sellerId: string;
   sellerName: string;
   shopLocation: string;
   shopLatLng: LatLng;

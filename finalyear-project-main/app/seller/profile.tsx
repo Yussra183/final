@@ -232,24 +232,10 @@ export default function SellerProfile() {
         {/* Seller License Application — lets the seller download the
             official form, upload required documents, submit for
             verification, and download the issued license once approved.
-            Driven by the same `submitPermit` action the admin review
-            pipeline already consumes. */}
+            The component talks directly to the live API through the
+            store, so no parent wiring is required here. */}
         <Text style={styles.sectionTitle}>Seller License Application</Text>
-        <LicenseApplicationSection
-          user={user!}
-          permit={permit}
-          onSubmit={(payload) =>
-            submitPermit({
-              sellerId: user!.id,
-              sellerName: user!.fullName,
-              businessName: payload.businessName,
-              businessAddress: payload.businessAddress,
-              businessType: payload.businessType,
-              registrationNumber: payload.registrationNumber,
-              documents: payload.documents,
-            })
-          }
-        />
+        <LicenseApplicationSection user={user!} />
 
         {/* Action buttons */}
         <View style={styles.actionRow}>

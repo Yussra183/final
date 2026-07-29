@@ -21,6 +21,7 @@
 import {
   listEligibleRiders,
   acceptDelivery,
+  fetchOnlineRidersForSeller,
   type Rider,
 } from "../lib/riderMatching";
 import type { Order } from "../../constants/types";
@@ -70,16 +71,22 @@ const shopCoords = (
 /**
  * Default implementation. Holds no state — the underlying lock is owned
  * by `src/lib/riderMatching.ts` which is itself a singleton at runtime.
+ *
+ * IMPORTANT: the broadcast pool is filtered by `order.sellerId` via
+ * `fetchOnlineRidersForSeller` — mirroring the backend's `seller_riders`
+ * rule. Riders from other sellers never appear here, never get a
+ * notification, and can never race for an order outside their team.
  */
 export const defaultRiderBroadcastService: RiderBroadcastService = {
   async eligibleRidersForOrder(order) {
     const here = shopCoords(order);
     if (!here) return [];
-    const all = await defaultRiderPool();
+    const team = await fetchOnlineRidersForSeller(order.sellerId);
     return listEligibleRiders(
       {
         orderId: order.id,
         orderNumber: order.id.slice(-4),
+        sellerId: order.sellerId,
         sellerName: order.sellerName,
         shopLocation:
           order.deliveryLocation.address ?? "Customer address",
@@ -93,7 +100,7 @@ export const defaultRiderBroadcastService: RiderBroadcastService = {
         // The lib reads order.radiusMeters off this shape. We default
         // to the standard 5 km broadcast radius from the lib.
       },
-      all,
+      team,
     );
   },
 
@@ -117,13 +124,3 @@ export const defaultRiderBroadcastService: RiderBroadcastService = {
     return rider;
   },
 };
-
-/**
- * For the mock build the rider pool lives at module scope in
- * `src/lib/riderMatching.ts` and is synchronously available. A real
- * backend would replace this with `UsersApi.byRole("rider")`.
- */
-async function defaultRiderPool(): Promise<Rider[]> {
-  const mod = await import("../lib/riderMatching");
-  return mod.fetchOnlineRiders();
-}

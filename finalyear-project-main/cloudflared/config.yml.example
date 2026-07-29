@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Cloudflare "named" tunnel — example config.
+#
+#   cp cloudflared/config.yml.example ~/.cloudflared/config.yml
+#
+# Fill in the two placeholders below, then start the tunnel with:
+#
+#   cloudflared tunnel run <name>
+#
+# This gives you a STABLE public URL (your reserved hostname, e.g.
+# dev-api.your-domain.com) instead of a fresh trycloudflare.com URL on
+# every cloudflared restart. See scripts/setup-named-tunnel.md for the
+# one-time setup steps (login, tunnel create, route dns).
+#
+# IMPORTANT — secrets:
+#   - The credentials file (`<UUID>.json`) is auto-downloaded by
+#     `cloudflared tunnel create` into `~/.cloudflared/` and is *not*
+#     stored in this repo. .gitignore covers `cloudflared/*.json` so a
+#     stray credentials dump never gets committed.
+#   - Do NOT commit the populated `cloudflared/config.yml` (your real
+#     hostname + UUID) — only this `*.example` file is tracked.
+# ---------------------------------------------------------------------------
+
+# The UUID printed by `cloudflared tunnel create <name>`.
+# Leave the literal REPLACE_WITH_TUNNEL_UUID — cloudflared will refuse to
+# start until you swap it for the real UUID.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+
+# Path to the credentials JSON minted alongside the tunnel above.
+# `~` expands to the user's home directory; on Windows use an absolute path.
+credentials-file: ~/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+
+# Ingress rules — first match wins. Catch-all must stay last.
+ingress:
+  # Your reserved hostname (must be a DNS record in your Cloudflare zone,
+  # created by `cloudflared tunnel route dns <name> <hostname>`).
+  - hostname: dev-api.your-domain.com
+    service: http://localhost:8080
+  # Catch-all: any host that doesn't match above. Required by cloudflared
+  # even if you only have one rule — a 404 here means "tunnel is up,
+  # hostname isn't routed through me".
+  - hostname: ""
+    service: http_status:404

@@ -206,6 +206,7 @@ function DeliveryCard({
     order: {
       orderId: order.id,
       orderNumber: order.id.slice(-4).toUpperCase(),
+      sellerId: order.sellerId,
       sellerName: order.sellerName,
       shopLocation: "My Shop",
       shopLatLng: shopCoords,

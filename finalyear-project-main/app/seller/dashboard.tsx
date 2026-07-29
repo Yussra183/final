@@ -33,6 +33,7 @@ import {
   orderTone,
 } from "../../src/utils/format";
 import { GasProduct, NotificationItem, Order } from "../../constants/types";
+import { PermitStatusBanner } from "../../src/components/PermitStatusBanner";
 
 const LOW_STOCK_THRESHOLD = 10;
 
@@ -148,12 +149,14 @@ export default function SellerDashboard() {
     orders,
     products,
     notifications,
+    sellerPermits,
     getOrdersForUser,
     getProductsForSeller,
     getNotificationsForUser,
   } = useStore();
 
   const user = session?.user;
+  const sellerPermit = user ? sellerPermits[user.id] : undefined;
   const sellerOrders = useMemo(
     () => (user ? getOrdersForUser(user.id, "seller") : orders),
     [user, orders, getOrdersForUser],
@@ -212,6 +215,9 @@ export default function SellerDashboard() {
             Here is what is happening in your shop today.
           </Text>
         </View>
+
+        {/* ---- Permit verification status ---- */}
+        <PermitStatusBanner permit={sellerPermit ?? null} emphasis />
 
         {/* ---- Summary cards ---- */}
         <View style={styles.cardGrid}>

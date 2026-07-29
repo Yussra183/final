@@ -38,4 +38,5 @@ export {
   OrderStatusBadge,
 } from "./statusHelpers";
 export { AdminEmptyState } from "./AdminEmpty";
+export { AdminAsyncBoundary } from "./AdminAsyncBoundary";
 export { AdminAvatar } from "./AdminAvatar";

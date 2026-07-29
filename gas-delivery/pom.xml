@@ -50,6 +50,25 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
+
+		<!-- WebSocket — used by the real-time delivery tracking module.
+		     The starter pulls in spring-websocket + spring-messaging;
+		     we only need the raw WebSocketConfigurer API so messaging
+		     is left unused. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-websocket</artifactId>
+		</dependency>
+
+		<!-- Jackson 2 — Spring Boot 4 ships Jackson 3 by default, but the
+		     real-time tracking handler parses WebSocket frames with
+		     Jackson 2 because it ships with JJWT transitively. Pinning
+		     it at compile scope keeps our `ObjectMapper` imports
+		     (com.fasterxml.jackson.databind.*) working. -->
+		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>

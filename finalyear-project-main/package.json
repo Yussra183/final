@@ -4,20 +4,27 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "dev:lan": "node scripts/dev-lan-url.js",
+    "dev:tunnel": "node scripts/start-with-tunnel.js",
+    "dev:stop": "node scripts/dev-stop.js",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit",
+    "test:order-flow": "node scripts/run-order-flow-tests.js",
+    "test": "npm run typecheck && npm run test:order-flow"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@react-native-picker/picker": "2.11.1",
     "@react-navigation/bottom-tabs": "^7.4.0",
-    "@react-navigation/drawer": "^7.12.2",
+    "@react-navigation/drawer": "^7.13.5",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "expo": "~54.0.36",
+    "expo-asset": "~12.0.13",
     "expo-constants": "~18.0.13",
     "expo-file-system": "~19.0.17",
     "expo-font": "~14.0.11",
@@ -26,7 +33,9 @@
     "expo-linking": "~8.0.12",
     "expo-location": "~19.0.8",
     "expo-notifications": "~0.32.17",
+    "expo-print": "~15.0.8",
     "expo-router": "~6.0.23",
+    "expo-sharing": "~14.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-symbols": "~1.0.8",
@@ -47,6 +56,7 @@
     "@types/react": "~19.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "pg": "^8.22.0",
     "typescript": "~5.9.2"
   },
   "private": true

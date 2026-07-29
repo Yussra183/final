@@ -100,6 +100,11 @@ export function validateCreateOrderPayload(input: {
 /**
  * Throws when the requested status transition is illegal. Catches both
  * "no rule for that pair" and "rule exists but the actor can't fire it".
+ *
+ * Order of checks matters: we surface role/ownership mismatches with
+ * `NOT_AUTHORIZED` first, then `INVALID_TRANSITION` for legitimate
+ * transitions attempted by the wrong actor. This gives the UI a more
+ * useful message ("you can't do this" vs "this isn't a legal move").
  */
 export function assertTransition(
   actor: { role: User["role"]; id: string },
@@ -118,14 +123,7 @@ export function assertTransition(
       "Admin/supplier accounts cannot drive order status.",
     );
   }
-  if (!canTransition(actorRole, order.status, next)) {
-    throw new OrderServiceError(
-      "INVALID_TRANSITION",
-      `Cannot move order from ${order.status} to ${next} as ${actorRole}.`,
-    );
-  }
-  // Ownership rules sit beside the transition rule so the audit story is
-  // complete: only the rightful counterparty may advance.
+  // Ownership rules: only the rightful counterparty may advance.
   if (actorRole === "customer" && order.customerId !== actor.id) {
     throw new OrderServiceError(
       "NOT_AUTHORIZED",
@@ -146,6 +144,13 @@ export function assertTransition(
     throw new OrderServiceError(
       "NOT_AUTHORIZED",
       "You can only update deliveries assigned to you.",
+    );
+  }
+  // Role × transition rule (e.g. customer cannot "accept").
+  if (!canTransition(actorRole, order.status, next)) {
+    throw new OrderServiceError(
+      "INVALID_TRANSITION",
+      `Cannot move order from ${order.status} to ${next} as ${actorRole}.`,
     );
   }
 }

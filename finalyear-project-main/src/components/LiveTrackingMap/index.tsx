@@ -26,6 +26,7 @@ import { LatLng } from "../../lib/location";
 import {
   LiveTrackingMapProps,
   ResolvedMapProps,
+  resolveLiveTrackingMapProps,
 } from "../LiveTrackingMap.types";
 
 /**
@@ -208,11 +209,7 @@ function Pin({ x, y, icon, label, tone, pulse }: PinProps) {
  * callers (`LiveRiderTracker`) keep working untouched.
  */
 export function LiveTrackingMap(props: LiveTrackingMapProps) {
-  const normalised: ResolvedMapProps = {
-    ...props,
-    live: props.live ?? props.rider ?? { lat: 0, lng: 0 },
-    liveLabel: props.liveLabel ?? props.riderLabel ?? "Live",
-  };
+  const normalised = resolveLiveTrackingMapProps(props);
   return <FallbackFrame {...normalised} />;
 }
 

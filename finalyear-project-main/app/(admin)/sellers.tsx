@@ -1,112 +1,124 @@
 /**
  * Admin Dashboard – Sellers page.
  *
- * Lists all sellers with their info, assigned riders, order count and
- * status. Supports view, edit, suspend and delete actions.
+ * Reads `GET /api/admin/sellers`, which joins every user with
+ * `role = "seller"` against their `seller_profiles` row and their latest
+ * permit application. Search and the permit-status filter are passed to
+ * the backend as query params, so the filtering happens against the
+ * database rather than a local copy.
+ *
+ * `permitStatus` is null for legacy sellers that predate the permit flow
+ * and have no application row — surfaced here as "No application" so we
+ * never invent a status that the backend doesn't actually carry.
+ *
+ * Read-only: the backend exposes no admin write surface for sellers,
+ * so this page reports state rather than changing it.
  */
-import React, { useMemo, useState } from "react";
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import React, { useEffect, useState } from "react";
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AdminLayout } from "../../src/components/admin/AdminLayout";
 import {
+  AdminAsyncBoundary,
   AdminAvatar,
   AdminBadge,
   AdminButton,
   AdminCard,
   AdminEmptyState,
-  AdminInput,
-  AdminFormField,
-  AdminFormGrid,
   AdminModal,
   AdminSearchBar,
   AdminStatTile,
   AdminTable,
-  SellerStatusBadge,
 } from "../../src/components/admin";
 import { AdminTableColumn } from "../../src/components/admin/AdminTable";
-import {
-  Colors,
-  FontSize,
-  Radius,
-  Spacing,
-} from "../../constants/colors";
-import {
-  RIDERS,
-  Seller,
-  SELLERS,
-} from "../../src/store/adminData";
+import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import { AdminApi } from "../../src/api/endpoints";
+import { useAdminResource } from "../../src/hooks/useAdminResource";
+import type { AdminSeller, PermitStatus } from "../../constants/types";
 
-type FilterKey = "all" | "active" | "suspended" | "inactive";
+type FilterKey = "all" | "pending" | "approved" | "rejected";
+
+const formatDate = (iso: string | null) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+};
+
+const PERMIT_LABEL: Record<PermitStatus, string> = {
+  draft: "Draft",
+  pending: "Pending",
+  under_review: "Under Review",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
+const PERMIT_TONE: Record<
+  PermitStatus,
+  "success" | "warning" | "danger" | "info" | "neutral"
+> = {
+  draft: "neutral",
+  pending: "warning",
+  under_review: "info",
+  approved: "success",
+  rejected: "danger",
+};
 
 export default function SellersPage() {
-  const [sellers, setSellers] = useState<Seller[]>(SELLERS);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [viewTarget, setViewTarget] = useState<Seller | null>(null);
-  const [editTarget, setEditTarget] = useState<Seller | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Seller | null>(null);
-  const [suspendTarget, setSuspendTarget] = useState<Seller | null>(null);
+  const [viewTarget, setViewTarget] = useState<AdminSeller | null>(null);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return sellers.filter((s) => {
-      const matchQ =
-        !q ||
-        s.businessName.toLowerCase().includes(q) ||
-        s.ownerName.toLowerCase().includes(q) ||
-        s.location.toLowerCase().includes(q);
-      const matchF = filter === "all" || s.status === filter;
-      return matchQ && matchF;
-    });
-  }, [sellers, search, filter]);
+  // Debounce the search so a keystroke doesn't fire a request per letter.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const counts = useMemo(
-    () => ({
-      all: sellers.length,
-      active: sellers.filter((s) => s.status === "active").length,
-      suspended: sellers.filter((s) => s.status === "suspended").length,
-      inactive: sellers.filter((s) => s.status === "inactive").length,
-    }),
-    [sellers],
+  const permitStatus =
+    filter === "all"
+      ? undefined
+      : (filter as Exclude<FilterKey, "all">);
+
+  const { data, loading, error, reload, refreshing } = useAdminResource<
+    AdminSeller[]
+  >(
+    () =>
+      AdminApi.sellers({
+        q: debouncedSearch || undefined,
+        permitStatus,
+      }),
+    [debouncedSearch, permitStatus],
   );
 
-  const handleDelete = () => {
-    if (!deleteTarget) return;
-    setSellers((prev) => prev.filter((s) => s.id !== deleteTarget.id));
-    setDeleteTarget(null);
-  };
+  const sellers = data ?? [];
 
-  const handleSuspend = () => {
-    if (!suspendTarget) return;
-    setSellers((prev) =>
-      prev.map((s) =>
-        s.id === suspendTarget.id
-          ? {
-              ...s,
-              status: s.status === "active" ? "suspended" : "active",
-            }
-          : s,
-      ),
-    );
-    setSuspendTarget(null);
-  };
+  // KPIs are computed off the live dataset so they always reflect what's
+  // on screen after the permit-status filter.
+  const approvedCount = sellers.filter(
+    (s) => s.permitStatus === "approved",
+  ).length;
+  const pendingCount = sellers.filter(
+    (s) => s.permitStatus === "pending" || s.permitStatus === "under_review",
+  ).length;
+  const rejectedCount = sellers.filter(
+    (s) => s.permitStatus === "rejected",
+  ).length;
 
-  const columns: AdminTableColumn<Seller>[] = [
+  const columns: AdminTableColumn<AdminSeller>[] = [
     {
       key: "business",
       label: "Business",
       flex: 2.2,
       render: (s) => (
         <View style={styles.cellRow}>
-          <AdminAvatar name={s.businessName} size={36} />
+          <AdminAvatar name={s.businessName ?? s.fullName} size={36} />
           <View>
-            <Text style={styles.cellTitle}>{s.businessName}</Text>
-            <Text style={styles.cellMeta}>{s.ownerName}</Text>
+            <Text style={styles.cellTitle}>
+              {s.businessName ?? "Unnamed business"}
+            </Text>
+            <Text style={styles.cellMeta}>
+              {s.fullName} • {s.email}
+            </Text>
           </View>
         </View>
       ),
@@ -115,326 +127,247 @@ export default function SellersPage() {
       key: "location",
       label: "Location",
       flex: 1.4,
-      render: (s) => <Text style={styles.cellText}>{s.location}</Text>,
-    },
-    {
-      key: "riders",
-      label: "Assigned Riders",
-      flex: 1.6,
       render: (s) => (
         <View>
-          <Text style={styles.cellText}>{s.assignedRiders.length} rider(s)</Text>
-          <Text style={styles.cellMeta} numberOfLines={1}>
-            {s.assignedRiders
-              .map(
-                (rid) => RIDERS.find((r) => r.id === rid)?.fullName ?? "Unknown",
-              )
-              .join(", ") || "—"}
+          <Text style={styles.cellText}>{s.address ?? "—"}</Text>
+          <Text style={styles.cellMeta}>
+            {[s.district, s.region].filter(Boolean).join(", ") || "—"}
           </Text>
         </View>
       ),
     },
     {
-      key: "orders",
-      label: "Orders",
+      key: "products",
+      label: "Products",
       flex: 0.7,
       align: "center",
       render: (s) => (
-        <View style={styles.ordersBubble}>
-          <Text style={styles.ordersText}>{s.orderCount}</Text>
+        <View style={styles.productsBubble}>
+          <Text style={styles.productsText}>{s.productCount}</Text>
         </View>
       ),
     },
     {
-      key: "status",
-      label: "Status",
-      flex: 0.9,
-      render: (s) => <SellerStatusBadge status={s.status} />,
+      key: "joined",
+      label: "Registered",
+      flex: 1.1,
+      render: (s) => (
+        <Text style={styles.cellText}>{formatDate(s.createdAt)}</Text>
+      ),
+    },
+    {
+      key: "permit",
+      label: "Permit",
+      flex: 1.1,
+      render: (s) => {
+        if (!s.permitStatus) {
+          return <AdminBadge label="No application" tone="neutral" />;
+        }
+        return (
+          <AdminBadge
+            label={PERMIT_LABEL[s.permitStatus]}
+            tone={PERMIT_TONE[s.permitStatus]}
+          />
+        );
+      },
     },
   ];
+
+  const filterIsPermit = filter !== "all";
 
   return (
     <AdminLayout
       title="Sellers"
-      subtitle="Manage all sellers operating on the platform"
+      subtitle="All sellers operating on the platform"
+      rightActions={
+        <AdminButton
+          label="Refresh"
+          icon="↻"
+          variant="secondary"
+          onPress={reload}
+          loading={refreshing}
+        />
+      }
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={reload} />
+      }
     >
-      <View style={styles.kpiRow}>
-        <AdminStatTile
-          label="Total Sellers"
-          value={counts.all}
-          icon="🏪"
-          tone="primary"
-        />
-        <AdminStatTile
-          label="Active"
-          value={counts.active}
-          icon="✅"
-          tone="success"
-        />
-        <AdminStatTile
-          label="Suspended"
-          value={counts.suspended}
-          icon="⛔"
-          tone="danger"
-        />
-        <AdminStatTile
-          label="Total Orders"
-          value={sellers.reduce((s, x) => s + x.orderCount, 0)}
-          icon="🧾"
-          tone="info"
-        />
-      </View>
-
-      <AdminCard style={{ marginTop: Spacing.lg }}>
-        <AdminSearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search by business, owner or location"
-          filters={[
-            { key: "all", label: "All", count: counts.all },
-            { key: "active", label: "Active", count: counts.active },
-            { key: "suspended", label: "Suspended", count: counts.suspended },
-            { key: "inactive", label: "Inactive", count: counts.inactive },
-          ]}
-          activeFilter={filter}
-          onFilterChange={(k) => setFilter(k as FilterKey)}
-        />
-        {filtered.length === 0 ? (
-          <AdminEmptyState
+      <AdminAsyncBoundary
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        hasData={!!data}
+        loadingLabel="Loading sellers…"
+      >
+        <View style={styles.kpiRow}>
+          <AdminStatTile
+            label="Sellers Shown"
+            value={sellers.length}
             icon="🏪"
-            title="No sellers found"
-            message="Try adjusting your search or filters."
+            tone="primary"
           />
-        ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={{ minWidth: 900 }}>
-              <AdminTable
-                columns={columns}
-                rows={filtered}
-                keyExtractor={(s) => s.id}
-                rowActions={(s) => (
-                  <View style={styles.actionRow}>
-                    <AdminButton
-                      label="View"
-                      variant="secondary"
-                      size="sm"
-                      onPress={() => setViewTarget(s)}
-                    />
-                    <AdminButton
-                      label="Edit"
-                      variant="ghost"
-                      size="sm"
-                      icon="✎"
-                      onPress={() => setEditTarget(s)}
-                    />
-                    <AdminButton
-                      label={s.status === "active" ? "Suspend" : "Activate"}
-                      variant={s.status === "active" ? "warning" : "success"}
-                      size="sm"
-                      onPress={() => setSuspendTarget(s)}
-                    />
-                    <AdminButton
-                      label="Delete"
-                      variant="danger"
-                      size="sm"
-                      onPress={() => setDeleteTarget(s)}
-                    />
-                  </View>
-                )}
-              />
-            </View>
-          </ScrollView>
-        )}
-      </AdminCard>
+          <AdminStatTile
+            label="Approved"
+            value={approvedCount}
+            icon="✅"
+            tone="success"
+          />
+          <AdminStatTile
+            label="Pending"
+            value={pendingCount}
+            icon="⏳"
+            tone="warning"
+          />
+          <AdminStatTile
+            label="Rejected"
+            value={rejectedCount}
+            icon="⛔"
+            tone="danger"
+          />
+        </View>
+
+        <AdminCard style={{ marginTop: Spacing.lg }}>
+          <AdminSearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search by business name, owner or email"
+            filters={[
+              { key: "all", label: "All" },
+              { key: "pending", label: "Pending" },
+              { key: "approved", label: "Approved" },
+              { key: "rejected", label: "Rejected" },
+            ]}
+            activeFilter={filter}
+            onFilterChange={(k) => setFilter(k as FilterKey)}
+          />
+          {sellers.length === 0 ? (
+            <AdminEmptyState
+              icon="🏪"
+              title="No sellers found"
+              message={
+                search || filterIsPermit
+                  ? "No seller in the database matches this search."
+                  : "No seller accounts have been registered yet."
+              }
+            />
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={{ minWidth: 900 }}>
+                <AdminTable
+                  columns={columns}
+                  rows={sellers}
+                  keyExtractor={(s) => s.id}
+                  rowActions={(s) => (
+                    <View style={styles.actionRow}>
+                      <AdminButton
+                        label="View"
+                        variant="secondary"
+                        size="sm"
+                        onPress={() => setViewTarget(s)}
+                      />
+                    </View>
+                  )}
+                />
+              </View>
+            </ScrollView>
+          )}
+        </AdminCard>
+      </AdminAsyncBoundary>
 
       {viewTarget ? (
-        <SellerDetailsModal
-          seller={viewTarget}
+        <AdminModal
+          visible
           onClose={() => setViewTarget(null)}
-        />
-      ) : null}
-
-      {editTarget ? (
-        <SellerFormModal
-          seller={editTarget}
-          onClose={() => setEditTarget(null)}
-          onSubmit={(data) => {
-            setSellers((prev) =>
-              prev.map((s) => (s.id === editTarget.id ? { ...s, ...data } : s)),
-            );
-            setEditTarget(null);
-          }}
-        />
-      ) : null}
-
-      <AdminModal
-        visible={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        title="Delete Seller?"
-        subtitle={`Permanently remove ${deleteTarget?.businessName ?? ""}.`}
-        onConfirm={handleDelete}
-        confirmLabel="Delete"
-        confirmVariant="danger"
-      >
-        <Text style={styles.dialogText}>
-          All orders, riders and reports linked to this seller will be
-          archived. This action cannot be undone.
-        </Text>
-      </AdminModal>
-
-      <AdminModal
-        visible={!!suspendTarget}
-        onClose={() => setSuspendTarget(null)}
-        title={
-          suspendTarget?.status === "active"
-            ? "Suspend Seller?"
-            : "Activate Seller?"
-        }
-        subtitle={
-          suspendTarget?.status === "active"
-            ? `Suspending ${suspendTarget?.businessName ?? ""} will halt incoming orders.`
-            : `Reactivating ${suspendTarget?.businessName ?? ""} will resume operations.`
-        }
-        onConfirm={handleSuspend}
-        confirmLabel={
-          suspendTarget?.status === "active" ? "Suspend" : "Activate"
-        }
-        confirmVariant={
-          suspendTarget?.status === "active" ? "warning" : "success"
-        }
-      >
-        <Text style={styles.dialogText}>
-          Assigned riders will be notified of the seller's status change.
-        </Text>
-      </AdminModal>
-    </AdminLayout>
-  );
-}
-
-interface SellerFormProps {
-  seller: Seller;
-  onClose: () => void;
-  onSubmit: (data: Partial<Seller>) => void;
-}
-
-function SellerFormModal({ seller, onClose, onSubmit }: SellerFormProps) {
-  const [businessName, setBusinessName] = useState(seller.businessName);
-  const [ownerName, setOwnerName] = useState(seller.ownerName);
-  const [phone, setPhone] = useState(seller.phone);
-  const [email, setEmail] = useState(seller.email);
-  const [location, setLocation] = useState(seller.location);
-  const [license, setLicense] = useState(seller.license);
-
-  return (
-    <AdminModal
-      visible
-      onClose={onClose}
-      title="Edit Seller"
-      hideFooter
-    >
-      <ScrollView style={{ maxHeight: 480 }}>
-        <AdminFormGrid columns={2}>
-          <AdminFormField label="Business Name" required>
-            <AdminInput value={businessName} onChangeText={setBusinessName} />
-          </AdminFormField>
-          <AdminFormField label="Owner" required>
-            <AdminInput value={ownerName} onChangeText={setOwnerName} />
-          </AdminFormField>
-          <AdminFormField label="Phone" required>
-            <AdminInput value={phone} onChangeText={setPhone} />
-          </AdminFormField>
-          <AdminFormField label="Email">
-            <AdminInput value={email} onChangeText={setEmail} />
-          </AdminFormField>
-          <AdminFormField label="Location" required>
-            <AdminInput value={location} onChangeText={setLocation} />
-          </AdminFormField>
-          <AdminFormField label="License">
-            <AdminInput value={license} onChangeText={setLicense} />
-          </AdminFormField>
-        </AdminFormGrid>
-        <View style={styles.formFooter}>
-          <AdminButton
-            label="Cancel"
-            variant="secondary"
-            onPress={onClose}
-            style={{ marginRight: Spacing.sm }}
-          />
-          <AdminButton
-            label="Save Changes"
-            onPress={() =>
-              onSubmit({
-                businessName,
-                ownerName,
-                phone,
-                email,
-                location,
-                license,
-              })
-            }
-          />
-        </View>
-      </ScrollView>
-    </AdminModal>
-  );
-}
-
-function SellerDetailsModal({
-  seller,
-  onClose,
-}: {
-  seller: Seller;
-  onClose: () => void;
-}) {
-  const assignedRiders = RIDERS.filter((r) =>
-    seller.assignedRiders.includes(r.id),
-  );
-  return (
-    <AdminModal visible onClose={onClose} title={seller.businessName} hideFooter>
-      <View style={styles.detailHeader}>
-        <AdminAvatar name={seller.businessName} size={56} />
-        <View style={{ flex: 1, marginLeft: Spacing.md }}>
-          <Text style={styles.detailTitle}>{seller.businessName}</Text>
-          <Text style={styles.detailMeta}>
-            {seller.ownerName} • {seller.location}
-          </Text>
-          <View style={{ marginTop: 6 }}>
-            <SellerStatusBadge status={seller.status} />
-          </View>
-        </View>
-      </View>
-      <View style={styles.detailGrid}>
-        <Row label="Phone" value={seller.phone} />
-        <Row label="Email" value={seller.email} />
-        <Row label="License" value={seller.license} />
-        <Row label="Joined" value={seller.joinedDate} />
-        <Row label="Total Orders" value={String(seller.orderCount)} />
-      </View>
-
-      <Text style={styles.subSection}>Assigned Riders</Text>
-      {assignedRiders.length === 0 ? (
-        <View style={styles.emptyRiders}>
-          <Text style={styles.emptyRidersText}>
-            No riders assigned yet. Use the Rider Assignments page.
-          </Text>
-        </View>
-      ) : (
-        <View style={{ gap: 6 }}>
-          {assignedRiders.map((r) => (
-            <View key={r.id} style={styles.riderRow}>
-              <AdminAvatar name={r.fullName} size={32} />
-              <View style={{ flex: 1, marginLeft: Spacing.sm }}>
-                <Text style={styles.riderName}>{r.fullName}</Text>
-                <Text style={styles.riderMeta}>
-                  {r.vehicleType} • {r.vehiclePlate}
-                </Text>
+          title={viewTarget.businessName ?? viewTarget.fullName}
+          hideFooter
+        >
+          <View style={styles.detailHeader}>
+            <AdminAvatar
+              name={viewTarget.businessName ?? viewTarget.fullName}
+              size={64}
+            />
+            <View style={{ flex: 1, marginLeft: Spacing.md }}>
+              <Text style={styles.detailTitle}>
+                {viewTarget.businessName ?? "Unnamed business"}
+              </Text>
+              <Text style={styles.detailMeta}>
+                Owned by {viewTarget.fullName} • @{viewTarget.username}
+              </Text>
+              <View style={{ marginTop: 6, flexDirection: "row", gap: 6 }}>
+                {viewTarget.permitStatus ? (
+                  <AdminBadge
+                    label={PERMIT_LABEL[viewTarget.permitStatus]}
+                    tone={PERMIT_TONE[viewTarget.permitStatus]}
+                  />
+                ) : (
+                  <AdminBadge label="No application" tone="neutral" />
+                )}
+                <AdminBadge
+                  label={viewTarget.isActive ? "Active" : "Inactive"}
+                  tone={viewTarget.isActive ? "success" : "neutral"}
+                />
               </View>
-              <AdminBadge label="Active" tone="success" />
             </View>
-          ))}
-        </View>
-      )}
-    </AdminModal>
+          </View>
+
+          <View style={styles.detailGrid}>
+            <Row label="Email" value={viewTarget.email} />
+            <Row label="Phone" value={viewTarget.phone ?? "—"} />
+            <Row label="Address" value={viewTarget.address ?? "—"} />
+            <Row label="District" value={viewTarget.district ?? "—"} />
+            <Row label="Region" value={viewTarget.region ?? "—"} />
+            <Row
+              label="Coordinates"
+              value={
+                viewTarget.lat !== null && viewTarget.lng !== null
+                  ? `${viewTarget.lat.toFixed(4)}, ${viewTarget.lng.toFixed(4)}`
+                  : "—"
+              }
+            />
+            <Row
+              label="Rating"
+              value={
+                viewTarget.rating !== null
+                  ? `${viewTarget.rating.toFixed(1)} / 5`
+                  : "—"
+              }
+            />
+            <Row
+              label="Open Now"
+              value={
+                viewTarget.openNow === null
+                  ? "—"
+                  : viewTarget.openNow
+                  ? "Yes"
+                  : "No"
+              }
+            />
+            <Row
+              label="Products"
+              value={String(viewTarget.productCount)}
+            />
+            <Row label="Registered" value={formatDate(viewTarget.createdAt)} />
+            <Row
+              label="Permit Submitted"
+              value={formatDate(viewTarget.permitSubmittedAt)}
+            />
+            <Row
+              label="Permit Reviewed"
+              value={formatDate(viewTarget.permitReviewedAt)}
+            />
+          </View>
+
+          {viewTarget.permitStatus === "rejected" ? (
+            <>
+              <Text style={styles.subHeading}>Rejection Reason</Text>
+              <Text style={styles.rejectionText}>
+                {viewTarget.rejectionReason ?? "No reason provided."}
+              </Text>
+            </>
+          ) : null}
+        </AdminModal>
+      ) : null}
+    </AdminLayout>
   );
 }
 
@@ -473,13 +406,13 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: "600",
   },
-  ordersBubble: {
+  productsBubble: {
     backgroundColor: Colors.surfaceMuted,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: Radius.pill,
   },
-  ordersText: {
+  productsText: {
     fontSize: FontSize.sm,
     fontWeight: "800",
     color: Colors.text,
@@ -488,16 +421,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 4,
     justifyContent: "flex-end",
-  },
-  dialogText: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.sm,
-    fontWeight: "600",
-  },
-  formFooter: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    marginTop: Spacing.md,
   },
   detailHeader: {
     flexDirection: "row",
@@ -537,38 +460,19 @@ const styles = StyleSheet.create({
     textAlign: "right",
     marginLeft: Spacing.md,
   },
-  subSection: {
+  subHeading: {
     fontSize: FontSize.md,
     fontWeight: "800",
     color: Colors.text,
-    marginTop: Spacing.md,
+    marginTop: Spacing.lg,
     marginBottom: Spacing.sm,
   },
-  emptyRiders: {
+  rejectionText: {
     backgroundColor: Colors.surfaceMuted,
     padding: Spacing.md,
     borderRadius: Radius.md,
-  },
-  emptyRidersText: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.sm,
-    fontWeight: "600",
-  },
-  riderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.surfaceMuted,
-    padding: Spacing.sm,
-    borderRadius: Radius.md,
-  },
-  riderName: {
-    fontWeight: "800",
     color: Colors.text,
     fontSize: FontSize.sm,
-  },
-  riderMeta: {
-    color: Colors.textSecondary,
-    fontSize: 11,
-    marginTop: 2,
+    fontWeight: "600",
   },
 });

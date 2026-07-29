@@ -8,6 +8,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -33,10 +34,24 @@ interface Props {
   subtitle?: string;
   /** Optional right-side actions rendered inside the top bar. */
   rightActions?: React.ReactNode;
+  /**
+   * Pull-to-refresh control for the body scroll view. Admin pages read
+   * from the backend on every reload, so this is how a user forces a
+   * re-fetch without leaving the screen.
+   */
+  refreshControl?: React.ReactElement<
+    React.ComponentProps<typeof RefreshControl>
+  >;
   children: React.ReactNode;
 }
 
-export function AdminLayout({ title, subtitle, rightActions, children }: Props) {
+export function AdminLayout({
+  title,
+  subtitle,
+  rightActions,
+  refreshControl,
+  children,
+}: Props) {
   const { width } = useWindowDimensions();
   const isDesktop = width >= DESKTOP_BREAKPOINT;
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -100,6 +115,7 @@ export function AdminLayout({ title, subtitle, rightActions, children }: Props) 
           !isDesktop && styles.bodyMobile,
         ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={refreshControl}
       >
         {children}
       </ScrollView>

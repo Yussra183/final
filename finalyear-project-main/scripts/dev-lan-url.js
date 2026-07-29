@@ -1,0 +1,245 @@
+#!/usr/bin/env node
+/* eslint-disable no-console */
+/**
+ * scripts/dev-lan-url.js
+ *
+ * One-command "direct LAN" launcher. The opposite of `npm run dev:tunnel`
+ * — instead of going through a Cloudflare tunnel, the phone connects to
+ * the dev laptop's local IP (`http://<laptop-LAN-IP>:8080`) directly.
+ *
+ *   npm run dev:lan
+ *
+ * What it does:
+ *   1. Detects the laptop's current primary IPv4 LAN address.
+ *   2. Writes `EXPO_PUBLIC_API_BASE_URL=http://<that-ip>:8080` into
+ *      `.env.local`, replacing any previous value.
+ *   3. Spawns `npx expo start` so the bundle picks up the new URL.
+ *
+ * Why this exists: a Cloudflare *quick*-tunnel URL is regenerated on
+ * every `cloudflared` restart (which is what was causing the
+ * "Could not reach backend at https://…trycloudflare.com" error after
+ * every PC reboot). A direct LAN URL is the simplest alternative — it
+ * avoids any external service, and as long as the phone and laptop
+ * share a Wi-Fi the app works.
+ *
+ * Re-running after a Wi-Fi switch:
+ *   - If you switch networks and the laptop's LAN IP changes, just run
+ *     `npm run dev:lan` again — it redetects the IP and rewrites
+ *     `.env.local` automatically. No manual edits needed.
+ *
+ * Trade-offs vs. the named-tunnel approach (see README):
+ *   - LAN IP changes on every Wi-Fi switch → run this script again.
+ *   - Phone must be on the SAME Wi-Fi as the laptop (no internet needed
+ *     for the app's API traffic; both just need to share the LAN).
+ *
+ * Cleanup: Ctrl-C forwards to the Expo child and exits.
+ *
+ * Caveats:
+ *   - Requires `node` and `npx` on $PATH.
+ *   - On Linux/macOS the LAN IP is read from `node:os` `networkInterfaces`
+ *     filtered to non-loopback, non-link-local IPv4 entries. On Windows
+ *     it falls back to `ipconfig`.
+ *   - Run from the `finalyear-project-main/` directory.
+ */
+
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const SCRIPT_DIR = __dirname;
+/**
+ * Repo root — the directory holding this script's parent. We always
+ * `process.chdir` here before doing anything else so the launcher
+ * works no matter where it was invoked from.
+ */
+const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
+process.chdir(REPO_ROOT);
+
+const ENV_FILE = path.join(REPO_ROOT, ".env.local");
+const BACKEND_PORT = 8080;
+
+const isWindows = process.platform === "win32";
+
+/** ANSI colors that auto-disable when stdout isn't a TTY. */
+const c = {
+  dim: (s) => (process.stdout.isTTY ? `\x1b[2m${s}\x1b[0m` : s),
+  green: (s) => (process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s),
+  yellow: (s) => (process.stdout.isTTY ? `\x1b[33m${s}\x1b[0m` : s),
+  red: (s) => (process.stdout.isTTY ? `\x1b[31m${s}\x1b[0m` : s),
+  bold: (s) => (process.stdout.isTTY ? `\x1b[1m${s}\x1b[0m` : s),
+};
+
+function log(prefix, msg) {
+  process.stdout.write(`${c.dim(`[${prefix}]`)} ${msg}\n`);
+}
+
+function banner(text) {
+  const line = "─".repeat(Math.max(40, text.length + 4));
+  console.log(`\n${c.bold(c.green(line))}`);
+  console.log(`${c.bold(c.green(`  ${text}`))}`);
+  console.log(`${c.bold(c.green(line))}\n`);
+}
+
+/**
+ * Pick the best LAN IPv4 address for this host. Preference order:
+ *   1. First non-loopback, non-link-local, non-virtual IPv4 on an
+ *      "up" interface. This is what `hostname -I` returns on most
+ *      Linux/macOS boxes.
+ *   2. Fall back to `ipconfig` on Windows when os.networkInterfaces
+ *      is empty (rare — happens inside some sandboxed shells).
+ *
+ * Returns `null` if nothing qualifies (e.g. the laptop is offline or
+ * only has loopback). The caller should fail loudly with that.
+ */
+function detectLanIp() {
+  const ifaces = os.networkInterfaces();
+  const candidates = [];
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (!addrs) continue;
+    for (const a of addrs) {
+      if (a.family !== "IPv4") continue;
+      if (a.internal) continue;
+      // Skip link-local 169.254.x.x and loopback 127.x.x.x (already
+      // filtered by `internal`, but be explicit).
+      if (a.address.startsWith("127.")) continue;
+      if (a.address.startsWith("169.254.")) continue;
+      // Prefer common Wi-Fi / Ethernet interface names. We don't
+      // hard-fail on others — just rank them lower.
+      const preferred =
+        /^(wl|en|eth|wlan|wlp|eno|ens|enp)/i.test(name) ? 0 : 1;
+      candidates.push({ name, address: a.address, preferred });
+    }
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((x, y) => x.preferred - y.preferred);
+  return candidates[0].address;
+}
+
+/**
+ * Write `EXPO_PUBLIC_API_BASE_URL=http://<ip>:8080` into `.env.local`,
+ * preserving any other lines. If the key already exists, replace it;
+ * otherwise append it.
+ */
+function writeEnvUrl(url) {
+  const envLine = `EXPO_PUBLIC_API_BASE_URL=${url}`;
+  let prev = "";
+  if (fs.existsSync(ENV_FILE)) {
+    prev = fs.readFileSync(ENV_FILE, "utf8");
+  } else {
+    prev =
+      "# Generated by scripts/dev-lan-url.js — overwritten each run.\n";
+  }
+  const lines = prev.split(/\r?\n/);
+  const re = /^EXPO_PUBLIC_API_BASE_URL\s*=/;
+  const i = lines.findIndex((l) => re.test(l));
+  if (i >= 0) lines[i] = envLine;
+  else lines.push(envLine);
+  // Drop any trailing blank lines, then add exactly one.
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const out = lines.join("\n") + "\n";
+  fs.writeFileSync(ENV_FILE, out, "utf8");
+  log("env", c.green(`wrote ${envLine} to ${path.relative(REPO_ROOT, ENV_FILE)}`));
+}
+
+/**
+ * Best-effort reachability probe so we can warn the user BEFORE Expo
+ * starts. We accept any HTTP status — the goal is just to confirm the
+ * laptop is listening on the port the phone will dial.
+ */
+async function probeBackend(host, timeoutMs = 2000) {
+  const http = require("node:http");
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host,
+        port: BACKEND_PORT,
+        path: "/api/sellers",
+        method: "GET",
+        timeout: timeoutMs,
+        headers: { Accept: "application/json" },
+      },
+      (res) => {
+        res.resume();
+        resolve({ ok: true, status: res.statusCode });
+      },
+    );
+    req.on("error", (err) => resolve({ ok: false, error: err.message }));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ ok: false, error: "timed out" });
+    });
+    req.end();
+  });
+}
+
+async function main() {
+  banner("Gas Delivery — direct LAN");
+
+  const lanIp = detectLanIp();
+  if (!lanIp) {
+    console.error(
+      c.red(
+        "✘ Could not detect a LAN IPv4 address on this machine.\n" +
+          "  Make sure the laptop is connected to Wi-Fi (not just cellular\n" +
+          "  tethering) and try again. Run `hostname -I` to verify.",
+      ),
+    );
+    process.exit(1);
+  }
+  log("lan", c.green(`✔ detected LAN IP: ${lanIp}`));
+
+  const url = `http://${lanIp}:${BACKEND_PORT}`;
+  writeEnvUrl(url);
+
+  // Best-effort probe so the user finds out about a missing backend
+  // *now*, not on the login screen. We don't fail the launcher on this
+  // — the backend might be starting in another terminal.
+  const probe = await probeBackend(lanIp);
+  if (probe.ok) {
+    log("backend", c.green(`✔ reachable at ${url} (HTTP ${probe.status})`));
+  } else {
+    log(
+      "backend",
+      c.yellow(
+        `⚠ could not reach ${url} (${probe.error}). ` +
+          "Make sure `mvn spring-boot:run` is running in the gas-delivery/ directory.",
+      ),
+    );
+  }
+
+  log("step", c.bold("starting Expo"));
+  log("expo", c.dim(`URL: ${url}`));
+  log("expo", c.dim("Once the QR code prints, scan it with Expo Go."));
+  const expo = spawn("npx", ["expo", "start"], {
+    cwd: REPO_ROOT,
+    env: process.env,
+    stdio: "inherit",
+    shell: isWindows,
+  });
+
+  const shutdown = (signal) => {
+    log("ctrl-c", c.yellow(`received ${signal}, stopping Expo…`));
+    try {
+      expo.kill(signal);
+    } catch {
+      /* noop */
+    }
+    setTimeout(() => process.exit(0), 1500).unref();
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  expo.on("exit", (code, signal) => {
+    log(
+      "expo",
+      c.dim(`exited (code=${code ?? "?"} signal=${signal ?? "?"})`),
+    );
+    process.exit(code ?? 0);
+  });
+}
+
+main().catch((err) => {
+  console.error(c.red(`✘ ${err && err.message ? err.message : err}`));
+  process.exit(1);
+});

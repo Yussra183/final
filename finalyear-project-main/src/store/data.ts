@@ -24,7 +24,7 @@ import {
 
 export const seedUsers: User[] = [
   {
-    id: "u-cust-1",
+    id: "1",
     fullName: "Asha Mwakanyemba",
     username: "asha",
     email: "asha@example.com",
@@ -33,7 +33,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-01-04T10:00:00Z",
   },
   {
-    id: "u-sell-1",
+    id: "2",
     fullName: "John Gas Seller",
     username: "gaspro",
     email: "seller@example.com",
@@ -46,7 +46,7 @@ export const seedUsers: User[] = [
   // share the same demo password ("1234") via the StoreContext's
   // `credentials` bootstrap.
   {
-    id: "u-sell-2",
+    id: "3",
     fullName: "Maria Mwendapole",
     username: "mariag",
     email: "maria@example.com",
@@ -55,7 +55,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-02-05T10:00:00Z",
   },
   {
-    id: "u-sell-3",
+    id: "4",
     fullName: "Hassan Juma",
     username: "hassanj",
     email: "hassan.j@example.com",
@@ -64,7 +64,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-02-12T10:00:00Z",
   },
   {
-    id: "u-sell-4",
+    id: "5",
     fullName: "Fatma Said",
     username: "fatmas",
     email: "fatma@example.com",
@@ -73,7 +73,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-02-20T10:00:00Z",
   },
   {
-    id: "u-sell-5",
+    id: "6",
     fullName: "Omar Bakari",
     username: "omar",
     email: "omar@example.com",
@@ -82,7 +82,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-03-02T10:00:00Z",
   },
   {
-    id: "u-sell-6",
+    id: "7",
     fullName: "Zainab Ali",
     username: "zainab",
     email: "zainab@example.com",
@@ -91,7 +91,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-03-09T10:00:00Z",
   },
   {
-    id: "u-sell-7",
+    id: "8",
     fullName: "Salim Khamis",
     username: "salim",
     email: "salim@example.com",
@@ -100,7 +100,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-03-15T10:00:00Z",
   },
   {
-    id: "u-sell-8",
+    id: "9",
     fullName: "Rehema Hassan",
     username: "rehema",
     email: "rehema@example.com",
@@ -109,7 +109,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-04-01T10:00:00Z",
   },
   {
-    id: "u-supp-1",
+    id: "10",
     fullName: "Msaidi Suppliers Ltd",
     username: "msaidi",
     email: "supplier@example.com",
@@ -118,7 +118,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-01-06T10:00:00Z",
   },
   {
-    id: "u-ride-1",
+    id: "11",
     fullName: "Hassan Rider",
     username: "hassan",
     email: "rider@example.com",
@@ -127,7 +127,7 @@ export const seedUsers: User[] = [
     createdAt: "2026-01-07T10:00:00Z",
   },
   {
-    id: "u-adm-1",
+    id: "12",
     fullName: "System Admin",
     username: "admin",
     email: "admin@example.com",
@@ -141,8 +141,8 @@ export const seedUsers: User[] = [
 
 export const seedProducts: GasProduct[] = [
   {
-    id: "p-1",
-    sellerId: "u-sell-1",
+    id: "1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
     name: "LPG Cylinder Refill",
     size: "6kg",
@@ -153,8 +153,8 @@ export const seedProducts: GasProduct[] = [
     category: "refill",
   },
   {
-    id: "p-2",
-    sellerId: "u-sell-1",
+    id: "2",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
     name: "LPG Cylinder Refill",
     size: "13kg",
@@ -165,8 +165,8 @@ export const seedProducts: GasProduct[] = [
     category: "refill",
   },
   {
-    id: "p-3",
-    sellerId: "u-sell-1",
+    id: "3",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
     name: "LPG Cylinder Refill",
     size: "22kg",
@@ -177,8 +177,8 @@ export const seedProducts: GasProduct[] = [
     category: "refill",
   },
   {
-    id: "p-4",
-    sellerId: "u-sell-1",
+    id: "4",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
     name: "New Cylinder (empty)",
     size: "13kg",
@@ -189,8 +189,8 @@ export const seedProducts: GasProduct[] = [
     category: "new_cylinder",
   },
   {
-    id: "p-5",
-    sellerId: "u-sell-1",
+    id: "5",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
     name: "Gas Regulator",
     size: "Standard",
@@ -207,15 +207,15 @@ export const seedProducts: GasProduct[] = [
 export const seedOrders: Order[] = [
   {
     id: "o-1001",
-    customerId: "u-cust-1",
+    customerId: "1",
     customerName: "Asha Mwakanyemba",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    riderId: "u-ride-1",
+    riderId: "11",
     riderName: "Hassan Rider",
     items: [
       {
-        productId: "p-2",
+        productId: "2",
         productName: "LPG Cylinder Refill",
         size: "13kg",
         quantity: 1,
@@ -233,13 +233,13 @@ export const seedOrders: Order[] = [
   },
   {
     id: "o-1002",
-    customerId: "u-cust-1",
+    customerId: "1",
     customerName: "Asha Mwakanyemba",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
     items: [
       {
-        productId: "p-1",
+        productId: "1",
         productName: "LPG Cylinder Refill",
         size: "6kg",
         quantity: 2,
@@ -256,13 +256,13 @@ export const seedOrders: Order[] = [
   },
   {
     id: "o-1003",
-    customerId: "u-cust-1",
+    customerId: "1",
     customerName: "Asha Mwakanyemba",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
     items: [
       {
-        productId: "p-3",
+        productId: "3",
         productName: "LPG Cylinder Refill",
         size: "22kg",
         quantity: 1,
@@ -285,9 +285,9 @@ export const seedRestockRequests: RestockRequest[] = [
   // --- Awaiting supplier action (pending) ---
   {
     id: "r-501",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "22kg",
@@ -297,9 +297,9 @@ export const seedRestockRequests: RestockRequest[] = [
   },
   {
     id: "r-502",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "13kg",
@@ -310,9 +310,9 @@ export const seedRestockRequests: RestockRequest[] = [
   // --- Ready to dispatch (approved) ---
   {
     id: "r-503",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "6kg",
@@ -323,9 +323,9 @@ export const seedRestockRequests: RestockRequest[] = [
   // --- On the road (in_transit) ---
   {
     id: "r-504",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "13kg",
@@ -335,9 +335,9 @@ export const seedRestockRequests: RestockRequest[] = [
   },
   {
     id: "r-505",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "22kg",
@@ -348,9 +348,9 @@ export const seedRestockRequests: RestockRequest[] = [
   // --- Delivered history ---
   {
     id: "r-506",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "13kg",
@@ -360,9 +360,9 @@ export const seedRestockRequests: RestockRequest[] = [
   },
   {
     id: "r-507",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "6kg",
@@ -373,9 +373,9 @@ export const seedRestockRequests: RestockRequest[] = [
   // --- Rejected (so the History view shows a danger-tone pill) ---
   {
     id: "r-508",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "GasPro Supplies",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     supplierName: "Msaidi Suppliers Ltd",
     productName: "LPG Cylinder Refill",
     size: "22kg",
@@ -390,7 +390,7 @@ export const seedRestockRequests: RestockRequest[] = [
 export const seedPermits: PermitApplication[] = [
   {
     id: "pm-1",
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "John Gas Seller",
     businessName: "GasPro Supplies",
     businessAddress: "Kariakoo Market, Block D, Dar es Salaam",
@@ -407,7 +407,7 @@ export const seedPermits: PermitApplication[] = [
 export const seedNotifications: NotificationItem[] = [
   {
     id: "n-1",
-    userId: "u-cust-1",
+    userId: "1",
     title: "Order in transit",
     message: "Your order #1001 is on the way.",
     type: "delivery",
@@ -416,7 +416,7 @@ export const seedNotifications: NotificationItem[] = [
   },
   {
     id: "n-2",
-    userId: "u-cust-1",
+    userId: "1",
     title: "Order confirmed",
     message: "Your order #1003 has been confirmed by GasPro Supplies.",
     type: "order",
@@ -425,7 +425,7 @@ export const seedNotifications: NotificationItem[] = [
   },
   {
     id: "n-3",
-    userId: "u-sell-1",
+    userId: "2",
     title: "Low stock alert",
     message: "22kg LPG Cylinder Refill is low (15 units left).",
     type: "stock",
@@ -434,7 +434,7 @@ export const seedNotifications: NotificationItem[] = [
   },
   {
     id: "n-4",
-    userId: "u-sell-1",
+    userId: "2",
     title: "Permit under review",
     message: "Your business permit application is being reviewed by admin.",
     type: "permit",
@@ -445,7 +445,7 @@ export const seedNotifications: NotificationItem[] = [
   // the Notifications screen has a feed on first launch.
   {
     id: "sn-1",
-    userId: "u-supp-1",
+    userId: "10",
     title: "Trip started",
     message: "Tunguu route started at 05:12.",
     type: "trip_started",
@@ -454,7 +454,7 @@ export const seedNotifications: NotificationItem[] = [
   },
   {
     id: "sn-2",
-    userId: "u-supp-1",
+    userId: "10",
     title: "Seller alerted — Sinza B",
     message: "Hassan Juma was notified that supply is on the way.",
     type: "delivery",
@@ -463,7 +463,7 @@ export const seedNotifications: NotificationItem[] = [
   },
   {
     id: "sn-3",
-    userId: "u-supp-1",
+    userId: "10",
     title: "Near your shop",
     message: "You are within 500 m of Sinza B.",
     type: "near_arrival",
@@ -477,7 +477,7 @@ export const seedNotifications: NotificationItem[] = [
 export const seedComplaints: Complaint[] = [
   {
     id: "c-1",
-    userId: "u-cust-1",
+    userId: "1",
     userName: "Asha Mwakanyemba",
     subject: "Late delivery",
     message: "Order #1001 took longer than the estimated window.",
@@ -490,7 +490,7 @@ export const seedComplaints: Complaint[] = [
 
 export const seedSellers: SellerProfile[] = [
   {
-    sellerId: "u-sell-1",
+    sellerId: "2",
     sellerName: "John Gas Seller",
     businessName: "GasPro Supplies",
     location: "Kariakoo Market, Block D, Dar es Salaam",
@@ -501,7 +501,7 @@ export const seedSellers: SellerProfile[] = [
     openNow: true,
   },
   {
-    sellerId: "u-sell-2",
+    sellerId: "3",
     sellerName: "Maria Mwendapole",
     businessName: "Quick Gas Mikocheni",
     location: "Mikocheni B, Near Shoppers Plaza, Dar es Salaam",
@@ -512,7 +512,7 @@ export const seedSellers: SellerProfile[] = [
     openNow: true,
   },
   {
-    sellerId: "u-sell-3",
+    sellerId: "4",
     sellerName: "Hassan Juma",
     businessName: "Sinza Gas Point",
     location: "Sinza B, Dar es Salaam",
@@ -523,7 +523,7 @@ export const seedSellers: SellerProfile[] = [
     openNow: false,
   },
   {
-    sellerId: "u-sell-4",
+    sellerId: "5",
     sellerName: "Fatma Said",
     businessName: "Mbezi LPG Center",
     location: "Mbezi Beach, Bagamoyo Road, Dar es Salaam",
@@ -614,7 +614,7 @@ export const seedRoutes: DeliveryRoute[] = [
     ),
     stops: [
       {
-        sellerId: "u-sell-3",
+        sellerId: "4",
         sellerName: "Hassan Juma",
         sequence: 1,
         address: "Sinza B, Zanzibar",
@@ -623,7 +623,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-4",
+        sellerId: "5",
         sellerName: "Fatma Said",
         sequence: 2,
         address: "Mbezi Beach, Zanzibar",
@@ -632,7 +632,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-5",
+        sellerId: "6",
         sellerName: "Omar Bakari",
         sequence: 3,
         address: "Tunguu Central, Zanzibar",
@@ -654,7 +654,7 @@ export const seedRoutes: DeliveryRoute[] = [
     ),
     stops: [
       {
-        sellerId: "u-sell-1",
+        sellerId: "2",
         sellerName: "John Gas Seller",
         sequence: 1,
         address: "Kariakoo, Bububu West",
@@ -663,7 +663,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-2",
+        sellerId: "3",
         sellerName: "Maria Mwendapole",
         sequence: 2,
         address: "Mikocheni, Bububu",
@@ -672,7 +672,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-6",
+        sellerId: "7",
         sellerName: "Zainab Ali",
         sequence: 3,
         address: "Bububu Center",
@@ -694,7 +694,7 @@ export const seedRoutes: DeliveryRoute[] = [
     ),
     stops: [
       {
-        sellerId: "u-sell-7",
+        sellerId: "8",
         sellerName: "Salim Khamis",
         sequence: 1,
         address: "Fuoni Kibanda",
@@ -703,7 +703,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-8",
+        sellerId: "9",
         sellerName: "Rehema Hassan",
         sequence: 2,
         address: "Fuoni Bondeni",
@@ -712,7 +712,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-4",
+        sellerId: "5",
         sellerName: "Fatma Said",
         sequence: 3,
         address: "Fuoni Matarum",
@@ -734,7 +734,7 @@ export const seedRoutes: DeliveryRoute[] = [
     ),
     stops: [
       {
-        sellerId: "u-sell-5",
+        sellerId: "6",
         sellerName: "Omar Bakari",
         sequence: 1,
         address: "Chwaka Central",
@@ -743,7 +743,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-6",
+        sellerId: "7",
         sellerName: "Zainab Ali",
         sequence: 2,
         address: "Uroa Junction",
@@ -752,7 +752,7 @@ export const seedRoutes: DeliveryRoute[] = [
         status: "scheduled",
       },
       {
-        sellerId: "u-sell-3",
+        sellerId: "4",
         sellerName: "Hassan Juma",
         sequence: 3,
         address: "Marumbi Village",
@@ -789,7 +789,7 @@ export const seedVehicles: Vehicle[] = [
 /** Two riders the supplier can dispatch on any given trip. */
 export const seedRiders: Rider[] = [
   {
-    id: "u-ride-1",
+    id: "11",
     fullName: "Hassan Rider",
     phone: "+255700000004",
     licenseNo: "TZ-DL-9981",
@@ -815,12 +815,12 @@ export const seedRiders: Rider[] = [
 export const seedTrips: DeliveryTrip[] = [
   {
     id: "trip-1",
-    supplierId: "u-supp-1",
+    supplierId: "10",
     routeId: "r-tunguu",
     routeName: "Tunguu",
     vehicleId: "v-1",
     vehiclePlate: "T 123 ABC",
-    riderId: "u-ride-1",
+    riderId: "11",
     riderName: "Hassan Rider",
     date: "2026-07-07",
     departureTime: "05:12",
@@ -830,7 +830,7 @@ export const seedTrips: DeliveryTrip[] = [
     positions: [],
     stops: [
       {
-        sellerId: "u-sell-3",
+        sellerId: "4",
         sellerName: "Hassan Juma",
         sequence: 1,
         address: "Sinza B, Zanzibar",
@@ -839,7 +839,7 @@ export const seedTrips: DeliveryTrip[] = [
         status: "started",
       },
       {
-        sellerId: "u-sell-4",
+        sellerId: "5",
         sellerName: "Fatma Said",
         sequence: 2,
         address: "Mbezi Beach, Zanzibar",
@@ -848,7 +848,7 @@ export const seedTrips: DeliveryTrip[] = [
         status: "on_the_way",
       },
       {
-        sellerId: "u-sell-5",
+        sellerId: "6",
         sellerName: "Omar Bakari",
         sequence: 3,
         address: "Tunguu Central, Zanzibar",

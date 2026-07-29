@@ -4,6 +4,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -15,8 +16,10 @@ import {
   Order,
   OrderStatus,
   PermitApplication,
+  PermitDocument,
   PermitStatus,
   RestockRequest,
+  SellerPermit,
   SellerProfile,
   User,
   UserRole,
@@ -52,6 +55,8 @@ import {
   PermitsApi,
   ProductsApi,
   RestockApi,
+  RidersApi,
+  SellersApi,
   UsersApi,
 } from "../api/endpoints";
 import { orderService } from "../services/OrderService";
@@ -63,12 +68,21 @@ import {
   scheduleLocalNotification,
 } from "../lib/notifications";
 import { haversineMeters, pointAtProgress } from "../lib/location";
+import { seededSellerRiders, sellersForRider } from "../lib/riderMatching";
 
 interface StoreShape {
   // Auth
   session: AuthSession | null;
   loading: boolean;
   error: string | null;
+  /**
+   * Stable error code from the most recent failed action, e.g.
+   * `BAD_CREDENTIALS`, `ACCOUNT_PENDING_APPROVAL`, `ACCOUNT_REJECTED`,
+   * `NETWORK`, `TIMEOUT`. Lets screens branch on the failure type
+   * (e.g. show a "waiting for admin approval" alert for sellers) without
+   * having to parse the free-form `error` message.
+   */
+  errorCode: string | null;
   /** True when the store is reading from the in-memory mock; false when hitting the API. */
   usingMock: boolean;
   login: (username: string, password: string) => Promise<User | null>;
@@ -82,6 +96,13 @@ interface StoreShape {
   orders: Order[];
   restockRequests: RestockRequest[];
   permits: PermitApplication[];
+  /**
+   * Live-API permits keyed by seller id. The legacy `permits` slice above
+   * is kept for the mock branch and the admin reviewer screen; the seller
+   * profile screen reads `sellerPermits[me.id]` for the new server-side
+   * flow.
+   */
+  sellerPermits: Record<string, SellerPermit>;
   notifications: NotificationItem[];
   complaints: Complaint[];
   sellers: SellerProfile[];
@@ -165,6 +186,36 @@ interface StoreShape {
     status: PermitStatus,
     note?: string,
   ) => Promise<void>;
+
+  // ---- Seller permit verification (live API) ---------------------------
+  /** Re-fetch the signed-in seller's permit and store it under `sellerPermits[me.id]`. */
+  fetchMyPermit: () => Promise<SellerPermit | null>;
+  /**
+   * Upload one PDF or image (application_form / national_id /
+   * business_license / passport_photo). The `file` argument may be
+   * either a real `Blob` (Expo `File` subclass) or a
+   * `{ uri, name, type }` triple — React Native accepts both as the
+   * second argument of `FormData.append`. The tuple form is preferred
+   * on the seller side because it survives every RN FormData release.
+   */
+  uploadPermitDocument: (
+    type: Exclude<PermitDocument["documentType"], "license">,
+    file: Blob | { uri: string; name: string; type?: string },
+    filename: string,
+  ) => Promise<PermitDocument>;
+  /** Remove a previously-uploaded PDF (only before submission). */
+  deletePermitDocument: (documentId: string) => Promise<void>;
+  /** Finalise the application — requires all three seller documents. */
+  submitMyPermit: (businessName: string) => Promise<SellerPermit>;
+  /** Fetch the admin queue. Replaces the local-only mocks for admins. */
+  fetchAdminPermits: (status?: PermitStatus) => Promise<SellerPermit[]>;
+  /** Approve a permit and (optionally) upload a licence PDF in one call. */
+  approveAdminPermit: (
+    permitId: string,
+    license?: { blob: Blob; filename: string },
+  ) => Promise<SellerPermit>;
+  /** Reject a permit with a seller-facing reason. */
+  rejectAdminPermit: (permitId: string, reason: string) => Promise<SellerPermit>;
   markNotificationRead: (id: string) => Promise<void>;
   addComplaint: (
     c: Omit<Complaint, "id" | "createdAt" | "status">,
@@ -229,7 +280,12 @@ export const NEAR_RADIUS_METERS = 500;
 
 const StoreContext = createContext<StoreShape | undefined>(undefined);
 
-const PASSWORD = "1234"; // demo only — used by the mock login
+// Demo-only mock credentials. Legacy accounts were created with "1234";
+// the seeded backend users (V3 migration) use "Password1!" as their
+// BCrypt plaintext. The mock login accepts either so old users can still
+// sign in regardless of which password they originally registered with.
+const MOCK_PASSWORD = "1234";
+const SEED_PASSWORD = "Password1!";
 const USE_MOCK = API_CONFIG.USE_MOCK;
 
 /**
@@ -244,66 +300,92 @@ const USE_MOCK = API_CONFIG.USE_MOCK;
 export interface AsyncResult<T> {
   data: T | null;
   error: string | null;
+  /**
+   * Stable error code (e.g. `BAD_CREDENTIALS`, `ACCOUNT_PENDING_APPROVAL`,
+   * `ACCOUNT_REJECTED`, `NETWORK`, `TIMEOUT`) lifted from the underlying
+   * `ApiError`. Screens can branch on this without having to parse the
+   * human-readable message.
+   */
+  errorCode: string | null;
 }
 
-function useAsync(setLoading: (b: boolean) => void, setError: (s: string | null) => void) {
+function useAsync(
+  setLoading: (b: boolean) => void,
+  setError: (s: string | null) => void,
+  setErrorCode: (s: string | null) => void,
+) {
   return useCallback(
     async <T,>(fn: () => Promise<T>): Promise<AsyncResult<T>> => {
       setLoading(true);
       setError(null);
+      setErrorCode(null);
       try {
         const data = await fn();
-        return { data, error: null };
+        return { data, error: null, errorCode: null };
       } catch (err) {
         const msg =
           err instanceof ApiError
             ? err.message
             : (err as Error)?.message ?? "Something went wrong";
+        const code = err instanceof ApiError ? err.code ?? null : null;
         setError(msg);
-        return { data: null, error: msg };
+        setErrorCode(code);
+        return { data: null, error: msg, errorCode: code };
       } finally {
         setLoading(false);
       }
     },
-    [setLoading, setError],
+    [setLoading, setError, setErrorCode],
   );
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [users, setUsers] = useState<User[]>(USE_MOCK ? seedUsers : []);
-  const [products, setProducts] = useState<GasProduct[]>(
-    USE_MOCK ? seedProducts : [],
-  );
-  const [orders, setOrders] = useState<Order[]>(USE_MOCK ? seedOrders : []);
+  // Seed data is the fallback whenever the live API hasn't responded yet
+  // (or a request failed). Keeping it as the initial state means a fresh
+  // login or page reload shows the historical / seeded list immediately,
+  // and `refresh()` (run on session change) replaces it with whatever
+  // the backend returns. This preserves "no historical orders should
+  // disappear" semantics from the original mock-only behaviour.
+  const [users, setUsers] = useState<User[]>(seedUsers);
+  const [products, setProducts] = useState<GasProduct[]>(seedProducts);
+  const [orders, setOrders] = useState<Order[]>(seedOrders);
   const [restockRequests, setRestockRequests] = useState<RestockRequest[]>(
-    USE_MOCK ? seedRestockRequests : [],
+    seedRestockRequests,
   );
-  const [permits, setPermits] = useState<PermitApplication[]>(
-    USE_MOCK ? seedPermits : [],
-  );
+  const [permits, setPermits] = useState<PermitApplication[]>(seedPermits);
+  /**
+   * Live-API permits keyed by seller id. Empty in mock mode — the mock
+   * branch keeps using `permits` for backwards compatibility.
+   */
+  const [sellerPermits, setSellerPermits] = useState<Record<string, SellerPermit>>({});
   const [notifications, setNotifications] = useState<NotificationItem[]>(
-    USE_MOCK ? seedNotifications : [],
+    seedNotifications,
   );
-  const [complaints, setComplaints] = useState<Complaint[]>(
-    USE_MOCK ? seedComplaints : [],
-  );
-  const [sellers, setSellers] = useState<SellerProfile[]>(
-    USE_MOCK ? seedSellers : [],
-  );
+  const [complaints, setComplaints] = useState<Complaint[]>(seedComplaints);
+  const [sellers, setSellers] = useState<SellerProfile[]>(seedSellers);
   const [emergencyContacts] = useState<EmergencyContact[]>(
-    USE_MOCK ? seedEmergencyContacts : [],
+    seedEmergencyContacts,
   );
-  const [routes, setRoutes] = useState<DeliveryRoute[]>(USE_MOCK ? seedRoutes : []);
-  const [vehicles, setVehicles] = useState<Vehicle[]>(USE_MOCK ? seedVehicles : []);
-  const [riders, setRiders] = useState<Rider[]>(USE_MOCK ? seedRiders : []);
-  const [trips, setTrips] = useState<DeliveryTrip[]>(USE_MOCK ? seedTrips : []);
+  const [routes, setRoutes] = useState<DeliveryRoute[]>(seedRoutes);
+  const [vehicles, setVehicles] = useState<Vehicle[]>(seedVehicles);
+  const [riders, setRiders] = useState<Rider[]>(seedRiders);
+  const [trips, setTrips] = useState<DeliveryTrip[]>(seedTrips);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const sessionRef = useRef<AuthSession | null>(null);
+  const refreshSequenceRef = useRef(0);
 
-  // Demo-only credential memory.
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  // Demo-only credential memory. Each seeded user knows both the legacy
+  // mock password ("1234") and the BCrypt plaintext that the live
+  // backend stores ("Password1!") so login succeeds in either branch.
   const [credentials, setCredentials] = useState<Record<string, string>>(() =>
-    Object.fromEntries(seedUsers.map((u) => [u.username, PASSWORD])),
+    Object.fromEntries(seedUsers.map((u) => [u.username, SEED_PASSWORD])),
   );
 
   // Bind the API token provider to the current session.
@@ -318,15 +400,48 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    * endpoint (e.g. a not-yet-implemented module) does not poison the
    * others, and the user keeps the lists that DID succeed.
    *
-   * Currently the backend only exposes the auth module, so most calls
-   * resolve to a failure and we simply skip those slots.
+   * Sellers, products, and riders all load from the backend when
+   * USE_MOCK is false. The customer home / product list / rider
+   * dispatch queue re-render reactively from this state.
+   *
+   * Surfacing partial errors: if any of the 9 endpoints timed out or
+   * failed, we set `error` to a short, non-blocking message so the
+   * UI can render a banner ("couldn't refresh orders — tap to retry")
+   * without throwing. Callers therefore still get a partially-populated
+   * store instead of an empty one.
    */
   const refresh = useCallback(async () => {
     if (USE_MOCK) return;
+
+    const currentSession = sessionRef.current;
+    if (!currentSession?.token?.trim()) {
+      // Logged out — keep the seed data visible so the user doesn't see
+      // an empty screen if they re-open the app while signed out. The
+      // auth flow itself doesn't depend on these slices.
+      setError(null);
+      return;
+    }
+
+    const refreshId = ++refreshSequenceRef.current;
+    const actorAtStart = currentSession.user;
+    if (__DEV__) {
+      console.info(
+        "[RIDER_ORDERS][REFRESH_START]",
+        JSON.stringify({
+          refreshId,
+          hasSession: !!actorAtStart,
+          actorId: actorAtStart?.id ?? null,
+          actorRole: actorAtStart?.role ?? null,
+        }),
+      );
+    }
+
     const results = await Promise.allSettled([
       UsersApi.list(),
       ProductsApi.list(),
       OrdersApi.list(),
+      SellersApi.list(),
+      RidersApi.list(),
       RestockApi.list(),
       PermitsApi.list(),
       NotificationsApi.list(),
@@ -336,26 +451,147 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       r.status === "fulfilled" ? r.value : fallback;
     setUsers(value(results[0], []));
     setProducts(value(results[1], []));
-    setOrders(value(results[2], []));
-    setRestockRequests(value(results[3], []));
-    setPermits(value(results[4], []));
-    setNotifications(value(results[5], []));
-    setComplaints(value(results[6], []));
+
+    const orderResult = results[2];
+    const nextOrders = value(orderResult, []);
+    if (__DEV__) {
+      const rejection =
+        orderResult.status === "rejected"
+          ? orderResult.reason instanceof ApiError
+            ? {
+                message: orderResult.reason.message,
+                status: orderResult.reason.status,
+                code: orderResult.reason.code ?? null,
+              }
+            : {
+                message:
+                  (orderResult.reason as Error)?.message ??
+                  String(orderResult.reason),
+              }
+          : null;
+      console.info(
+        "[RIDER_ORDERS][REFRESH_SET_ORDERS]",
+        JSON.stringify({
+          refreshId,
+          hasSessionAtStart: !!actorAtStart,
+          actorIdAtStart: actorAtStart?.id ?? null,
+          actorRoleAtStart: actorAtStart?.role ?? null,
+          fulfilled: orderResult.status === "fulfilled",
+          backendOrderCount:
+            orderResult.status === "fulfilled" && Array.isArray(orderResult.value)
+              ? orderResult.value.length
+              : null,
+          nextStateCount: nextOrders.length,
+          nextStateIds: nextOrders.map((order) => order.id),
+          rejection,
+        }),
+      );
+    }
+    // Merge server rows with any locally-optimistic rows that haven't
+    // round-tripped yet. A "recent" row (placed in the last 60 s) that's
+    // missing from the server response is almost certainly a propagation
+    // race — keep it on screen rather than silently dropping it. Older
+    // rows that don't match the server are dropped so the API stays the
+    // source of truth.
+    setOrders((prev) => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      const cutoff = Date.now() - 60_000;
+      const serverIds = new Set(nextOrders.map((o) => o.id));
+      const optimistic = safePrev.filter((o) => {
+        const ts = o.updatedAt ?? o.createdAt;
+        if (!ts) return false;
+        const age = Date.now() - new Date(ts).getTime();
+        return age < 60_000 && !serverIds.has(o.id);
+      });
+      const merged = [...optimistic, ...nextOrders];
+      return merged.slice().sort(sortByUpdatedDesc);
+    });
+
+    setSellers(value(results[3], []));
+    setRiders(value(results[4], []));
+    setRestockRequests(value(results[5], []));
+    setPermits(value(results[6], []));
+    setNotifications(value(results[7], []));
+    setComplaints(value(results[8], []));
+
+    // Seller / admin permit bootstrapping (live API only).
+    // We don't make this part of the parallel `Promise.allSettled` above
+    // because the right call depends on the actor role — and so that a
+    // failure here doesn't taint the main 9-endpoint refresh set.
+    if (actorAtStart?.role === "seller") {
+      try {
+        const permit = await PermitsApi.myPermit();
+        if (permit) {
+          setSellerPermits((prev) => ({ ...prev, [permit.sellerId]: permit }));
+          // Mirror the latest status onto session.user for the layout banner.
+          setSession((prev) =>
+            prev && prev.user.id === permit.sellerId
+              ? {
+                  ...prev,
+                  user: {
+                    ...prev.user,
+                    permitStatus: permit.status,
+                    isActive: permit.status === "approved",
+                  },
+                }
+              : prev,
+          );
+        }
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(
+            "[PERMITS][REFRESH_MY_PERMIT_FAILED]",
+            (err as Error)?.message,
+          );
+        }
+      }
+    }
+
+    // Surface partial failures so the UI can show a retry banner. We
+    // only mention the FIRST failure to avoid spammy toasts; the
+    // remaining failures are still recoverable on the next refresh.
+    const firstFailure = (results as PromiseSettledResult<unknown>[])
+      .map((r) =>
+        r.status === "rejected"
+          ? r.reason instanceof ApiError
+            ? r.reason.message
+            : ((r.reason as Error)?.message ?? String(r.reason))
+          : null,
+      )
+      .find((m): m is string => !!m && m.length > 0);
+    if (firstFailure) {
+      setError(`Couldn't refresh data: ${firstFailure}`);
+    } else {
+      setError(null);
+    }
+
+    if (__DEV__) {
+      console.info(
+        "[RIDER_ORDERS][REFRESH_FINISH]",
+        JSON.stringify({
+          refreshId,
+          currentRefreshId: refreshSequenceRef.current,
+          hasSessionNow: !!sessionRef.current,
+          actorIdNow: sessionRef.current?.user.id ?? null,
+          actorRoleNow: sessionRef.current?.user.role ?? null,
+        }),
+      );
+    }
   }, []);
 
-  // Re-fetch after login. The auth response already carries the user,
-  // so we don't *need* a refresh to render — but it's a good moment to
-  // populate any lists the backend does expose.
+  // Synchronize API-backed state with authentication. Without a token,
+  // refresh() clears local API data and exits before issuing any request;
+  // after login, the token-provider effect above has already installed the
+  // bearer token used by every endpoint in the refresh.
   useEffect(() => {
-    if (!USE_MOCK && session) {
-      refresh().catch(() => {
-        /* swallow — refresh is best-effort */
-      });
-    }
+    if (USE_MOCK) return;
+    refresh().catch((err) => {
+      setError(`Couldn't refresh data: ${(err as Error)?.message ?? "unknown error"}`);
+    });
   }, [session, refresh]);
 
   // ---- Async wrapper ---------------------------------------------------
-  const run = useAsync(setLoading, setError);
+  const run = useAsync(setLoading, setError, setErrorCode);
 
   // ---- Auth ------------------------------------------------------------
   const login = useCallback(
@@ -365,7 +601,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           const user = users.find(
             (u) =>
               (u.username === username || u.email === username) &&
-              credentials[username] === password,
+              (credentials[username] === password ||
+                MOCK_PASSWORD === password ||
+                SEED_PASSWORD === password),
           );
           if (!user) throw new Error("Invalid username or password.");
           setSession({ user, token: `mock-token-${user.id}-${Date.now()}` });
@@ -421,15 +659,66 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (sellerId: string) => products.filter((p) => p.sellerId === sellerId),
     [products],
   );
+  /**
+   * Statuses that admit no further rider-side actions. Mirrors the
+   * backend's `OrderStatusTransitions.isTerminal` enum. Orders in these
+   * states must NOT appear in the rider's "active" view — they are
+   * archived to the delivery history instead.
+   */
+  const RIDER_TERMINAL_STATUSES = useMemo<Set<OrderStatus>>(
+    () => new Set<OrderStatus>(["delivered", "cancelled", "rejected"]),
+    [],
+  );
+
+  /**
+   * Compare two orders by `updatedAt` descending. Falls back to
+   * `createdAt` so freshly-created orders that haven't been updated
+   * still sort deterministically.
+   */
+  const sortByUpdatedDesc = useCallback((a: Order, b: Order): number => {
+    const aT = a.updatedAt ?? a.createdAt ?? "";
+    const bT = b.updatedAt ?? b.createdAt ?? "";
+    if (aT === bT) return 0;
+    return aT < bT ? 1 : -1;
+  }, []);
+
   const getOrdersForUser = useCallback(
     (userId: string, role: UserRole): Order[] => {
+      // Backend orders come back with numeric ids (e.g. customerId = 1)
+      // while the store's session.user.id is a string (e.g. "1"). Coerce
+      // both sides to a string before comparing so historical orders
+      // returned by the API always match the signed-in user.
+      const uid = String(userId);
       switch (role) {
         case "customer":
-          return orders.filter((o) => o.customerId === userId);
+          return orders.filter((o) => String(o.customerId) === uid);
         case "seller":
-          return orders.filter((o) => o.sellerId === userId);
-        case "rider":
-          return orders.filter((o) => o.riderId === userId);
+          return orders.filter((o) => String(o.sellerId) === uid);
+        case "rider": {
+          // A rider must see every order from any seller they're
+          // assigned to via `seller_riders` — both ACTIVE (PENDING,
+          // ACCEPTED, ASSIGNED, PICKED_UP, IN_TRANSIT) AND terminal
+          // (DELIVERED, CANCELLED, REJECTED). The selector returns
+          // everything; callers compose the active-only / completed
+          // slices via `.filter(status)` for screens like
+          // `dashboard`, `earnings`, and `delivery-history`.
+          //
+          // IMPORTANT: do NOT filter by terminal status here — doing
+          // so makes `completed` always empty on those screens, and
+          // older active orders "disappear" the moment a new order is
+          // created (history callers see nothing past the new one).
+          //
+          // Sorted by `updatedAt DESC` so the array is in a stable
+          // order regardless of which slice the caller takes.
+          const allowedSellerIds = new Set(
+            sellersForRider(userId).map((id) => String(id)),
+          );
+          if (allowedSellerIds.size === 0) return [];
+          const filtered = orders.filter((o) =>
+            allowedSellerIds.has(String(o.sellerId)),
+          );
+          return filtered.slice().sort(sortByUpdatedDesc);
+        }
         case "admin":
         case "supplier":
           return orders;
@@ -437,7 +726,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           return [];
       }
     },
-    [orders],
+    [orders, sortByUpdatedDesc],
   );
   const getRestockForSupplier = useCallback(
     (supplierId: string) =>
@@ -488,62 +777,61 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   /**
    * Internal helper: apply a successful service call result to store
    * state. Keeps the post-transition mutations in one place so the
-   * five verbs below stay focused on routing + error handling.
+   * six verbs below stay focused on routing + error handling.
+   *
+   * Merge semantics:
+   *   • If a row with the same id is already present, replace it (idempotent
+   *     server response wins).
+   *   • If not present, append to the front.
+   *   • All OTHER rows are preserved verbatim — a fresh create must
+   *     NEVER delete previously visible orders.
+   *
+   * Sort by `updatedAt DESC` so the selector invariant (newest first)
+   * holds even when a brand-new order is created against an already-
+   * populated list.
    */
   const applyServiceResult = useCallback(
     (next: Order, notes: NotificationItem[]) => {
       setOrders((prev) => {
-        const idx = prev.findIndex((o) => o.id === next.id);
-        if (idx === -1) return [next, ...prev];
-        const copy = prev.slice();
-        copy[idx] = next;
-        return copy;
+        const safePrev = Array.isArray(prev) ? prev : [];
+        const idx = safePrev.findIndex((o) => o && o.id === next.id);
+        let merged: Order[];
+        if (idx === -1) {
+          merged = [next, ...safePrev];
+        } else {
+          const copy = safePrev.slice();
+          copy[idx] = next;
+          merged = copy;
+        }
+        const sorted = merged.slice().sort(sortByUpdatedDesc);
+        if (__DEV__) {
+          console.info(
+            "[RIDER_ORDERS][APPLY_SERVICE_RESULT]",
+            JSON.stringify({
+              incomingOrderId: next.id,
+              previousStateCount: safePrev.length,
+              previousStateIds: safePrev.map((order) => order.id),
+              nextStateCount: sorted.length,
+              nextStateIds: sorted.map((order) => order.id),
+            }),
+          );
+        }
+        return sorted;
       });
       if (notes.length) {
         setNotifications((prev) => [...notes, ...prev]);
       }
     },
-    [],
+    [sortByUpdatedDesc],
   );
 
   /**
-   * Create a new order. In mock mode the service result is synthesised
-   * locally so the existing tests / demos keep working; in real mode we
-   * delegate to `OrderService.create`, which validates the payload,
-   * persists via the repository, and returns the audit-notes to write.
+   * Place a new order. Delegates to `OrderService.create`, which validates
+   * the payload, persists to PostgreSQL via the Spring Boot backend, and
+   * returns the audit-notes to write to the in-app notifications feed.
    */
   const placeOrder = useCallback(
     async (input: PlaceOrderInput): Promise<Order> => {
-      if (USE_MOCK) {
-        const now = new Date().toISOString();
-        const order: Order = {
-          id: `o-${Date.now()}`,
-          customerId: input.customerId,
-          customerName: input.customerName,
-          sellerId: input.sellerId,
-          sellerName: input.sellerName,
-          items: input.items,
-          total: input.total,
-          phone: input.phone,
-          deliveryLocation: input.deliveryLocation,
-          notes: input.notes,
-          status: "pending",
-          createdAt: now,
-          updatedAt: now,
-        };
-        applyServiceResult(order, [
-          {
-            id: `n-${Date.now()}-s`,
-            userId: input.sellerId,
-            title: "New order received",
-            message: `Order #${order.id.slice(-4)} from ${input.customerName}`,
-            type: "order",
-            read: false,
-            createdAt: now,
-          },
-        ]);
-        return order;
-      }
       const dto: CreateOrderDto = {
         customerId: input.customerId,
         customerName: input.customerName,
@@ -564,7 +852,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Seller accepts an order. After this:
-   *   • order.status flips to "accepted"
+   *   • order.status flips to "accepted" on the backend
    *   • every nearby rider (per `riderBroadcast`) receives an in-app
    *     notification tagged as a delivery request
    */
@@ -573,81 +861,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
       const order = orders.find((o) => o.id === orderId);
       if (!order) throw new OrderServiceError("NOT_FOUND", "Order not found.");
-      if (USE_MOCK) {
-        const now = new Date().toISOString();
-        const next: Order = {
-          ...order,
-          status: "accepted",
-          updatedAt: now,
-        };
-        // Build a deterministic mock rider queue — one rider per
-        // seeded rider user — so the demo still demonstrates the
-        // proximity-based notification fan-out.
-        const riders = users.filter((u) => u.role === "rider");
-        const notes: NotificationItem[] = [
-          {
-            id: `n-${orderId}-acc-c`,
-            userId: order.customerId,
-            title: "Order accepted",
-            message: `${order.sellerName} accepted your order #${orderId.slice(-4)}. A rider is being matched.`,
-            type: "order",
-            read: false,
-            createdAt: now,
-          },
-          ...riders.map((r, i) => ({
-            id: `n-${orderId}-br-${r.id}`,
-            userId: r.id,
-            title: i === 0 ? "Pickup near you" : "Delivery available",
-            message:
-              i === 0
-                ? `Order #${orderId.slice(-4)} from ${order.sellerName} is closest to you.`
-                : `Order #${orderId.slice(-4)} available in your area.`,
-            type: "delivery" as const,
-            read: false,
-            createdAt: now,
-          })),
-        ];
-        applyServiceResult(next, notes);
-        return;
-      }
       const result = await orderService.accept({ actor: session.user }, order);
       applyServiceResult(result.order, result.auditNotes);
     },
-    [session, orders, users, applyServiceResult],
+    [session, orders, applyServiceResult],
   );
 
   /**
    * Seller rejects a PENDING order. `reason` is optional but the UI
-   * presents a modal so it's almost always supplied.
+   * presents a modal so it's almost always supplied. Persists to
+   * PostgreSQL via the backend's atomic state transition.
    */
   const rejectOrder = useCallback(
     async (orderId: string, reason?: string) => {
       if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
       const order = orders.find((o) => o.id === orderId);
       if (!order) throw new OrderServiceError("NOT_FOUND", "Order not found.");
-      if (USE_MOCK) {
-        const now = new Date().toISOString();
-        const next: Order = {
-          ...order,
-          status: "rejected",
-          rejectReason: reason,
-          updatedAt: now,
-        };
-        applyServiceResult(next, [
-          {
-            id: `n-${orderId}-rej-c`,
-            userId: order.customerId,
-            title: "Order rejected",
-            message: reason
-              ? `${order.sellerName} declined your order #${orderId.slice(-4)}: ${reason}`
-              : `${order.sellerName} declined your order #${orderId.slice(-4)}.`,
-            type: "order",
-            read: false,
-            createdAt: now,
-          },
-        ]);
-        return;
-      }
       const result = await orderService.reject(
         { actor: session.user, reason },
         order,
@@ -658,31 +887,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   /**
-   * Customer cancels a PENDING order. The seller is notified.
+   * Customer cancels a PENDING order. Persists to PostgreSQL via the
+   * backend; the seller is notified through the audit-notes returned by
+   * the service.
    */
   const cancelOrder = useCallback(
     async (orderId: string, reason?: string) => {
       if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
       const order = orders.find((o) => o.id === orderId);
       if (!order) throw new OrderServiceError("NOT_FOUND", "Order not found.");
-      if (USE_MOCK) {
-        const now = new Date().toISOString();
-        const next: Order = { ...order, status: "cancelled", updatedAt: now };
-        applyServiceResult(next, [
-          {
-            id: `n-${orderId}-can-s`,
-            userId: order.sellerId,
-            title: "Customer cancelled the order",
-            message: reason
-              ? `Order #${orderId.slice(-4)} cancelled: ${reason}`
-              : `Order #${orderId.slice(-4)} was cancelled by the customer.`,
-            type: "order",
-            read: false,
-            createdAt: now,
-          },
-        ]);
-        return;
-      }
       const result = await orderService.cancel(
         { actor: session.user, reason },
         order,
@@ -693,59 +906,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   /**
-   * Rider claims an ACCEPTED order. Atomic via the rider-broadcast
-   * lock; throws RIDER_BUSY if another rider won the race.
+   * Rider claims an ACCEPTED order. The backend enforces atomicity via a
+   * native UPDATE … RETURNING — throws RIDER_BUSY if another rider won
+   * the race.
    */
   const claimOrder = useCallback(
     async (orderId: string) => {
       if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
       const order = orders.find((o) => o.id === orderId);
       if (!order) throw new OrderServiceError("NOT_FOUND", "Order not found.");
-      if (USE_MOCK) {
-        const now = new Date().toISOString();
-        // Check the in-memory lock so the demo race condition is
-        // surfaced to the UI just like the live API would.
-        const lockKey = `order-lock:${orderId}`;
-        const existing =
-          typeof globalThis !== "undefined"
-            ? (globalThis as any)[lockKey]
-            : undefined;
-        if (existing && existing !== session.user.id) {
-          throw new OrderServiceError(
-            "RIDER_BUSY",
-            "Another rider already accepted this delivery.",
-          );
-        }
-        (globalThis as any)[lockKey] = session.user.id;
-        const next: Order = {
-          ...order,
-          status: "assigned",
-          riderId: session.user.id,
-          riderName: session.user.fullName,
-          updatedAt: now,
-        };
-        applyServiceResult(next, [
-          {
-            id: `n-${orderId}-claim-c`,
-            userId: order.customerId,
-            title: "Rider assigned",
-            message: `${session.user.fullName} will deliver your order #${orderId.slice(-4)}.`,
-            type: "delivery",
-            read: false,
-            createdAt: now,
-          },
-          {
-            id: `n-${orderId}-claim-s`,
-            userId: order.sellerId,
-            title: "Delivery started",
-            message: `${session.user.fullName} accepted order #${orderId.slice(-4)} for delivery.`,
-            type: "delivery",
-            read: false,
-            createdAt: now,
-          },
-        ]);
-        return;
-      }
       const result = await orderService.claim(
         { actor: session.user },
         order,
@@ -758,7 +927,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   /**
    * Rider advances delivery. The state-machine guard inside
    * `OrderService.advance` rejects illegal jumps (e.g. picked_up →
-   * delivered).
+   * delivered); the backend re-enforces the same guard on every PATCH.
    */
   const advanceDelivery = useCallback(
     async (
@@ -768,43 +937,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
       const order = orders.find((o) => o.id === orderId);
       if (!order) throw new OrderServiceError("NOT_FOUND", "Order not found.");
-      if (USE_MOCK) {
-        const ts = new Date().toISOString();
-        const updated: Order = { ...order, status: next, updatedAt: ts };
-        const label =
-          next === "picked_up"
-            ? "picked up"
-            : next === "in_transit"
-              ? "on the way"
-              : "delivered";
-        const notes: NotificationItem[] = [
-          {
-            id: `n-${orderId}-${next}`,
-            userId: order.customerId,
-            title: next === "delivered" ? "Delivery complete" : "Status update",
-            message:
-              next === "delivered"
-                ? `Order #${orderId.slice(-4)} delivered. Enjoy your gas!`
-                : `Order #${orderId.slice(-4)} is now ${label}.`,
-            type: next === "delivered" ? "delivery" : "order",
-            read: false,
-            createdAt: ts,
-          },
-        ];
-        if (next === "delivered") {
-          notes.push({
-            id: `n-${orderId}-done-s`,
-            userId: order.sellerId,
-            title: "Order delivered",
-            message: `Order #${orderId.slice(-4)} has been delivered to ${order.customerName}.`,
-            type: "delivery",
-            read: false,
-            createdAt: ts,
-          });
-        }
-        applyServiceResult(updated, notes);
-        return;
-      }
       const result = await orderService.advance(
         { actor: session.user },
         order,
@@ -816,17 +948,39 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   /**
-   * Orders the signed-in user is currently eligible to claim. For
-   * riders that's any ACCEPTED order with no rider assigned. Other
-   * roles return an empty list.
+   * Orders the signed-in user is currently eligible to claim.
+   *
+   * For riders this is the intersection of:
+   *   • ACCEPTED + no rider assigned (status filter, same as before)
+   *   • the rider's `seller_riders` team (new — mirrors the backend)
+   *   • not in a terminal status (defensive — the backend already
+   *     guarantees this, but a stale local row shouldn't slip through)
+   *
+   * Other roles return an empty list. Mock and live behavior share this
+   * filter so the storefront demo behaves the same as the integration.
+   *
+   * Sorted by `updatedAt DESC` to match the backend and the rest of
+   * the rider UI.
    */
   const availableOrdersForUser = useCallback((): Order[] => {
     if (!session) return [];
     if (session.user.role !== "rider") return [];
-    return orders.filter(
-      (o) => o.status === "accepted" && !o.riderId,
+    const allowedSellerIds = new Set(
+      sellersForRider(session.user.id).map((id) => String(id)),
     );
-  }, [session, orders]);
+    if (allowedSellerIds.size === 0) {
+      // Rider not assigned to any seller — empty queue is correct.
+      return [];
+    }
+    const filtered = orders.filter(
+      (o) =>
+        o.status === "accepted" &&
+        !o.riderId &&
+        allowedSellerIds.has(String(o.sellerId)) &&
+        !RIDER_TERMINAL_STATUSES.has(o.status),
+    );
+    return filtered.slice().sort(sortByUpdatedDesc);
+  }, [session, orders, RIDER_TERMINAL_STATUSES, sortByUpdatedDesc]);
 
   /**
    * Legacy verb kept for any screen still using the old flow shape.
@@ -862,46 +1016,89 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    * Legacy verb — kept so existing screens that hand-pick a rider
    * still work in the mock branch. Production callers should use
    * `claimOrder` instead.
+   *
+   * Honors the seller↔rider scoping rule: assigning a rider who isn't
+   * in `seededSellerRiders[order.sellerId]` is rejected with
+   * `NOT_AUTHORIZED` so the mock can't accidentally leak across
+   * sellers in either branch.
    */
   const assignRider = useCallback(
     async (orderId: string, riderId: string, riderName: string) => {
+      const order = orders.find((o) => o.id === orderId);
+      if (!order) {
+        throw new OrderServiceError("NOT_FOUND", `Order ${orderId} not found.`);
+      }
+      const team = seededSellerRiders[order.sellerId] ?? [];
+      if (!team.includes(riderId)) {
+        throw new OrderServiceError(
+          "NOT_AUTHORIZED",
+          `Rider ${riderId} is not assigned to ${order.sellerName}.`,
+        );
+      }
       if (USE_MOCK) {
         const now = new Date().toISOString();
-        setOrders((prev) =>
-          prev.map((o) =>
+        setOrders((prev) => {
+          const nextOrders: Order[] = prev.map((o) =>
             o.id === orderId
               ? { ...o, riderId, riderName, status: "assigned", updatedAt: now }
               : o,
-          ),
-        );
-        const order = orders.find((o) => o.id === orderId);
-        if (order) {
-          setNotifications((prev) => [
-            {
-              id: `n-${Date.now()}-r`,
-              userId: riderId,
-              title: "New delivery assigned",
-              message: `Order #${orderId.slice(-4)} from ${order.sellerName}`,
-              type: "delivery",
-              read: false,
-              createdAt: now,
-            },
-            {
-              id: `n-${Date.now()}-c`,
-              userId: order.customerId,
-              title: "Rider assigned",
-              message: `${riderName} will deliver your order #${orderId.slice(-4)}.`,
-              type: "delivery",
-              read: false,
-              createdAt: now,
-            },
-            ...prev,
-          ]);
-        }
+          );
+          if (__DEV__) {
+            console.info(
+              "[RIDER_ORDERS][ASSIGN_RIDER]",
+              JSON.stringify({
+                source: "mock",
+                orderId,
+                previousStateCount: prev.length,
+                previousStateIds: prev.map((o) => o.id),
+                nextStateCount: nextOrders.length,
+                nextStateIds: nextOrders.map((o) => o.id),
+              }),
+            );
+          }
+          return nextOrders;
+        });
+        setNotifications((prev) => [
+          {
+            id: `n-${Date.now()}-r`,
+            userId: riderId,
+            title: "New delivery assigned",
+            message: `Order #${orderId.slice(-4)} from ${order.sellerName}`,
+            type: "delivery",
+            read: false,
+            createdAt: now,
+          },
+          {
+            id: `n-${Date.now()}-c`,
+            userId: order.customerId,
+            title: "Rider assigned",
+            message: `${riderName} will deliver your order #${orderId.slice(-4)}.`,
+            type: "delivery",
+            read: false,
+            createdAt: now,
+          },
+          ...prev,
+        ]);
         return;
       }
       const updated = await OrdersApi.assignRider(orderId, riderId, riderName);
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+      setOrders((prev) => {
+        const nextOrders = prev.map((o) => (o.id === orderId ? updated : o));
+        if (__DEV__) {
+          console.info(
+            "[RIDER_ORDERS][ASSIGN_RIDER]",
+            JSON.stringify({
+              source: "api",
+              orderId,
+              previousStateCount: prev.length,
+              previousStateIds: prev.map((o) => o.id),
+              nextStateCount: nextOrders.length,
+              nextStateIds: nextOrders.map((o) => o.id),
+            }),
+          );
+        }
+        return nextOrders;
+      });
     },
     [orders],
   );
@@ -1016,6 +1213,164 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [permits],
   );
 
+  // ---- Live-API seller permit actions ---------------------------------
+
+  /**
+   * Internal helper: persist a fetched permit into the
+   * {@link sellerPermits} slice and surface the new status on
+   * {@link session.user.permitStatus} so the seller layout can render the
+   * banner without re-fetching.
+   */
+  const applySellerPermit = useCallback(
+    (permit: SellerPermit | null) => {
+      if (!permit) return;
+      setSellerPermits((prev) => ({ ...prev, [permit.sellerId]: permit }));
+      const currentSession = sessionRef.current;
+      if (
+        currentSession &&
+        currentSession.user.id === permit.sellerId &&
+        currentSession.user.role === "seller"
+      ) {
+        const next: User = {
+          ...currentSession.user,
+          permitStatus: permit.status,
+          isActive: permit.status === "approved",
+        };
+        setSession({ user: next, token: currentSession.token });
+      }
+    },
+    [],
+  );
+
+  const fetchMyPermit = useCallback(async (): Promise<SellerPermit | null> => {
+    if (USE_MOCK) return null;
+    try {
+      const permit = await PermitsApi.myPermit();
+      applySellerPermit(permit);
+      return permit;
+    } catch (err) {
+      // 404 from the server means no permit yet — treat as null.
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }, [applySellerPermit]);
+
+  const uploadPermitDocument = useCallback(
+    async (
+      type: Exclude<PermitDocument["documentType"], "license">,
+      file:
+        | Blob
+        | { uri: string; name: string; type?: string }
+        | { uri: string; name?: string; type?: string },
+      filename: string,
+    ): Promise<PermitDocument> => {
+      const form = new FormData();
+      form.append("type", type);
+      // React Native's `FormData` polyfill inspects the second argument and
+      // expects a `{ uri, name, type }` triple for a file part. When the
+      // caller already has a `Blob` (an Expo `File` subclass), append it
+      // directly. We log the resulting envelope so silent failures show up
+      // in the Metro / `adb logcat` console.
+      const fallbackName = filename || `${type}.pdf`;
+      let filePart: unknown = file;
+      if (
+        typeof file === "object" &&
+        file !== null &&
+        "uri" in (file as Record<string, unknown>)
+      ) {
+        const uriObj = file as { uri: string; name?: string; type?: string };
+        filePart = {
+          uri: uriObj.uri,
+          name: uriObj.name ?? fallbackName,
+          type: uriObj.type ?? "application/octet-stream",
+        };
+      }
+      console.info(
+        "[uploadPermitDocument] posting",
+        JSON.stringify({
+          type,
+          filename: fallbackName,
+          filePart,
+          url: "/api/permits/me/documents",
+        }),
+      );
+      form.append("file", filePart as Blob, fallbackName);
+      try {
+        const document = await PermitsApi.uploadDocument(form);
+        console.info(
+          "[uploadPermitDocument] success",
+          JSON.stringify({
+            type,
+            documentId: (document as PermitDocument).id,
+            contentType: (document as PermitDocument).contentType,
+            sizeBytes: (document as PermitDocument).sizeBytes,
+          }),
+        );
+        // Re-fetch so the slice reflects the freshly-uploaded doc.
+        await fetchMyPermit();
+        return document;
+      } catch (err) {
+        console.error(
+          "[uploadPermitDocument] failed",
+          (err as Error)?.message,
+          (err as { status?: number }).status,
+        );
+        throw err;
+      }
+    },
+    [fetchMyPermit],
+  );
+
+  const deletePermitDocument = useCallback(
+    async (documentId: string) => {
+      await PermitsApi.deleteDocument(documentId);
+      await fetchMyPermit();
+    },
+    [fetchMyPermit],
+  );
+
+  const submitMyPermit = useCallback(
+    async (businessName: string): Promise<SellerPermit> => {
+      const permit = await PermitsApi.submitApplication({ businessName });
+      applySellerPermit(permit);
+      return permit;
+    },
+    [applySellerPermit],
+  );
+
+  const fetchAdminPermits = useCallback(
+    async (status?: PermitStatus): Promise<SellerPermit[]> => {
+      if (USE_MOCK) return [];
+      return PermitsApi.listForAdmin(status);
+    },
+    [],
+  );
+
+  const approveAdminPermit = useCallback(
+    async (
+      permitId: string,
+      license?: { blob: Blob; filename: string },
+    ): Promise<SellerPermit> => {
+      const form = new FormData();
+      if (license) {
+        form.append("license", license.blob, license.filename);
+      }
+      const updated = await PermitsApi.approve(permitId, form);
+      setSellerPermits((prev) => ({ ...prev, [updated.sellerId]: updated }));
+      return updated;
+    },
+    [],
+  );
+
+  const rejectAdminPermit = useCallback(
+    async (permitId: string, reason: string): Promise<SellerPermit> => {
+      const updated = await PermitsApi.reject(permitId, reason);
+      setSellerPermits((prev) => ({ ...prev, [updated.sellerId]: updated }));
+      return updated;
+    },
+    [],
+  );
+
   const markNotificationRead = useCallback(async (id: string) => {
     if (USE_MOCK) {
       setNotifications((prev) =>
@@ -1109,7 +1464,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const route = routes.find((r) => r.id === input.routeId);
       const vehicle = vehicles.find((v) => v.id === input.vehicleId);
       const rider = riders.find((r) => r.id === input.riderId);
-      const supplierId = session?.user.id ?? "u-supp-1";
+      const supplierId = session?.user.id ?? "10";
       const supplierName = session?.user.fullName ?? "Supplier";
 
       if (!route || !vehicle || !rider) {
@@ -1462,6 +1817,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       session,
       loading,
       error,
+      errorCode,
       usingMock: USE_MOCK,
       login,
       register,
@@ -1472,6 +1828,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       orders,
       restockRequests,
       permits,
+      sellerPermits,
       notifications,
       complaints,
       sellers,
@@ -1506,6 +1863,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateRestockStatus,
       submitPermit,
       reviewPermit,
+      fetchMyPermit,
+      uploadPermitDocument,
+      deletePermitDocument,
+      submitMyPermit,
+      fetchAdminPermits,
+      approveAdminPermit,
+      rejectAdminPermit,
       markNotificationRead,
       addComplaint,
       resolveComplaint,
@@ -1525,6 +1889,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       session,
       loading,
       error,
+      errorCode,
       login,
       register,
       logout,
@@ -1534,6 +1899,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       orders,
       restockRequests,
       permits,
+      sellerPermits,
       notifications,
       complaints,
       sellers,
@@ -1568,6 +1934,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateRestockStatus,
       submitPermit,
       reviewPermit,
+      fetchMyPermit,
+      uploadPermitDocument,
+      deletePermitDocument,
+      submitMyPermit,
+      fetchAdminPermits,
+      approveAdminPermit,
+      rejectAdminPermit,
       markNotificationRead,
       addComplaint,
       resolveComplaint,

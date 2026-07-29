@@ -1,352 +1,406 @@
 /**
  * Admin Dashboard – Home page.
  *
- * Top-row KPI tiles for Total Suppliers, Sellers, Riders, Customers,
- * Pending Seller/Rider Applications, and Active Orders. Followed by
- * a Recent Activities feed and quick-action links.
+ * Every figure on this page comes from `GET /api/admin/stats`, which the
+ * backend computes with COUNT/SUM queries over the live tables. Recent
+ * orders and the activity feed come from `GET /api/admin/orders` and
+ * `GET /api/admin/notifications`.
+ *
+ * Nothing here is seeded or estimated: if the database is empty the tiles
+ * read zero rather than showing a plausible-looking placeholder.
  */
-import React, { useMemo } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useCallback } from "react";
+import {
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { useRouter } from "expo-router";
 import { AdminLayout } from "../../src/components/admin/AdminLayout";
 import {
-  AdminCard,
-  AdminCardSection,
-  AdminStatTile,
-  AdminBadge,
+  AdminAsyncBoundary,
   AdminAvatar,
+  AdminBadge,
+  AdminButton,
+  AdminCard,
+  AdminEmptyState,
+  AdminStatTile,
 } from "../../src/components/admin";
-import {
-  Colors,
-  FontSize,
-  Radius,
-  Spacing,
-} from "../../constants/colors";
-import {
-  CUSTOMERS,
-  ORDERS,
-  RECENT_ACTIVITIES,
-  RIDER_APPLICATIONS,
-  RIDERS,
-  SELLER_APPLICATIONS,
-  SELLERS,
-  SUPPLIERS,
-} from "../../src/store/adminData";
+import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import { orderStatusLabel, orderTone } from "../../constants/order";
+import { AdminApi } from "../../src/api/endpoints";
+import { useAdminResource } from "../../src/hooks/useAdminResource";
+import type {
+  AdminNotification,
+  AdminOrder,
+  AdminStats,
+} from "../../constants/types";
 
-const ACTIVITY_ICON: Record<string, string> = {
-  seller_application: "📥",
-  rider_application: "📥",
-  supplier_registered: "🏭",
-  rider_assigned: "🛵",
-  order_placed: "🛒",
-  order_delivered: "✅",
+const NOTIFICATION_ICON: Record<string, string> = {
+  permit: "📥",
+  order: "🛒",
+};
+
+/** Tanzanian shilling, the currency the seed data and orders are priced in. */
+const formatCurrency = (n: number) =>
+  `TZS ${Number(n ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+
+const formatWhen = (iso: string | null) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
 };
 
 export default function AdminDashboardHome() {
   const router = useRouter();
 
-  const stats = useMemo(() => {
-    const activeOrders = ORDERS.filter(
-      (o) =>
-        o.status === "pending" ||
-        o.status === "processing" ||
-        o.status === "in_transit",
-    ).length;
-    const pendingSellerApps = SELLER_APPLICATIONS.filter(
-      (s) => s.status === "pending",
-    ).length;
-    const pendingRiderApps = RIDER_APPLICATIONS.filter(
-      (r) => r.status === "pending",
-    ).length;
+  // Three independent reads so a slow list doesn't hold up the tiles.
+  const stats = useAdminResource<AdminStats>(() => AdminApi.stats());
+  const orders = useAdminResource<AdminOrder[]>(() => AdminApi.orders());
+  const activity = useAdminResource<AdminNotification[]>(() =>
+    AdminApi.notifications(),
+  );
 
-    return {
-      suppliers: SUPPLIERS.length,
-      sellers: SELLERS.length,
-      riders: RIDERS.length,
-      customers: CUSTOMERS.length,
-      pendingSellerApps,
-      pendingRiderApps,
-      activeOrders,
-      revenue: ORDERS.filter((o) => o.status === "delivered").reduce(
-        (s, o) => s + o.total,
-        0,
-      ),
-    };
-  }, []);
+  const reloadAll = useCallback(async () => {
+    await Promise.all([stats.reload(), orders.reload(), activity.reload()]);
+  }, [stats, orders, activity]);
 
-  const formatCurrency = (n: number) =>
-    `KES ${n.toLocaleString("en-KE", { maximumFractionDigits: 0 })}`;
+  const s = stats.data;
+  const recentOrders = (orders.data ?? []).slice(0, 5);
+  const recentActivity = (activity.data ?? []).slice(0, 6);
 
   return (
     <AdminLayout
       title="Dashboard"
-      subtitle="Overview of operations and pending approvals"
+      subtitle="Live overview of operations and pending approvals"
       rightActions={
         <View style={styles.headerActions}>
+          <AdminButton
+            label="Refresh"
+            icon="↻"
+            variant="secondary"
+            onPress={reloadAll}
+            loading={stats.refreshing}
+          />
           <TouchableOpacity
             style={styles.headerBtn}
             onPress={() => router.push("/reports" as any)}
           >
             <Text style={styles.headerBtnIcon}>📊</Text>
-            <Text style={styles.headerBtnText}>Generate Report</Text>
+            <Text style={styles.headerBtnText}>View Reports</Text>
           </TouchableOpacity>
         </View>
       }
+      refreshControl={
+        <RefreshControl refreshing={stats.refreshing} onRefresh={reloadAll} />
+      }
     >
-      {/* KPI Grid */}
-      <View style={styles.kpiGrid}>
-        <AdminStatTile
-          label="Total Suppliers"
-          value={stats.suppliers}
-          icon="🏭"
-          tone="primary"
-          delta="+2"
-          deltaTone="up"
-        />
-        <AdminStatTile
-          label="Total Sellers"
-          value={stats.sellers}
-          icon="🏪"
-          tone="accent"
-          delta="+3"
-          deltaTone="up"
-        />
-        <AdminStatTile
-          label="Total Riders"
-          value={stats.riders}
-          icon="🛵"
-          tone="info"
-          delta="+5"
-          deltaTone="up"
-        />
-        <AdminStatTile
-          label="Total Customers"
-          value={stats.customers}
-          icon="👥"
-          tone="success"
-          delta="+12%"
-          deltaTone="up"
-        />
-      </View>
-
-      <View style={[styles.kpiGrid, { marginTop: Spacing.md }]}>
-        <AdminStatTile
-          label="Pending Seller Apps"
-          value={stats.pendingSellerApps}
-          icon="📥"
-          tone="warning"
-        />
-        <AdminStatTile
-          label="Pending Rider Apps"
-          value={stats.pendingRiderApps}
-          icon="📥"
-          tone="warning"
-        />
-        <AdminStatTile
-          label="Active Orders"
-          value={stats.activeOrders}
-          icon="🚚"
-          tone="info"
-        />
-        <AdminStatTile
-          label="Revenue (Delivered)"
-          value={formatCurrency(stats.revenue)}
-          icon="💰"
-          tone="admin"
-          delta="+8.4%"
-          deltaTone="up"
-        />
-      </View>
-
-      {/* Quick actions */}
-      <Text style={styles.sectionHeading}>Quick Actions</Text>
-      <View style={styles.quickGrid}>
-        {[
-          {
-            label: "Review Seller Apps",
-            icon: "📥",
-            tone: "#FEF3C7",
-            route: "/seller-applications",
-            count: stats.pendingSellerApps,
-          },
-          {
-            label: "Review Rider Apps",
-            icon: "📥",
-            tone: "#FEF3C7",
-            route: "/rider-applications",
-            count: stats.pendingRiderApps,
-          },
-          {
-            label: "Assign Riders",
-            icon: "🛵",
-            tone: "#DBEAFE",
-            route: "/rider-assignments",
-          },
-          {
-            label: "Register Supplier",
-            icon: "🏭",
-            tone: "#CCFBF1",
-            route: "/suppliers",
-          },
-          {
-            label: "Manage Routes",
-            icon: "🗺️",
-            tone: "#E0E7FF",
-            route: "/routes",
-          },
-          {
-            label: "View Reports",
-            icon: "📊",
-            tone: "#FCE7F3",
-            route: "/reports",
-          },
-        ].map((a) => (
-          <TouchableOpacity
-            key={a.label}
-            activeOpacity={0.85}
-            style={styles.quickTile}
-            onPress={() => router.push(a.route as any)}
-          >
-            <View style={[styles.quickIcon, { backgroundColor: a.tone }]}>
-              <Text style={styles.quickIconText}>{a.icon}</Text>
+      <AdminAsyncBoundary
+        loading={stats.loading}
+        error={stats.error}
+        onRetry={stats.reload}
+        hasData={!!s}
+        loadingLabel="Loading dashboard statistics…"
+      >
+        {s ? (
+          <>
+            {/* People */}
+            <Text style={styles.sectionHeading}>People</Text>
+            <View style={styles.kpiGrid}>
+              <AdminStatTile
+                label="Total Users"
+                value={s.totalUsers}
+                icon="👤"
+                tone="admin"
+              />
+              <AdminStatTile
+                label="Customers"
+                value={s.totalCustomers}
+                icon="👥"
+                tone="success"
+              />
+              <AdminStatTile
+                label="Sellers"
+                value={s.totalSellers}
+                icon="🏪"
+                tone="accent"
+              />
+              <AdminStatTile
+                label="Riders"
+                value={s.totalRiders}
+                icon="🛵"
+                tone="info"
+              />
+              <AdminStatTile
+                label="Suppliers"
+                value={s.totalSuppliers}
+                icon="🏭"
+                tone="primary"
+              />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.quickLabel}>{a.label}</Text>
-              {a.count !== undefined ? (
-                <Text style={styles.quickMeta}>{a.count} pending</Text>
-              ) : null}
-            </View>
-            <Text style={styles.quickArrow}>›</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
 
-      {/* Activity + Recent Orders */}
+            {/* Catalogue + orders */}
+            <Text style={styles.sectionHeading}>Orders &amp; Catalogue</Text>
+            <View style={styles.kpiGrid}>
+              <AdminStatTile
+                label="Total Products"
+                value={s.totalProducts}
+                icon="🛢️"
+                tone="primary"
+              />
+              <AdminStatTile
+                label="Total Orders"
+                value={s.totalOrders}
+                icon="📦"
+                tone="admin"
+              />
+              <AdminStatTile
+                label="Active Orders"
+                value={s.activeOrders}
+                icon="🚚"
+                tone="info"
+              />
+              <AdminStatTile
+                label="Revenue (Delivered)"
+                value={formatCurrency(s.revenueDelivered)}
+                icon="💰"
+                tone="success"
+              />
+            </View>
+
+            <View style={[styles.kpiGrid, { marginTop: Spacing.md }]}>
+              <AdminStatTile
+                label="Pending"
+                value={s.orderStatus.pending}
+                icon="⏳"
+                tone="warning"
+              />
+              <AdminStatTile
+                label="Accepted"
+                value={s.orderStatus.accepted}
+                icon="✅"
+                tone="info"
+              />
+              <AdminStatTile
+                label="In Progress"
+                value={
+                  s.orderStatus.assigned +
+                  s.orderStatus.picked_up +
+                  s.orderStatus.in_transit
+                }
+                icon="🛵"
+                tone="primary"
+              />
+              <AdminStatTile
+                label="Delivered"
+                value={s.orderStatus.delivered}
+                icon="🏁"
+                tone="success"
+              />
+              <AdminStatTile
+                label="Cancelled"
+                value={s.orderStatus.cancelled}
+                icon="✖️"
+                tone="danger"
+              />
+              <AdminStatTile
+                label="Rejected"
+                value={s.orderStatus.rejected}
+                icon="🚫"
+                tone="danger"
+              />
+            </View>
+
+            {/* Applications + notifications */}
+            <Text style={styles.sectionHeading}>
+              Seller Applications &amp; Notifications
+            </Text>
+            <View style={styles.kpiGrid}>
+              <AdminStatTile
+                label="Pending Applications"
+                value={s.pendingSellerApplications}
+                icon="📥"
+                tone="warning"
+              />
+              <AdminStatTile
+                label="Under Review"
+                value={s.underReviewSellerApplications}
+                icon="🔍"
+                tone="info"
+              />
+              <AdminStatTile
+                label="Approved Sellers"
+                value={s.approvedSellers}
+                icon="✅"
+                tone="success"
+              />
+              <AdminStatTile
+                label="Rejected"
+                value={s.rejectedSellerApplications}
+                icon="❌"
+                tone="danger"
+              />
+              <AdminStatTile
+                label="Notifications"
+                value={s.totalNotifications}
+                icon="🔔"
+                tone="neutral"
+              />
+            </View>
+
+            {/* Quick actions */}
+            <Text style={styles.sectionHeading}>Quick Actions</Text>
+            <View style={styles.quickGrid}>
+              {[
+                {
+                  label: "Review Seller Apps",
+                  icon: "📥",
+                  tone: "#FEF3C7",
+                  route: "/seller-applications",
+                  count: s.pendingSellerApplications,
+                },
+                {
+                  label: "Manage Orders",
+                  icon: "📦",
+                  tone: "#DBEAFE",
+                  route: "/orders",
+                  count: s.activeOrders,
+                },
+                {
+                  label: "Manage Sellers",
+                  icon: "🏪",
+                  tone: "#CCFBF1",
+                  route: "/sellers",
+                },
+                {
+                  label: "Manage Riders",
+                  icon: "🛵",
+                  tone: "#E0E7FF",
+                  route: "/riders",
+                },
+                {
+                  label: "Customers",
+                  icon: "👥",
+                  tone: "#FCE7F3",
+                  route: "/customers",
+                },
+                {
+                  label: "View Reports",
+                  icon: "📊",
+                  tone: "#EDE9FE",
+                  route: "/reports",
+                },
+              ].map((a) => (
+                <TouchableOpacity
+                  key={a.label}
+                  activeOpacity={0.85}
+                  style={styles.quickTile}
+                  onPress={() => router.push(a.route as any)}
+                >
+                  <View style={[styles.quickIcon, { backgroundColor: a.tone }]}>
+                    <Text style={styles.quickIconText}>{a.icon}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.quickLabel}>{a.label}</Text>
+                    {a.count !== undefined ? (
+                      <Text style={styles.quickMeta}>{a.count} open</Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.quickArrow}>›</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        ) : null}
+      </AdminAsyncBoundary>
+
+      {/* Activity + recent orders */}
       <View style={styles.bottomGrid}>
         <AdminCard style={{ flex: 1 }}>
-          <Text style={styles.cardHeading}>Recent Activities</Text>
+          <Text style={styles.cardHeading}>Recent Activity</Text>
           <View style={{ marginTop: Spacing.md, gap: 12 }}>
-            {RECENT_ACTIVITIES.map((a) => (
-              <View key={a.id} style={styles.activityRow}>
-                <View style={styles.activityIcon}>
-                  <Text style={{ fontSize: 16 }}>
-                    {ACTIVITY_ICON[a.type] ?? "•"}
-                  </Text>
+            {recentActivity.length === 0 ? (
+              <AdminEmptyState
+                icon="🔔"
+                title="No notifications yet"
+                message="System notifications will appear here as they are recorded."
+              />
+            ) : (
+              recentActivity.map((n) => (
+                <View key={n.id} style={styles.activityRow}>
+                  <View style={styles.activityIcon}>
+                    <Text style={{ fontSize: 16 }}>
+                      {NOTIFICATION_ICON[n.type] ?? "•"}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.activityText}>{n.title}</Text>
+                    <Text style={styles.activityTime}>
+                      {n.userName ? `${n.userName} • ` : ""}
+                      {formatWhen(n.createdAt)}
+                    </Text>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.activityText}>{a.message}</Text>
-                  <Text style={styles.activityTime}>{a.timestamp}</Text>
-                </View>
-              </View>
-            ))}
+              ))
+            )}
           </View>
         </AdminCard>
 
         <AdminCard style={{ flex: 1 }}>
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardHeading}>Recent Orders</Text>
-            <TouchableOpacity
-              onPress={() => router.push("/orders" as any)}
-            >
+            <TouchableOpacity onPress={() => router.push("/orders" as any)}>
               <Text style={styles.cardLink}>See all</Text>
             </TouchableOpacity>
           </View>
           <View style={{ marginTop: Spacing.md, gap: Spacing.sm }}>
-            {ORDERS.slice(0, 5).map((o) => (
-              <View key={o.id} style={styles.orderRow}>
-                <AdminAvatar name={o.customerName} size={36} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.orderName}>{o.customerName}</Text>
-                  <Text style={styles.orderMeta}>
-                    #{o.id.slice(-4)} • {o.product}
-                  </Text>
+            {recentOrders.length === 0 ? (
+              <AdminEmptyState
+                icon="📦"
+                title="No orders yet"
+                message="Orders placed by customers will appear here."
+              />
+            ) : (
+              recentOrders.map((o) => (
+                <View key={o.id} style={styles.orderRow}>
+                  <AdminAvatar name={o.customerName} size={36} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.orderName}>{o.customerName}</Text>
+                    <Text style={styles.orderMeta}>
+                      #{o.id} • {o.sellerName}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={styles.orderTotal}>
+                      {formatCurrency(o.total)}
+                    </Text>
+                    <AdminBadge
+                      label={orderStatusLabel(o.status)}
+                      tone={toBadgeTone(o.status)}
+                    />
+                  </View>
                 </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={styles.orderTotal}>
-                    {formatCurrency(o.total)}
-                  </Text>
-                  <AdminBadge
-                    label={o.status.replace("_", " ")}
-                    tone={
-                      o.status === "delivered"
-                        ? "success"
-                        : o.status === "cancelled"
-                        ? "danger"
-                        : o.status === "in_transit" || o.status === "processing"
-                        ? "info"
-                        : "warning"
-                    }
-                  />
-                </View>
-              </View>
-            ))}
+              ))
+            )}
           </View>
         </AdminCard>
       </View>
-
-      <AdminCardSection
-        title="System Health"
-        subtitle="Real-time snapshot of operational metrics"
-        style={{ marginTop: Spacing.lg }}
-      >
-        <View style={styles.healthGrid}>
-          <View style={styles.healthItem}>
-            <Text style={styles.healthLabel}>Order success rate</Text>
-            <View style={styles.healthBarTrack}>
-              <View
-                style={[
-                  styles.healthBarFill,
-                  { width: "94%", backgroundColor: Colors.success },
-                ]}
-              />
-            </View>
-            <Text style={styles.healthValue}>94%</Text>
-          </View>
-          <View style={styles.healthItem}>
-            <Text style={styles.healthLabel}>On-time deliveries</Text>
-            <View style={styles.healthBarTrack}>
-              <View
-                style={[
-                  styles.healthBarFill,
-                  { width: "88%", backgroundColor: Colors.info },
-                ]}
-              />
-            </View>
-            <Text style={styles.healthValue}>88%</Text>
-          </View>
-          <View style={styles.healthItem}>
-            <Text style={styles.healthLabel}>Customer satisfaction</Text>
-            <View style={styles.healthBarTrack}>
-              <View
-                style={[
-                  styles.healthBarFill,
-                  { width: "92%", backgroundColor: Colors.primary },
-                ]}
-              />
-            </View>
-            <Text style={styles.healthValue}>92%</Text>
-          </View>
-          <View style={styles.healthItem}>
-            <Text style={styles.healthLabel}>Rider utilisation</Text>
-            <View style={styles.healthBarTrack}>
-              <View
-                style={[
-                  styles.healthBarFill,
-                  { width: "76%", backgroundColor: Colors.warning },
-                ]}
-              />
-            </View>
-            <Text style={styles.healthValue}>76%</Text>
-          </View>
-        </View>
-      </AdminCardSection>
     </AdminLayout>
   );
+}
+
+/** Maps the shared order tone vocabulary onto the badge's tone names. */
+function toBadgeTone(status: AdminOrder["status"]) {
+  const tone = orderTone(status);
+  return tone === "muted" ? "neutral" : tone;
 }
 
 const styles = StyleSheet.create({
   headerActions: {
     flexDirection: "row",
+    alignItems: "center",
     gap: Spacing.sm,
   },
   headerBtn: {
@@ -485,37 +539,5 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: FontSize.sm,
     marginBottom: 4,
-  },
-  healthGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: Spacing.lg,
-  },
-  healthItem: {
-    flexBasis: "47%",
-    flexGrow: 1,
-    minWidth: 220,
-  },
-  healthLabel: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    fontWeight: "700",
-    marginBottom: 6,
-  },
-  healthBarTrack: {
-    height: 10,
-    backgroundColor: Colors.surfaceMuted,
-    borderRadius: 5,
-    overflow: "hidden",
-    marginBottom: 6,
-  },
-  healthBarFill: {
-    height: "100%",
-    borderRadius: 5,
-  },
-  healthValue: {
-    fontSize: FontSize.sm,
-    color: Colors.text,
-    fontWeight: "800",
   },
 });
