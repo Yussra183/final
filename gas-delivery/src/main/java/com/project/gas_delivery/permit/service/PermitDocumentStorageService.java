@@ -14,30 +14,57 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
- * Reads/writes permit PDF bytes on disk.
+ * Reads/writes permit PDF / image bytes on disk.
  *
- * <p>Layout: {@code <app.uploads.dir>/permits/<sellerId>/<type>-<uuid>.pdf}.
+ * <p>Layout: {@code <app.uploads.dir>/permits/<sellerId>/<type>-<uuid>.<ext>}.
  * The directory tree is created lazily on first write; the
  * {@code storage_key} persisted on {@link PermitDocumentEntity} is the
  * relative path under {@code app.uploads.dir} so the property can change
  * without rewriting every row.</p>
  *
- * <p>Only PDFs are accepted — the MIME check is intentionally strict so a
- * non-PDF renamed to {@code .pdf} still gets rejected via the magic-bytes
- * sniff below.</p>
+ * <p>Per-slot MIME policies are declared in the {@link #ALLOWED_MIME} table
+ * so the seller can upload an image for {@code PASSPORT_PHOTO} and
+ * {@code NATIONAL_ID} while file-only slots (application form, business
+ * licence, admin licence) stay PDF-only. The validator verifies the
+ * content-type against the table and then re-checks the magic bytes
+ * so a non-PDF renamed to {@code .pdf} (and vice-versa) is still
+ * rejected.</p>
  */
 @Service
 public class PermitDocumentStorageService {
 
-    /** Permitted content types (case-insensitive). */
-    private static final String CONTENT_TYPE_PDF = "application/pdf";
+    /** Permitted content types per slot. */
+    private static final Map<PermitDocumentType, Set<String>> ALLOWED_MIME;
+    static {
+        Map<PermitDocumentType, Set<String>> table = new EnumMap<>(PermitDocumentType.class);
+        table.put(PermitDocumentType.APPLICATION_FORM,
+                Set.of("application/pdf"));
+        table.put(PermitDocumentType.NATIONAL_ID,
+                Set.of("application/pdf", "image/jpeg", "image/png"));
+        table.put(PermitDocumentType.BUSINESS_LICENSE,
+                Set.of("application/pdf"));
+        table.put(PermitDocumentType.PASSPORT_PHOTO,
+                Set.of("image/jpeg", "image/png"));
+        table.put(PermitDocumentType.LICENSE,
+                Set.of("application/pdf"));
+        ALLOWED_MIME = Collections.unmodifiableMap(table);
+    }
+
     /** Maximum file size — 10 MB matches {@code spring.servlet.multipart.max-file-size}. */
     private static final long MAX_BYTES = 10L * 1024 * 1024;
     /** First four bytes of every PDF file. */
     private static final byte[] PDF_MAGIC = new byte[]{'%', 'P', 'D', 'F'};
+    /** First three bytes of every JPEG file. */
+    private static final byte[] JPEG_MAGIC = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF};
+    /** First eight bytes of every PNG file. */
+    private static final byte[] PNG_MAGIC = new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
 
     private final FileStorageProperties properties;
     private final PermitDocumentRepository documentRepository;
@@ -59,7 +86,7 @@ public class PermitDocumentStorageService {
     public PermitDocumentEntity store(SellerPermitEntity permit,
                                       PermitDocumentType type,
                                       MultipartFile file) {
-        validate(file);
+        validate(type, file);
 
         // Replace any existing document of the same type — keeps the
         // (permit_id, document_type) UNIQUE constraint happy.
@@ -70,7 +97,8 @@ public class PermitDocumentStorageService {
                     documentRepository.flush();
                 });
 
-        String storageKey = writeToDisk(permit.getSellerId(), type, file);
+        String contentType = file.getContentType();
+        String storageKey = writeToDisk(permit.getSellerId(), type, file, contentType);
 
         PermitDocumentEntity entity = new PermitDocumentEntity(
                 permit.getId(),
@@ -78,7 +106,7 @@ public class PermitDocumentStorageService {
                 storageKey,
                 file.getOriginalFilename(),
                 file.getSize(),
-                CONTENT_TYPE_PDF
+                contentType
         );
         return documentRepository.save(entity);
     }
@@ -112,14 +140,16 @@ public class PermitDocumentStorageService {
 
     // ---- helpers --------------------------------------------------------
 
-    private String writeToDisk(Long sellerId, PermitDocumentType type, MultipartFile file) {
+    private String writeToDisk(Long sellerId, PermitDocumentType type,
+                               MultipartFile file, String contentType) {
         try {
             Path root = Paths.get(properties.getDir(), "permits", String.valueOf(sellerId))
                     .toAbsolutePath()
                     .normalize();
             Files.createDirectories(root);
 
-            String safeName = type.name().toLowerCase() + "-" + UUID.randomUUID() + ".pdf";
+            String ext = extensionFor(contentType);
+            String safeName = type.name().toLowerCase() + "-" + UUID.randomUUID() + "." + ext;
             Path target = root.resolve(safeName);
             file.transferTo(target.toFile());
             return "permits/" + sellerId + "/" + safeName;
@@ -142,7 +172,12 @@ public class PermitDocumentStorageService {
         }
     }
 
-    private void validate(MultipartFile file) {
+    /**
+     * Reject the upload if the file is empty, too large, has a content
+     * type that isn't in the slot's allow-list, or doesn't match the
+     * magic bytes for its declared MIME family.
+     */
+    private void validate(PermitDocumentType type, MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new BadRequestException("Uploaded file is empty.");
         }
@@ -150,25 +185,102 @@ public class PermitDocumentStorageService {
             throw new BadRequestException("File exceeds maximum allowed size of 10 MB.");
         }
         String contentType = file.getContentType();
-        if (contentType == null || !contentType.toLowerCase().contains("pdf")) {
-            throw new BadRequestException("Only PDF files are accepted.");
+        String normalised = contentType == null ? "" : contentType.toLowerCase();
+        if (!ALLOWED_MIME.getOrDefault(type, Set.of()).contains(normalised)) {
+            throw new BadRequestException(
+                    "Only " + humanAllowedTypes(type) + " files are accepted for "
+                            + humanSlot(type) + ".");
         }
-        // Magic-bytes sniff — rejects a non-PDF renamed to `.pdf`.
+        // Magic-bytes sniff — rejects a file whose bytes don't match the
+        // declared MIME family (e.g. a JPEG renamed to .pdf).
         try {
-            byte[] head = new byte[4];
-            try (var in = file.getInputStream()) {
-                int read = in.read(head);
-                if (read != 4) {
-                    throw new BadRequestException("File is not a valid PDF.");
-                }
+            byte[] head;
+            switch (normalised) {
+                case "application/pdf" -> head = readHead(file, PDF_MAGIC.length);
+                case "image/jpeg" -> head = readHead(file, JPEG_MAGIC.length);
+                case "image/png" -> head = readHead(file, PNG_MAGIC.length);
+                default -> throw new BadRequestException(
+                        "Unsupported file type for " + humanSlot(type) + ".");
             }
-            for (int i = 0; i < PDF_MAGIC.length; i++) {
-                if (head[i] != PDF_MAGIC[i]) {
-                    throw new BadRequestException("File is not a valid PDF.");
+            byte[] expected = magicBytesFor(normalised);
+            for (int i = 0; i < expected.length; i++) {
+                if (head[i] != expected[i]) {
+                    throw new BadRequestException(
+                            "File is not a valid " + normalised + " (" + humanSlot(type) + ").");
                 }
             }
         } catch (IOException e) {
             throw new BadRequestException("Could not read uploaded file.");
         }
+    }
+
+    private static byte[] readHead(MultipartFile file, int n) throws IOException {
+        byte[] head = new byte[n];
+        try (var in = file.getInputStream()) {
+            int read = in.read(head);
+            if (read != n) {
+                throw new BadRequestException("File is not a valid PDF/image.");
+            }
+        }
+        return head;
+    }
+
+    private static byte[] magicBytesFor(String contentType) {
+        return switch (contentType) {
+            case "application/pdf" -> PDF_MAGIC;
+            case "image/jpeg" -> JPEG_MAGIC;
+            case "image/png" -> PNG_MAGIC;
+            default -> new byte[0];
+        };
+    }
+
+    /**
+     * Map a verified MIME type to the file extension used for the on-disk
+     * filename. Defaults to {@code .bin} so we never lie about the
+     * contents — the download endpoint serves the real MIME.
+     */
+    private static String extensionFor(String contentType) {
+        if (contentType == null) return "bin";
+        return switch (contentType.toLowerCase()) {
+            case "application/pdf" -> "pdf";
+            case "image/jpeg" -> "jpg";
+            case "image/png" -> "png";
+            default -> "bin";
+        };
+    }
+
+    private static String humanSlot(PermitDocumentType type) {
+        return switch (type) {
+            case APPLICATION_FORM -> "the application form";
+            case NATIONAL_ID -> "national ID";
+            case BUSINESS_LICENSE -> "the business licence";
+            case PASSPORT_PHOTO -> "passport photo";
+            case LICENSE -> "the licence";
+        };
+    }
+
+    private static String humanAllowedTypes(PermitDocumentType type) {
+        var allowed = ALLOWED_MIME.getOrDefault(type, Set.of());
+        if (allowed.size() == 1) {
+            return switch (type) {
+                case APPLICATION_FORM, BUSINESS_LICENSE, LICENSE -> "PDF";
+                default -> "image";
+            };
+        }
+        // Mixed allow-list (national_id).
+        return "PDF or image (JPG/PNG)";
+    }
+
+    /**
+     * Package-private helper exposed for unit tests. Returns the
+     * normalised MIME type the storage service will accept for the
+     * given slot, or {@code null} when no MIME is declared on the file.
+     */
+    static String isAllowedMime(PermitDocumentType type, String contentType) {
+        if (contentType == null) return null;
+        String normalised = contentType.toLowerCase();
+        return ALLOWED_MIME.getOrDefault(type, Set.of()).contains(normalised)
+                ? normalised
+                : null;
     }
 }

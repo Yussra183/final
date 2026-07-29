@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS permit_documents (
     content_type  VARCHAR(100) NOT NULL DEFAULT 'application/pdf',
     uploaded_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_permit_documents_type
-        CHECK (document_type IN ('APPLICATION_FORM', 'BIRTH_CERTIFICATE', 'NATIONAL_ID', 'LICENSE'))
+        CHECK (document_type IN ('APPLICATION_FORM', 'NATIONAL_ID', 'BUSINESS_LICENSE', 'GAS_SELLING_PERMIT', 'PASSPORT_PHOTO', 'LICENSE'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_permit_documents_permit ON permit_documents(permit_id);

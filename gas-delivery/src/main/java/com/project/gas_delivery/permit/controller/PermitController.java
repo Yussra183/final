@@ -9,6 +9,7 @@ import com.project.gas_delivery.permit.dto.SubmitPermitRequest;
 import com.project.gas_delivery.permit.enums.PermitDocumentType;
 import com.project.gas_delivery.permit.service.PermitService;
 import com.project.gas_delivery.permit.service.PermitService.DocumentStream;
+import com.project.gas_delivery.permit.service.SellerApplicationPdfService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.core.io.PathResource;
@@ -25,8 +26,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.util.List;
 
 /**
  * Seller-facing permit endpoints.
@@ -60,9 +59,12 @@ import java.util.List;
 public class PermitController {
 
     private final PermitService permitService;
+    private final SellerApplicationPdfService pdfService;
 
-    public PermitController(PermitService permitService) {
+    public PermitController(PermitService permitService,
+                            SellerApplicationPdfService pdfService) {
         this.permitService = permitService;
+        this.pdfService = pdfService;
     }
 
     // ---- seller-side -----------------------------------------------------
@@ -91,7 +93,7 @@ public class PermitController {
     }
 
     @DeleteMapping("/me/documents/{id}")
-    public ResponseEntity<Void> deleteDocument(HttpServletRequest request, @PathVariable Long id) {
+    public ResponseEntity<Void> deleteDocument(HttpServletRequest request, @PathVariable("id") Long id) {
         Long sellerId = requireSeller(request);
         permitService.deleteDocument(sellerId, id);
         return ResponseEntity.noContent().build();
@@ -111,7 +113,7 @@ public class PermitController {
     @GetMapping("/documents/{id}")
     public ResponseEntity<Resource> downloadDocument(
             HttpServletRequest request,
-            @PathVariable Long id
+            @PathVariable("id") Long id
     ) {
         Long actorId = AuthFilter.currentActorId(request);
         Role actorRole = AuthFilter.currentActorRole(request);
@@ -126,7 +128,7 @@ public class PermitController {
             // Fall back to application/pdf.
         }
         String filename = stream.originalName() == null
-                ? "permit-document-" + id + ".pdf"
+                ? "permit-document-" + id + fallbackExtension(stream.contentType())
                 : stream.originalName();
         return ResponseEntity.ok()
                 .contentType(mediaType)
@@ -137,50 +139,42 @@ public class PermitController {
     }
 
     @GetMapping("/me/license")
-    public ResponseEntity<Resource> myLicense(HttpServletRequest request) {
+    public ResponseEntity<byte[]> myLicense(HttpServletRequest request) {
         Long sellerId = requireSeller(request);
         SellerPermitDto permit = permitService.getForSeller(sellerId);
         if (!"approved".equalsIgnoreCase(permit.status())) {
             throw new com.project.gas_delivery.permit.exception.PermitStateException(
                     "Licence is only available for approved sellers.");
         }
-        // The approved licence is the single LICENSE document on the
-        // permit. We could resolve by metadata query, but streaming by the
-        // role/ownership check in `loadDocument` is simpler and gives us
-        // the same role guard for free.
-        List<PermitDocumentDto> docs = permit.documents();
-        PermitDocumentDto licence = docs == null ? null : docs.stream()
-                .filter(d -> "license".equalsIgnoreCase(d.documentType()))
-                .findFirst()
-                .orElseThrow(() -> new com.project.gas_delivery.permit.exception.PermitNotFoundException(
-                        "Licence PDF has not been uploaded by the administrator yet."));
-        DocumentStream stream = permitService.loadDocument(
-                Long.parseLong(licence.id()), Role.SELLER, sellerId);
+        // The approved licence is regenerated on demand by
+        // {@link SellerApplicationPdfService} so the rendered PDF always
+        // reflects the latest application and review data. The
+        // admin-uploaded licence document (if any) is exposed via
+        // {@code GET /api/permits/documents/{id}} for audit purposes.
+        byte[] body = pdfService.renderIssuedLicense(
+                permitService.buildIssuedLicenseData(sellerId));
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
-                .contentLength(stream.sizeBytes())
+                .contentLength(body.length)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "inline; filename=\"seller-licence-" + sellerId + ".pdf\"")
-                .body(new PathResource(stream.path()));
+                .body(body);
     }
 
     @GetMapping("/application-form")
-    public ResponseEntity<Resource> applicationForm() {
-        // The blank application form ships inside the JAR at
-        // `static/forms/application-form.pdf`. If the resource is missing
-        // we surface a 404 — the seller UI then offers to download an
-        // empty file the user can fill in.
-        org.springframework.core.io.Resource resource =
-                new org.springframework.core.io.ClassPathResource("static/forms/application-form.pdf");
-        if (!resource.exists()) {
-            throw new com.project.gas_delivery.permit.exception.PermitNotFoundException(
-                    "Application form template is not available on the server.");
-        }
+    public ResponseEntity<byte[]> applicationForm() {
+        // The blank application form is rendered on demand by
+        // {@link SellerApplicationPdfService} so the layout and content
+        // stay in lockstep with the seller licence that is issued on
+        // approval. Any authenticated role can download it.
+        byte[] body = pdfService.renderBlankApplicationForm();
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
+                .contentLength(body.length)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"seller-application-form.pdf\"")
-                .body(resource);
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(body);
     }
 
     private static Long requireSeller(HttpServletRequest request) {
@@ -193,5 +187,21 @@ public class PermitController {
             throw new NotAuthorizedException("Only sellers can manage permit applications.");
         }
         return actorId;
+    }
+
+    /**
+     * Map a stored MIME type to a file extension used in the
+     * {@code Content-Disposition} fallback filename. Defaults to
+     * {@code .pdf} so legacy rows that pre-date the image policy still
+     * download as something sensible.
+     */
+    private static String fallbackExtension(String contentType) {
+        if (contentType == null) return ".pdf";
+        return switch (contentType.toLowerCase()) {
+            case "image/jpeg" -> ".jpg";
+            case "image/png" -> ".png";
+            case "application/pdf" -> ".pdf";
+            default -> ".pdf";
+        };
     }
 }

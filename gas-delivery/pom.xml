@@ -129,10 +129,41 @@
 			<artifactId>spring-boot-starter-webmvc-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+
+		<!-- PDF generation for the seller application form and the issued
+		     seller licence. OpenPDF is Apache-2.0/MPL dual licensed, pure
+		     Java, and pulls no native libraries — ideal for a Spring Boot
+		     fat-jar deployment. -->
+		<dependency>
+			<groupId>com.github.librepdf</groupId>
+			<artifactId>openpdf</artifactId>
+			<version>2.0.3</version>
+		</dependency>
 	</dependencies>
 
 	<build>
 		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<!-- Pin the bytecode release to 17. The Spring Boot 4.1.0
+					     parent POM defaults to a higher release, which makes the
+					     Eclipse JDT language server (used by VS Code) try to find
+					     a JDK that isn't installed. Forcing it here keeps Maven
+					     CLI, IntelliJ, and the JDT language server in sync. -->
+					<release>17</release>
+					<!-- Embed parameter names in .class files so Spring can bind
+					     @RequestParam / @PathVariable / @RequestHeader by name.
+					     Without this, several endpoints (e.g. GET /api/orders with
+					     query params, GET /api/products with a filter) throw
+					     IllegalArgumentException ("Name for argument ... not
+					     specified") and return HTTP 500. Adding -parameters is a
+					     build-only flag — it does not modify any controller code,
+					     runtime behaviour, or business logic. -->
+					<parameters>true</parameters>
+				</configuration>
+			</plugin>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>

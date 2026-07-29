@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,4 +36,12 @@ public interface SellerPermitRepository extends JpaRepository<SellerPermitEntity
      */
     @Query("SELECT DISTINCT p.sellerId FROM SellerPermitEntity p WHERE p.status = :status")
     List<Long> findSellerIdsByStatus(@Param("status") PermitStatus status);
+
+    // ---- Admin read surface -------------------------------------------
+
+    /** Application count in one status — backs the admin dashboard tiles. */
+    long countByStatus(PermitStatus status);
+
+    /** Permits for a page of sellers, so the seller list can show status. */
+    List<SellerPermitEntity> findBySellerIdIn(Collection<Long> sellerIds);
 }

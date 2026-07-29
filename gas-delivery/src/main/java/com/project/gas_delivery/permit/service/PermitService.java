@@ -17,6 +17,7 @@ import com.project.gas_delivery.permit.exception.PermitNotFoundException;
 import com.project.gas_delivery.permit.exception.PermitStateException;
 import com.project.gas_delivery.permit.repository.PermitDocumentRepository;
 import com.project.gas_delivery.permit.repository.SellerPermitRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -53,14 +54,16 @@ public class PermitService {
     private static final Set<PermitDocumentType> REQUIRED_SLOTS =
             EnumSet.of(
                     PermitDocumentType.APPLICATION_FORM,
-                    PermitDocumentType.BIRTH_CERTIFICATE,
-                    PermitDocumentType.NATIONAL_ID);
+                    PermitDocumentType.NATIONAL_ID,
+                    PermitDocumentType.BUSINESS_LICENSE,
+                    PermitDocumentType.PASSPORT_PHOTO);
 
     private final SellerPermitRepository permitRepository;
     private final PermitDocumentRepository documentRepository;
     private final PermitDocumentStorageService storageService;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private SellerApplicationPdfService pdfService;
 
     public PermitService(SellerPermitRepository permitRepository,
                          PermitDocumentRepository documentRepository,
@@ -72,6 +75,17 @@ public class PermitService {
         this.storageService = storageService;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
+    }
+
+    /**
+     * Late-bound setter for {@link SellerApplicationPdfService} — the
+     * PDF service sits in the same package but is only used on the
+     * approval / download paths. Wiring it through the constructor would
+     * risk a circular bean, so Spring calls this after construction.
+     */
+    @Autowired(required = false)
+    public void setPdfService(SellerApplicationPdfService pdfService) {
+        this.pdfService = pdfService;
     }
 
     // ---- seller-side: lazy permit + read --------------------------------
@@ -175,7 +189,7 @@ public class PermitService {
         missing.removeAll(present);
         if (!missing.isEmpty()) {
             throw new PermitStateException(
-                    "Missing required documents: " + missing + ". Please upload all three.");
+                    "Missing required documents: " + missing + ". Please upload all required documents.");
         }
 
         permit.setBusinessName(request.businessName().trim());
@@ -330,13 +344,11 @@ public class PermitService {
                     "You are not allowed to view this document.");
         }
 
-        // Sellers may only download the licence — never the underlying
-        // application form, birth certificate, or national ID.
-        if (isOwningSeller && document.getDocumentType() != PermitDocumentType.LICENSE) {
-            throw new NotAuthorizedException(
-                    "Sellers can only download their approved licence.");
-        }
-
+        // The owning seller can view any of their own documents — the
+        // application form, supporting scans, and the issued licence. The
+        // previous "sellers may only download the licence" rule predates
+        // the in-app preview and locked the seller out of viewing the
+        // very files they uploaded. Admins can always view.
         Path path = storageService.resolve(document.getStorageKey());
         return new DocumentStream(path, document.getContentType(),
                 document.getOriginalName(), document.getSizeBytes());
@@ -356,6 +368,57 @@ public class PermitService {
         List<Long> ids = permitRepository.findSellerIdsByStatus(PermitStatus.APPROVED);
         if (ids.isEmpty()) return Set.of();
         return new java.util.HashSet<>(ids);
+    }
+
+    /**
+     * Build a snapshot of the seller's permit + user record suitable for
+     * rendering the issued licence PDF. Pulls name, email and phone from
+     * {@code users} so the document reflects the latest values, not
+     * whatever was on file at submission.
+     */
+    @Transactional(readOnly = true)
+    public SellerApplicationPdfService.IssuedLicenseData buildIssuedLicenseData(Long sellerId) {
+        SellerPermitEntity permit = permitRepository.findBySellerId(sellerId)
+                .orElseThrow(() -> new PermitNotFoundException(
+                        "No permit application exists for seller " + sellerId + "."));
+        if (permit.getStatus() != PermitStatus.APPROVED) {
+            throw new PermitStateException(
+                    "Licence is only available for approved sellers.");
+        }
+        User seller = userRepository.findById(sellerId)
+                .orElseThrow(() -> new PermitNotFoundException(
+                        "Seller " + sellerId + " no longer exists."));
+        String reviewerName = permit.getReviewedBy() == null
+                ? ""
+                : userRepository.findById(permit.getReviewedBy())
+                        .map(User::getFullName)
+                        .orElse("");
+        String businessName = permit.getBusinessName() == null
+                ? ""
+                : permit.getBusinessName();
+        String businessAddress = businessName.contains(" — ")
+                ? businessName.substring(businessName.indexOf(" — ") + 3)
+                : "";
+        return new SellerApplicationPdfService.IssuedLicenseData(
+                "GSL-" + String.format("%06d", permit.getId()),
+                stripAddressSuffix(businessName),
+                businessAddress,
+                "Retail Gas Outlet",
+                businessAddress,
+                seller.getFullName(),
+                seller.getEmail(),
+                seller.getPhone() == null ? "" : seller.getPhone(),
+                "",
+                reviewerName,
+                permit.getRejectionReason() == null ? "" : permit.getRejectionReason(),
+                permit.getReviewedAt()
+        );
+    }
+
+    private static String stripAddressSuffix(String businessName) {
+        if (businessName == null) return "";
+        int idx = businessName.indexOf(" — ");
+        return idx < 0 ? businessName : businessName.substring(0, idx);
     }
 
     /** True if a permit row exists for the seller — used by the legacy V3 seed exemption. */

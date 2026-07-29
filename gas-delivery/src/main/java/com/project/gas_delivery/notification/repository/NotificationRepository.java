@@ -20,4 +20,9 @@ public interface NotificationRepository extends JpaRepository<NotificationEntity
     @Modifying
     @Query("UPDATE NotificationEntity n SET n.read = true WHERE n.userId = :userId AND n.read = false")
     int markAllRead(@Param("userId") Long userId);
+
+    // ---- Admin read surface -------------------------------------------
+
+    /** Every user's feed, newest first — the admin notification log. */
+    List<NotificationEntity> findAllByOrderByCreatedAtDesc();
 }

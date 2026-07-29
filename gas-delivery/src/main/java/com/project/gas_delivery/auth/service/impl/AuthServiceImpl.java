@@ -4,6 +4,7 @@ import com.project.gas_delivery.auth.dto.AuthResponse;
 import com.project.gas_delivery.auth.dto.LoginRequest;
 import com.project.gas_delivery.auth.dto.RegisterRequest;
 import com.project.gas_delivery.auth.entity.User;
+import com.project.gas_delivery.auth.enums.Role;
 import com.project.gas_delivery.auth.exception.BadRequestException;
 import com.project.gas_delivery.auth.repository.UserRepository;
 import com.project.gas_delivery.auth.service.AuthService;
@@ -67,8 +68,9 @@ public class AuthServiceImpl implements AuthService {
         // a freshly registered SELLER must not appear to customers or
         // receive orders until an administrator approves their permit
         // application. Non-seller roles (CUSTOMER, RIDER, SUPPLIER, ADMIN)
-        // remain active by default.
-        if (request.role() == com.project.gas_delivery.auth.enums.Role.SELLER) {
+        // remain active by default. The seller is still allowed to log in
+        // straight after registration — see {@link #login(LoginRequest)}.
+        if (request.role() == Role.SELLER) {
             user.setActive(false);
         }
         User saved = userRepository.save(user);
@@ -89,12 +91,26 @@ public class AuthServiceImpl implements AuthService {
         User user = found.orElseThrow(() ->
                 new BadCredentialsException("Invalid username/email or password"));
 
-        if (!user.isActive()) {
-            throw new BadCredentialsException("Account is disabled");
-        }
-
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new BadCredentialsException("Invalid username/email or password");
+        }
+
+        // Password is correct at this point. Pending sellers are allowed
+        // to log in so they can complete their permit application from
+        // the seller portal — admin approval is only required before the
+        // seller can conduct business (appear in the customer list,
+        // accept orders, update stock). Those downstream gates
+        // (SellerProfileService.listAll, OrderServiceImpl.create,
+        // ProductService.updateStock, the seller layout drawer) already
+        // use `users.is_active` and the permit status, so unlocking
+        // login here is sufficient — no extra "is active" check is
+        // needed on the seller path.
+        //
+        // Non-seller inactive accounts (legacy admin-disabled) keep the
+        // original bad-credentials fallback so the seller-specific
+        // branches above it stay un-branched.
+        if (!user.isActive() && user.getRole() != Role.SELLER) {
+            throw new BadCredentialsException("Account is disabled");
         }
 
         String token = issueToken(user);

@@ -1,8 +1,6 @@
 package com.project.gas_delivery.admin.controller;
 
-import com.project.gas_delivery.auth.enums.Role;
-import com.project.gas_delivery.auth.security.AuthFilter;
-import com.project.gas_delivery.order.exception.NotAuthorizedException;
+import com.project.gas_delivery.admin.AdminGuard;
 import com.project.gas_delivery.permit.dto.PermitDocumentDto;
 import com.project.gas_delivery.permit.dto.RejectPermitRequest;
 import com.project.gas_delivery.permit.dto.SellerPermitDto;
@@ -96,15 +94,7 @@ public class AdminPermitController {
     }
 
     private static Long requireAdmin(HttpServletRequest request) {
-        Long actorId = AuthFilter.currentActorId(request);
-        Role role = AuthFilter.currentActorRole(request);
-        if (actorId == null || role == null) {
-            throw new NotAuthorizedException("Authentication required.");
-        }
-        if (role != Role.ADMIN) {
-            throw new NotAuthorizedException("Only administrators can manage permit applications.");
-        }
-        return actorId;
+        return AdminGuard.requireAdmin(request);
     }
 
     private static PermitStatus parseStatus(String raw) {

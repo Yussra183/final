@@ -1,5 +1,7 @@
 package com.project.gas_delivery.auth.exception;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -8,6 +10,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
 import java.util.Map;
@@ -35,6 +38,8 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<Map<String, Object>> handleNotFound(ResourceNotFoundException ex) {
         return ApiErrorBody.of(HttpStatus.NOT_FOUND, ex.getMessage(), "NOT_FOUND", null);
@@ -56,6 +61,45 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<Map<String, Object>> handleBadCredentials(BadCredentialsException ex) {
         return ApiErrorBody.of(HttpStatus.UNAUTHORIZED, "Invalid email or password", "BAD_CREDENTIALS", null);
+    }
+
+    /**
+     * Seller-specific: the account is correct but the permit is still
+     * awaiting admin review (status PENDING or UNDER_REVIEW). Surfaced
+     * with HTTP 403 and a dedicated code so the frontend can render a
+     * "waiting for admin approval" message instead of the generic
+     * wrong-password alert. Placed before the AuthenticationException
+     * handler below so Spring picks the more specific exception type.
+     */
+    @ExceptionHandler(AccountPendingApprovalException.class)
+    public ResponseEntity<Map<String, Object>> handleAccountPendingApproval(AccountPendingApprovalException ex) {
+        java.util.List<String> details = ex.getStatus() == null
+                ? null
+                : java.util.List.of("status:" + ex.getStatus());
+        return ApiErrorBody.of(
+                HttpStatus.FORBIDDEN,
+                "Your account is waiting for admin approval.",
+                "ACCOUNT_PENDING_APPROVAL",
+                details
+        );
+    }
+
+    /**
+     * Seller-specific: the permit application was rejected by an admin.
+     * The seller can re-upload documents and submit a new application.
+     * HTTP 403 with the rejection reason in the message and details.
+     */
+    @ExceptionHandler(AccountRejectedException.class)
+    public ResponseEntity<Map<String, Object>> handleAccountRejected(AccountRejectedException ex) {
+        java.util.List<String> details = ex.getRejectionReason() == null
+                ? null
+                : java.util.List.of("reason:" + ex.getRejectionReason());
+        return ApiErrorBody.of(
+                HttpStatus.FORBIDDEN,
+                ex.getMessage(),
+                "ACCOUNT_REJECTED",
+                details
+        );
     }
 
     @ExceptionHandler(AuthenticationException.class)
@@ -157,6 +201,29 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
         return ApiErrorBody.of(HttpStatus.INTERNAL_SERVER_ERROR,
                 "An unexpected error occurred", "INTERNAL_ERROR", null);
+    }
+
+    /**
+     * The frontend's bulk {@code /api/...} refresh calls several endpoints
+     * the backend does not yet expose (e.g. {@code /api/users},
+     * {@code /api/restock}, {@code /api/complaints}). Spring's static
+     * resource handler raises a {@link NoResourceFoundException} for
+     * those paths; without a dedicated handler the catch-all above
+     * converts them to HTTP 500, which makes the store surface
+     * "Couldn't refresh data" after a successful login.
+     *
+     * <p>Map this exception to a proper 404 with a stable
+     * {@code NOT_FOUND} code so the frontend's {@code Promise.allSettled}
+     * treats it as an empty list rather than a server crash. The
+     * underlying stack trace is still logged at WARN level for ops to
+     * see which endpoint is being requested.</p>
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNoResource(NoResourceFoundException ex) {
+        log.warn("No handler found for request path: {}", ex.getResourcePath());
+        return ApiErrorBody.of(HttpStatus.NOT_FOUND,
+                "No endpoint mapped to " + ex.getResourcePath(),
+                "NOT_FOUND", null);
     }
 
     // --- helpers ---

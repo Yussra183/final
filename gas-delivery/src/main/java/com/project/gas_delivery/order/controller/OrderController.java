@@ -58,9 +58,9 @@ public class OrderController {
     @GetMapping
     public List<OrderResponse> list(
             HttpServletRequest request,
-            @RequestParam(required = false) String customerId,
-            @RequestParam(required = false) String sellerId,
-            @RequestParam(required = false) String riderId
+            @RequestParam(name = "customerId", required = false) String customerId,
+            @RequestParam(name = "sellerId", required = false) String sellerId,
+            @RequestParam(name = "riderId", required = false) String riderId
     ) {
         Long actorId = requireActorId(request);
         Role actorRole = requireActorRole(request);
