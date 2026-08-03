@@ -7,6 +7,8 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -41,7 +43,23 @@ public class NotificationEntity {
     @Column(name = "message", nullable = false, columnDefinition = "TEXT")
     private String message;
 
-    /** JSON metadata blob — Hibernate maps to PostgreSQL JSONB. */
+    /**
+     * JSON metadata blob. The PostgreSQL column is {@code jsonb} (see V4
+     * migration). Hibernate must bind the parameter as a JSONB value, not
+     * a VARCHAR — otherwise Postgres rejects the insert with
+     * {@code ERROR: column "data" is of type jsonb but expression is of
+     * type character varying}.
+     *
+     * <p>{@code @JdbcTypeCode(SqlTypes.JSON)} (Hibernate 6 / Spring Boot
+     * 4) tells the JPA layer to map this field through Hibernate's
+     * built-in JSON type, which produces a {@code jsonb} parameter type
+     * and reads the column back as a JSON string. We keep the Java field
+     * as {@code String} so callers (e.g. {@code PermitService}) can keep
+     * their existing hand-rolled JSON serialiser; Hibernate's JSON binder
+     * handles the {@code ?::jsonb} cast on write and the JSON-to-string
+     * unwrap on read.</p>
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "data", columnDefinition = "jsonb")
     private String data;
 

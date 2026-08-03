@@ -6,9 +6,12 @@ import com.project.gas_delivery.permit.dto.RejectPermitRequest;
 import com.project.gas_delivery.permit.dto.SellerPermitDto;
 import com.project.gas_delivery.permit.enums.PermitStatus;
 import com.project.gas_delivery.permit.service.PermitService;
+import com.project.gas_delivery.permit.service.SellerApplicationPdfService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,6 +30,7 @@ import java.util.List;
  *   <li>{@code GET  /api/admin/permits?status=}            – review queue.</li>
  *   <li>{@code GET  /api/admin/permits/{id}}               – single permit.</li>
  *   <li>{@code GET  /api/admin/permits/{id}/documents}     – document metadata list.</li>
+ *   <li>{@code GET  /api/admin/permits/{id}/license}       – stream the regenerated Gas Selling Permit PDF.</li>
  *   <li>{@code POST /api/admin/permits/{id}/approve}       – approve + upload licence PDF.</li>
  *   <li>{@code POST /api/admin/permits/{id}/reject}        – reject with reason.</li>
  * </ul>
@@ -41,17 +45,23 @@ import java.util.List;
 public class AdminPermitController {
 
     private final PermitService permitService;
+    private final SellerApplicationPdfService pdfService;
 
-    public AdminPermitController(PermitService permitService) {
+    public AdminPermitController(PermitService permitService,
+                                 SellerApplicationPdfService pdfService) {
         this.permitService = permitService;
+        this.pdfService = pdfService;
     }
 
     @GetMapping
     public List<SellerPermitDto> list(
             HttpServletRequest request,
-            @RequestParam(required = false) String status
+            // Explicit name "status" — keeps the binding stable even if the
+            // build is run without `-parameters`, and matches the query
+            // string the admin filter UI sends.
+            @RequestParam(name = "status", required = false) String status
     ) {
-        Long adminId = requireAdmin(request);
+        requireAdmin(request);
         PermitStatus filter = status == null || status.isBlank()
                 ? null
                 : parseStatus(status);
@@ -59,7 +69,10 @@ public class AdminPermitController {
     }
 
     @GetMapping("/{id}")
-    public SellerPermitDto get(HttpServletRequest request, @PathVariable Long id) {
+    public SellerPermitDto get(
+            HttpServletRequest request,
+            @PathVariable(name = "id") Long id
+    ) {
         requireAdmin(request);
         return permitService.getForAdmin(id);
     }
@@ -67,16 +80,59 @@ public class AdminPermitController {
     @GetMapping("/{id}/documents")
     public List<PermitDocumentDto> listDocuments(
             HttpServletRequest request,
-            @PathVariable Long id
+            @PathVariable(name = "id") Long id
     ) {
         requireAdmin(request);
         return permitService.listDocumentsForAdmin(id);
     }
 
-    @PostMapping(value = "/{id}/approve", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    /**
+     * Stream the official Gas Selling Permit PDF for an APPROVED permit.
+     * Mirrors the seller-facing {@code GET /api/permits/me/license}, but
+     * is admin-gated so the administrator can view / re-download the
+     * issued licence without impersonating the seller. The PDF is
+     * regenerated on demand by {@link SellerApplicationPdfService}, so
+     * it always reflects the latest application and review data — even
+     * when no admin-uploaded licence file was attached at approval time.
+     */
+    @GetMapping("/{id}/license")
+    public ResponseEntity<byte[]> downloadLicense(
+            HttpServletRequest request,
+            @PathVariable(name = "id") Long id
+    ) {
+        requireAdmin(request);
+        SellerPermitDto permit = permitService.getForAdmin(id);
+        if (!"approved".equalsIgnoreCase(permit.status())) {
+            throw new com.project.gas_delivery.permit.exception.PermitStateException(
+                    "Gas Selling Permit is only available for approved applications.");
+        }
+        // SellerPermitDto.sellerId is the JSON-stringified Long from the
+        // DTO record; buildIssuedLicenseData wants the raw Long.
+        Long sellerId = Long.parseLong(permit.sellerId());
+        SellerApplicationPdfService.IssuedLicenseData data =
+                permitService.buildIssuedLicenseData(sellerId);
+        byte[] body = pdfService.renderIssuedLicense(data);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .contentLength(body.length)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "inline; filename=\"seller-licence-" + permit.sellerId() + ".pdf\"")
+                .body(body);
+    }
+
+    @PostMapping(
+            value = "/{id}/approve",
+            consumes = { MediaType.MULTIPART_FORM_DATA_VALUE, MediaType.APPLICATION_JSON_VALUE }
+    )
     public SellerPermitDto approve(
             HttpServletRequest request,
-            @PathVariable Long id,
+            @PathVariable(name = "id") Long id,
+            // Only meaningful when the request arrives as multipart/form-data.
+            // A JSON request carries no `license` part and the parameter is
+            // simply left null — the existing service already handles a null
+            // licence by skipping the admin-uploaded PDF store step. The
+            // issued permit PDF is regenerated on demand by the seller-facing
+            // /api/permits/me/license endpoint regardless of this branch.
             @RequestParam(value = "license", required = false) MultipartFile license
     ) {
         Long adminId = requireAdmin(request);
@@ -86,7 +142,7 @@ public class AdminPermitController {
     @PostMapping(value = "/{id}/reject", consumes = MediaType.APPLICATION_JSON_VALUE)
     public SellerPermitDto reject(
             HttpServletRequest request,
-            @PathVariable Long id,
+            @PathVariable(name = "id") Long id,
             @Valid @RequestBody RejectPermitRequest body
     ) {
         Long adminId = requireAdmin(request);

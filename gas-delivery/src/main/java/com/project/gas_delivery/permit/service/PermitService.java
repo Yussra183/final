@@ -283,8 +283,8 @@ public class PermitService {
         notificationService.notify(
                 permit.getSellerId(),
                 "permit",
-                "Permit approved",
-                "Congratulations! Your permit application has been approved. You may now start selling gas.",
+                "Seller Permit Approved",
+                "Congratulations! Your Gas Selling Permit Application has been approved. Your seller account is now active. You can now download your official Gas Selling Permit and begin selling.",
                 json(Map.of(
                         "permitId", String.valueOf(permit.getId()),
                         "status", "approved",
@@ -312,8 +312,8 @@ public class PermitService {
         notificationService.notify(
                 permit.getSellerId(),
                 "permit",
-                "Permit rejected",
-                "Your permit application was rejected. Reason: " + permit.getRejectionReason()
+                "Seller Permit Rejected",
+                "Your seller permit has been rejected. Reason: " + permit.getRejectionReason()
                         + ". You may upload corrected documents and submit a new application.",
                 json(Map.of(
                         "permitId", String.valueOf(permit.getId()),
@@ -375,6 +375,12 @@ public class PermitService {
      * rendering the issued licence PDF. Pulls name, email and phone from
      * {@code users} so the document reflects the latest values, not
      * whatever was on file at submission.
+     *
+     * <p>The validity window is derived from {@code reviewedAt} — a
+     * freshly-issued certificate is valid for one calendar year from the
+     * approval date. The seller registration number is the numeric PK
+     * formatted as a six-digit reference ({@code SELL-XXXXXX}) so the
+     * certificate is self-contained for in-person verification.</p>
      */
     @Transactional(readOnly = true)
     public SellerApplicationPdfService.IssuedLicenseData buildIssuedLicenseData(Long sellerId) {
@@ -399,8 +405,19 @@ public class PermitService {
         String businessAddress = businessName.contains(" — ")
                 ? businessName.substring(businessName.indexOf(" — ") + 3)
                 : "";
+        Instant reviewedAt = permit.getReviewedAt() == null
+                ? Instant.now()
+                : permit.getReviewedAt();
+        // One calendar year of validity — matches the typical business-
+        // licence window. We re-derive both dates from `reviewedAt` so
+        // re-downloading the certificate after a backend restart returns
+        // the same expiry.
+        java.time.LocalDate validFrom = reviewedAt.atZone(java.time.ZoneOffset.UTC)
+                .toLocalDate();
+        java.time.LocalDate validUntil = validFrom.plusYears(1);
         return new SellerApplicationPdfService.IssuedLicenseData(
                 "GSL-" + String.format("%06d", permit.getId()),
+                "SELL-" + String.format("%06d", sellerId),
                 stripAddressSuffix(businessName),
                 businessAddress,
                 "Retail Gas Outlet",
@@ -411,7 +428,9 @@ public class PermitService {
                 "",
                 reviewerName,
                 permit.getRejectionReason() == null ? "" : permit.getRejectionReason(),
-                permit.getReviewedAt()
+                reviewedAt,
+                validFrom,
+                validUntil
         );
     }
 

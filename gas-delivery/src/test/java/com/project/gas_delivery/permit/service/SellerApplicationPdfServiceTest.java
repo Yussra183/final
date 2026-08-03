@@ -67,6 +67,7 @@ class SellerApplicationPdfServiceTest {
         SellerApplicationPdfService.IssuedLicenseData data =
                 new SellerApplicationPdfService.IssuedLicenseData(
                         "GSL-000123",
+                        "SELL-000001",
                         "Acme Gas Ltd",
                         "1 Market Street, Stone Town",
                         "Retail Gas Outlet",
@@ -77,7 +78,9 @@ class SellerApplicationPdfServiceTest {
                         "12 Residential Rd, Stone Town",
                         "Admin Smith",
                         "All documents verified",
-                        Instant.parse("2026-07-24T10:15:00Z")
+                        Instant.parse("2026-07-24T10:15:00Z"),
+                        java.time.LocalDate.parse("2026-07-24"),
+                        java.time.LocalDate.parse("2027-07-24")
                 );
 
         byte[] pdf = service.renderIssuedLicense(data);

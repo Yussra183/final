@@ -24,7 +24,8 @@ import java.util.UUID;
  * Reads/writes permit PDF / image bytes on disk.
  *
  * <p>Layout: {@code <app.uploads.dir>/permits/<sellerId>/<type>-<uuid>.<ext>}.
- * The directory tree is created lazily on first write; the
+ * The directory tree is created lazily on first write, and the root is
+ * ensured to exist when the service is first instantiated; the
  * {@code storage_key} persisted on {@link PermitDocumentEntity} is the
  * relative path under {@code app.uploads.dir} so the property can change
  * without rewriting every row.</p>
@@ -39,6 +40,29 @@ import java.util.UUID;
  */
 @Service
 public class PermitDocumentStorageService {
+
+    /**
+     * Ensure the configured upload root exists as soon as the service is
+     * instantiated. The previous behaviour relied on the first write to
+     * create parent directories, which left {@code permit_documents} rows
+     * referencing {@code storage_key}s whose root had been wiped (e.g.
+     * {@code /tmp} on reboot). Pre-creating the root costs nothing on
+     * start-up and prevents the silent regression.
+     */
+    @jakarta.annotation.PostConstruct
+    void ensureRootExists() {
+        try {
+            java.nio.file.Path root = java.nio.file.Paths.get(properties.getDir())
+                    .toAbsolutePath()
+                    .normalize();
+            java.nio.file.Files.createDirectories(root);
+        } catch (java.io.IOException ignored) {
+            // First-write path will surface the real failure; bootstrap
+            // directory creation must never crash the application.
+        }
+    }
+
+
 
     /** Permitted content types per slot. */
     private static final Map<PermitDocumentType, Set<String>> ALLOWED_MIME;
