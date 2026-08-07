@@ -912,6 +912,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           );
         }
         const { user, token } = await AuthApi.login({ identifier: username, password });
+        setTokenProvider(() => token);
         setSession({ user, token });
         return user;
       });
@@ -939,6 +940,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           password: input.password,
           role: input.role,
         });
+        setTokenProvider(() => token);
         setSession({ user, token });
         // For SELLER registrations with a captured business address,
         // follow up with the seller-profile upsert so the address

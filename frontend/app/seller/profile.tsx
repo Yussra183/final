@@ -449,6 +449,21 @@ export default function SellerProfile() {
           setPwdOpen(false);
         }}
       />
+
+      <MapPickerSheet
+        visible={mapPickerOpen}
+        onClose={() => {
+          setMapPickerOpen(false);
+          setAddressOpen(true);
+        }}
+        initialLat={selectedPin?.lat ?? (typeof user?.lat === "number" ? user.lat : undefined)}
+        initialLng={selectedPin?.lng ?? (typeof user?.lng === "number" ? user.lng : undefined)}
+        onConfirm={(coords) => {
+          setSelectedPin(coords);
+          setMapPickerOpen(false);
+          setAddressOpen(true);
+        }}
+      />
     </SafeAreaView>
   );
 }

@@ -36,199 +36,134 @@
 -->
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"
-    />
-    <title>Map picker</title>
-    <style>
-      /* {{PICKER_CSS}} */
 
-      html,
-      body,
-      #map {
-        margin: 0;
-        padding: 0;
-        height: 100%;
-        width: 100%;
-        background: #f1f5f9;
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport"
+    content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <title>Map picker</title>
+  <style>
+    /* {{PICKER_CSS}} */
+
+    html,
+    body,
+    #map {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      background: #f1f5f9;
+      font-family:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .skeleton {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      font-size: 13px;
+      background: #f1f5f9;
+      z-index: 998;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Pin marker used for the draggable pin. */
+    .pin-marker {
+      width: 28px;
+      height: 36px;
+      background: #0f766e;
+      border: 2px solid #fff;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.35);
+    }
+
+    .leaflet-control-attribution {
+      font-size: 10px;
+      opacity: 0.7;
+    }
+
+    .readonly .leaflet-control-attribution {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="skeleton" class="skeleton">Loading map…</div>
+  <div id="map" class="hidden"></div>
+
+  <script>
+    // {{PICKER_JS}}
+
+    "use strict";
+
+    // ---- Bridge helpers ---------------------------------------------
+    // Emit the current pin back to RN. Rounded to 6 dp (~11 cm) so
+    // the RN-side de-dup is stable across re-emits of the same drag.
+    function postPin(lat, lng) {
+      if (
+        typeof lat !== "number" ||
+        typeof lng !== "number" ||
+        !isFinite(lat) ||
+        !isFinite(lng)
+      ) {
+        return;
       }
-      .skeleton {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #64748b;
-        font-size: 13px;
-        background: #f1f5f9;
-        z-index: 998;
+      if (!window.ReactNativeWebView || !window.ReactNativeWebView.postMessage) return;
+      try {
+        window.ReactNativeWebView.postMessage(
+          JSON.stringify({
+            type: "PIN",
+            lat: Math.round(lat * 1e6) / 1e6,
+            lng: Math.round(lng * 1e6) / 1e6,
+          }),
+        );
+      } catch (err) {
+        // RN bridge unavailable (preview / test mode) — silent.
       }
-      .hidden {
-        display: none !important;
+    }
+
+    function postReady() {
+      if (!window.ReactNativeWebView || !window.ReactNativeWebView.postMessage) {
+        setTimeout(postReady, 100);
+        return;
       }
-      /* Pin marker used for the draggable pin. */
-      .pin-marker {
-        width: 28px;
-        height: 36px;
-        background: #0f766e;
-        border: 2px solid #fff;
-        border-radius: 50% 50% 50% 0;
-        transform: rotate(-45deg);
-        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.35);
+      try {
+        window.ReactNativeWebView.postMessage(
+          JSON.stringify({ type: "READY" }),
+        );
+      } catch (err) {
+        setTimeout(postReady, 100);
       }
-      .leaflet-control-attribution {
-        font-size: 10px;
-        opacity: 0.7;
+    }
+
+    // ---- Inbound seed ------------------------------------------------
+    // RN calls this via `injectJavaScript` once the WebView is ready.
+    window.__setView = function (lat, lng, zoom) {
+      if (
+        typeof lat !== "number" ||
+        typeof lng !== "number" ||
+        !isFinite(lat) ||
+        !isFinite(lng)
+      ) {
+        return;
       }
-      .readonly .leaflet-control-attribution {
-        display: none;
+      var z = zoom && isFinite(zoom) ? zoom : 14;
+      window.__SEED__ = { lat: lat, lng: lng, zoom: z };
+      if (window.__MAP__) {
+        window.__MAP__.setView([lat, lng], z);
       }
-    </style>
-  </head>
-  <body>
-    <div id="skeleton" class="skeleton">Loading map…</div>
-    <div id="map" class="hidden"></div>
-
-    <script>
-      // {{PICKER_JS}}
-
-      "use strict";
-
-      // ---- Bridge helpers ---------------------------------------------
-      // Emit the current pin back to RN. Rounded to 6 dp (~11 cm) so
-      // the RN-side de-dup is stable across re-emits of the same drag.
-      function postPin(lat, lng) {
-        if (
-          typeof lat !== "number" ||
-          typeof lng !== "number" ||
-          !isFinite(lat) ||
-          !isFinite(lng)
-        ) {
-          return;
-        }
-        try {
-          window.ReactNativeWebView.postMessage(
-            JSON.stringify({
-              type: "PIN",
-              lat: Math.round(lat * 1e6) / 1e6,
-              lng: Math.round(lng * 1e6) / 1e6,
-            }),
-          );
-        } catch (err) {
-          // RN bridge unavailable (preview / test mode) — silent.
-        }
-      }
-
-      function postReady() {
-        try {
-          window.ReactNativeWebView.postMessage(
-            JSON.stringify({ type: "READY" }),
-          );
-        } catch (err) {
-          // silent
-        }
-      }
-
-      // ---- Inbound seed ------------------------------------------------
-      // RN calls this via `injectJavaScript` once the WebView is ready.
-      window.__setView = function (lat, lng, zoom) {
-        if (
-          typeof lat !== "number" ||
-          typeof lng !== "number" ||
-          !isFinite(lat) ||
-          !isFinite(lng)
-        ) {
-          return;
-        }
-        var z = zoom && isFinite(zoom) ? zoom : 14;
-        window.__SEED__ = { lat: lat, lng: lng, zoom: z };
-        if (window.__MAP__) {
-          window.__MAP__.setView([lat, lng], z);
-        }
-        if (window.__PIN__) {
-          window.__PIN__.setLatLng([lat, lng]);
-        } else if (window.__MAP__) {
-          window.__PIN__ = L.marker([lat, lng], {
-            draggable: true,
-            icon: L.divIcon({
-              className: "",
-              html: '<div class="pin-marker"></div>',
-              iconSize: [28, 36],
-              iconAnchor: [14, 36],
-            }),
-          }).addTo(window.__MAP__);
-          window.__PIN__.on("dragend", function (e) {
-            var ll = e.target.getLatLng();
-            postPin(ll.lat, ll.lng);
-          });
-        }
-      };
-
-      // Toggle read-only mode (used by the inline profile preview).
-      window.__setReadOnly = function (readOnly) {
-        window.__READ_ONLY__ = !!readOnly;
-        if (window.__MAP__) {
-          if (window.__READ_ONLY__) {
-            window.__MAP__.dragging.disable();
-            window.__MAP__.scrollWheelZoom.disable();
-            window.__MAP__.doubleClickZoom.disable();
-            window.__MAP__.touchZoom.disable();
-            window.__MAP__.boxZoom.disable();
-            window.__MAP__.keyboard.disable();
-            document.body.classList.add("readonly");
-          } else {
-            window.__MAP__.dragging.enable();
-            window.__MAP__.scrollWheelZoom.enable();
-            window.__MAP__.doubleClickZoom.enable();
-            window.__MAP__.touchZoom.enable();
-            window.__MAP__.boxZoom.enable();
-            window.__MAP__.keyboard.enable();
-            document.body.classList.remove("readonly");
-          }
-        }
-      };
-
-      // ---- Bootstrapping ----------------------------------------------
-      function boot() {
-        if (typeof L === "undefined") {
-          // Leaflet failed to load; surface to RN for diagnostics.
-          try {
-            window.ReactNativeWebView.postMessage(
-              JSON.stringify({
-                type: "ERROR",
-                message: "Leaflet failed to load",
-              }),
-            );
-          } catch (e) {
-            // silent
-          }
-          return;
-        }
-
-        var seed = window.__SEED__ || { lat: -6.7924, lng: 39.2083, zoom: 14 };
-
-        var map = L.map("map", {
-          center: [seed.lat, seed.lng],
-          zoom: seed.zoom,
-          zoomControl: true,
-          attributionControl: true,
-        });
-        window.__MAP__ = map;
-
-        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          maxZoom: 19,
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        }).addTo(map);
-
-        // Draggable pin — initialised without coordinates so we don't
-        // drop a marker at (0, 0) before the seed arrives.
-        var pin = L.marker([seed.lat, seed.lng], {
+      if (window.__PIN__) {
+        window.__PIN__.setLatLng([lat, lng]);
+      } else if (window.__MAP__) {
+        window.__PIN__ = L.marker([lat, lng], {
           draggable: true,
           icon: L.divIcon({
             className: "",
@@ -236,51 +171,127 @@
             iconSize: [28, 36],
             iconAnchor: [14, 36],
           }),
-        }).addTo(map);
-        window.__PIN__ = pin;
-
-        pin.on("dragend", function (e) {
+        }).addTo(window.__MAP__);
+        window.__PIN__.on("dragend", function (e) {
           var ll = e.target.getLatLng();
           postPin(ll.lat, ll.lng);
         });
+      }
+    };
 
-        map.on("click", function (e) {
-          // In read-only mode (preview), taps don't drop a pin.
-          if (window.__READ_ONLY__) return;
-          pin.setLatLng(e.latlng);
-          postPin(e.latlng.lat, e.latlng.lng);
-        });
-
-        // Hide the skeleton, show the map.
-        var sk = document.getElementById("skeleton");
-        if (sk) sk.classList.add("hidden");
-        var mp = document.getElementById("map");
-        if (mp) mp.classList.remove("hidden");
-
-        // If the seed arrived before Leaflet loaded, replay it now.
-        if (window.__SEED__) {
-          map.setView([window.__SEED__.lat, window.__SEED__.lng], window.__SEED__.zoom);
-          pin.setLatLng([window.__SEED__.lat, window.__SEED__.lng]);
-        }
-
-        // Apply read-only state if RN requested it before boot.
+    // Toggle read-only mode (used by the inline profile preview).
+    window.__setReadOnly = function (readOnly) {
+      window.__READ_ONLY__ = !!readOnly;
+      if (window.__MAP__) {
         if (window.__READ_ONLY__) {
-          window.__setReadOnly(true);
+          window.__MAP__.dragging.disable();
+          window.__MAP__.scrollWheelZoom.disable();
+          window.__MAP__.doubleClickZoom.disable();
+          window.__MAP__.touchZoom.disable();
+          window.__MAP__.boxZoom.disable();
+          window.__MAP__.keyboard.disable();
+          document.body.classList.add("readonly");
+        } else {
+          window.__MAP__.dragging.enable();
+          window.__MAP__.scrollWheelZoom.enable();
+          window.__MAP__.doubleClickZoom.enable();
+          window.__MAP__.touchZoom.enable();
+          window.__MAP__.boxZoom.enable();
+          window.__MAP__.keyboard.enable();
+          document.body.classList.remove("readonly");
         }
+      }
+    };
 
-        // Signal ready. Do NOT auto-emit a PIN postReady — the RN side
-        // uses the absence of a user-driven PIN to detect "seller
-        // hasn't picked yet, keep Confirm disabled". The boot seed is
-        // only visible as a marker on the map; it doesn't get saved
-        // until the user taps or drags.
-        postReady();
+    // ---- Bootstrapping ----------------------------------------------
+    function boot() {
+      if (typeof L === "undefined") {
+        // Leaflet failed to load; surface to RN for diagnostics.
+        try {
+          window.ReactNativeWebView.postMessage(
+            JSON.stringify({
+              type: "ERROR",
+              message: "Leaflet failed to load",
+            }),
+          );
+        } catch (e) {
+          // silent
+        }
+        return;
       }
 
-      if (document.readyState === "complete") {
-        boot();
-      } else {
-        window.addEventListener("load", boot);
+      var seed = window.__SEED__ || { lat: -6.7924, lng: 39.2083, zoom: 14 };
+
+      var map = L.map("map", {
+        center: [seed.lat, seed.lng],
+        zoom: seed.zoom,
+        zoomControl: true,
+        attributionControl: true,
+      });
+      window.__MAP__ = map;
+
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }).addTo(map);
+
+      // Draggable pin — initialised without coordinates so we don't
+      // drop a marker at (0, 0) before the seed arrives.
+      var pin = L.marker([seed.lat, seed.lng], {
+        draggable: true,
+        icon: L.divIcon({
+          className: "",
+          html: '<div class="pin-marker"></div>',
+          iconSize: [28, 36],
+          iconAnchor: [14, 36],
+        }),
+      }).addTo(map);
+      window.__PIN__ = pin;
+
+      pin.on("dragend", function (e) {
+        var ll = e.target.getLatLng();
+        postPin(ll.lat, ll.lng);
+      });
+
+      map.on("click", function (e) {
+        // In read-only mode (preview), taps don't drop a pin.
+        if (window.__READ_ONLY__) return;
+        pin.setLatLng(e.latlng);
+        postPin(e.latlng.lat, e.latlng.lng);
+      });
+
+      // Hide the skeleton, show the map.
+      var sk = document.getElementById("skeleton");
+      if (sk) sk.classList.add("hidden");
+      var mp = document.getElementById("map");
+      if (mp) mp.classList.remove("hidden");
+
+      // If the seed arrived before Leaflet loaded, replay it now.
+      if (window.__SEED__) {
+        map.setView([window.__SEED__.lat, window.__SEED__.lng], window.__SEED__.zoom);
+        pin.setLatLng([window.__SEED__.lat, window.__SEED__.lng]);
       }
-    </script>
-  </body>
+
+      // Apply read-only state if RN requested it before boot.
+      if (window.__READ_ONLY__) {
+        window.__setReadOnly(true);
+      }
+
+      // Signal ready. Do NOT auto-emit a PIN postReady — the RN side
+      // uses the absence of a user-driven PIN to detect "seller
+      // hasn't picked yet, keep Confirm disabled". The boot seed is
+      // only visible as a marker on the map; it doesn't get saved
+      // until the user taps or drags.
+      postReady();
+    }
+
+    if (document.readyState === "complete") {
+      boot();
+    } else {
+      window.addEventListener("load", boot);
+    }
+  </script>
+</body>
+
 </html>

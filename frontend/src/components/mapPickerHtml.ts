@@ -89,6 +89,6 @@ export function getMaterialisedPicker(): MaterialisedPicker {
     // are not blocked as mixed-content. `https://localhost` is the
     // conventional pick for in-memory HTML pages — it gives the
     // WebView a real origin without any DNS round-trip.
-    baseUrl: "",
+    baseUrl: "https://localhost/",
   };
 }
