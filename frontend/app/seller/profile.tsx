@@ -917,21 +917,20 @@ function EditBusinessAddressModal({
                 onPress={submit}
               />
             </View>
+            <MapPickerSheet
+              visible={pickerOpen}
+              onClose={() => setPickerOpen(false)}
+              initialLat={pin?.lat}
+              initialLng={pin?.lng}
+              onConfirm={(coords) => {
+                setPin(coords);
+                setPinChosen(true);
+                setPickerOpen(false);
+              }}
+            />
           </Pressable>
         </Pressable>
       </Modal>
-
-      <MapPickerSheet
-        visible={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        initialLat={pin?.lat}
-        initialLng={pin?.lng}
-        onConfirm={(coords) => {
-          setPin(coords);
-          setPinChosen(true);
-          setPickerOpen(false);
-        }}
-      />
     </>
   );
 }

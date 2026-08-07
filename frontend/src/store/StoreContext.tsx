@@ -931,7 +931,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             input.businessStreet;
           if (hasAnyAddressField) {
             try {
-              await SellersApi.updateMe({
+              const savedSeller = await SellersApi.updateMe({
                 businessName: input.businessName ?? input.fullName,
                 location:
                   input.businessAddress ??
@@ -955,12 +955,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                     ? input.businessLng
                     : undefined,
               });
+              const text = (v?: string | null) => (v ? v : undefined);
+              const num = (v?: number | null) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+              const updatedUser: User = {
+                ...user,
+                address: text(savedSeller.location) ?? input.businessAddress,
+                district: text(savedSeller.district) ?? input.businessDistrict,
+                region: text(savedSeller.region) ?? input.businessRegion,
+                ward: text(savedSeller.ward) ?? input.businessWard,
+                street: text(savedSeller.street) ?? input.businessStreet,
+                lat: num(savedSeller.lat) ?? input.businessLat ?? undefined,
+                lng: num(savedSeller.lng) ?? input.businessLng ?? undefined,
+              };
+              setSession({ user: updatedUser, token });
+              return updatedUser;
             } catch (err) {
-              // Persist the registration regardless — the seller can
-              // complete the business address from their Profile
-              // screen once logged in. Logging only keeps the
-              // registration alert clean while still surfacing the
-              // issue for development.
               console.warn(
                 "[register] seller-profile upsert failed:",
                 (err as Error)?.message,
