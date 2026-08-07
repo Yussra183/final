@@ -38,7 +38,9 @@ import { permitTone } from "../../src/utils/format";
 import { resolveCurrentDeviceCoords } from "../../src/lib/deviceLocation";
 import { MapPickerSheet } from "../../src/components/MapPickerSheet";
 import { ShopMapPreview } from "../../src/components/ShopMapPreview";
+import { Picker } from "@react-native-picker/picker";
 import type { User } from "../../constants/types";
+import { ZANZIBAR_REGIONS, getDistricts, regionLabel, districtLabel } from "../../constants/zanzibar";
 
 /** Field row used inside the profile. */
 function Field(props: {
@@ -125,7 +127,9 @@ export default function SellerProfile() {
         hours: "Mon–Sat, 08:00 – 20:00",
       };
     }
-    const composed = [user.street, user.ward, user.district, user.region]
+    const rLabel = user.region ? regionLabel(user.region) : "";
+    const dLabel = user.region && user.district ? districtLabel(user.region, user.district) : (user.district ?? "");
+    const composed = [user.street, user.ward, dLabel, rLabel]
       .map((p) => (p ?? "").trim())
       .filter(Boolean)
       .join(", ");
@@ -133,12 +137,15 @@ export default function SellerProfile() {
       user.address?.trim() ||
       composed ||
       "Address not set";
+    const shopName =
+      permit?.businessName?.trim() ||
+      `${user.fullName}'s Shop`;
     return {
-      name: `${user.fullName}'s Shop`,
+      name: shopName,
       address: displayAddress,
       hours: "Mon–Sat, 08:00 – 20:00",
     };
-  }, [user]);
+  }, [user, permit]);
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -703,7 +710,7 @@ function EditBusinessAddressModal({
   // because nothing has been chosen in the new session yet.
   React.useEffect(() => {
     if (!visible) return;
-    setName(user?.fullName ?? "");
+    setName(businessName || user?.fullName || "");
     setRegion(user?.region ?? "");
     setDistrict(user?.district ?? "");
     setWard(user?.ward ?? "");
@@ -722,11 +729,11 @@ function EditBusinessAddressModal({
     }
     setPinChosen(false);
     setPickerOpen(false);
-  }, [visible, user]);
+  }, [visible, user, businessName]);
 
   const composed = useMemo(
     () =>
-      [street, ward, district, region]
+      [street, ward, districtLabel(region, district), regionLabel(region)]
         .map((p) => (p ?? "").trim())
         .filter(Boolean)
         .join(", "),
@@ -792,16 +799,48 @@ function EditBusinessAddressModal({
                 onChangeText={setName}
                 autoCapitalize="words"
               />
-              <AppInput
-                label="Region"
-                value={region}
-                onChangeText={setRegion}
-              />
-              <AppInput
-                label="District"
-                value={district}
-                onChangeText={setDistrict}
-              />
+
+              {/* Region Picker */}
+              <View style={{ marginBottom: Spacing.md }}>
+                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: "700", marginBottom: 6 }}>
+                  Region
+                </Text>
+                <View style={{ borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.surfaceMuted, overflow: "hidden" }}>
+                  <Picker
+                    selectedValue={region}
+                    onValueChange={(v) => {
+                      setRegion(v);
+                      setDistrict("");
+                    }}
+                    style={{ height: 50, color: Colors.text }}
+                  >
+                    <Picker.Item label="Select region..." value="" color={Colors.textMuted} />
+                    {ZANZIBAR_REGIONS.map((r) => (
+                      <Picker.Item key={r.value} label={r.label} value={r.value} />
+                    ))}
+                  </Picker>
+                </View>
+              </View>
+
+              {/* District Picker */}
+              <View style={{ marginBottom: Spacing.md }}>
+                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: "700", marginBottom: 6 }}>
+                  District
+                </Text>
+                <View style={{ borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.surfaceMuted, overflow: "hidden" }}>
+                  <Picker
+                    selectedValue={district}
+                    onValueChange={(v) => setDistrict(v)}
+                    style={{ height: 50, color: Colors.text }}
+                  >
+                    <Picker.Item label={region ? "Select district..." : "Select region first"} value="" color={Colors.textMuted} />
+                    {getDistricts(region).map((d) => (
+                      <Picker.Item key={d.value} label={d.label} value={d.value} />
+                    ))}
+                  </Picker>
+                </View>
+              </View>
+
               <AppInput
                 label="Ward"
                 value={ward}
