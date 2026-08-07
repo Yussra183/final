@@ -29,7 +29,7 @@ export default function EditProfileScreen() {
   const [fullName, setFullName] = useState(user.fullName);
   const [email, setEmail] = useState(user.email);
   const [phone, setPhone] = useState(user.phone);
-  const [address, setAddress] = useState("Plot 12, Mikocheni B, Dar es Salaam");
+  const [address, setAddress] = useState(user.address ?? "");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 

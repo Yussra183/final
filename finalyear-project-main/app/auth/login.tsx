@@ -35,8 +35,9 @@ export default function LoginScreen() {
   //
   // For network failures (`storeErrorCode === "NETWORK"` — the
   // classic "Could not reach backend at http://10.x.x.x:8080" alert)
-  // we surface a one-tap fix: `npm run dev:tunnel` does everything
-  // (backend + tunnel + .env update + Expo) in a single command.
+  // we surface a one-tap fix: re-running `npm run dev:lan` redetects
+  // the laptop's current LAN IP, rewrites `.env.local`, and starts
+  // Expo against the new value — no manual edits required.
   //
   // Pending and rejected sellers are allowed to log in — the seller
   // portal surfaces their permit status via the dashboard banner and
@@ -48,9 +49,9 @@ export default function LoginScreen() {
         "Cannot reach the server",
         `${storeError}\n\n` +
           "Most likely cause: the URL in .env.local is a LAN IP that no longer matches your Wi-Fi.\n\n" +
-          "Permanent fix — run this once in the project folder:\n" +
-          "  npm run dev:tunnel\n\n" +
-          "It starts the backend, opens a Cloudflare tunnel, writes the new URL into .env.local and launches Expo for you. Switching Wi-Fi after that needs no edits.",
+          "Fix — run this in the project folder:\n" +
+          "  npm run dev:lan\n\n" +
+          "It redetects the laptop's current LAN IP, rewrites .env.local and launches Expo for you. Make sure the Spring Boot backend is running first (`cd gas-delivery && mvn spring-boot:run`).",
       );
     } else {
       Alert.alert("Login failed", storeError);
@@ -133,30 +134,6 @@ export default function LoginScreen() {
             <Link href="/auth/forgot-password" style={styles.link}>
               Forgot Password?
             </Link>
-
-            <View style={styles.divider} />
-
-            <Text style={styles.helperText}>Demo accounts (password: Password1!)</Text>
-            <View style={styles.demoRow}>
-              {[
-                { name: "asha", role: "Customer" },
-                { name: "gaspro", role: "Seller" },
-                { name: "hassan", role: "Rider" },
-                { name: "msaidi", role: "Supplier" },
-                { name: "admin", role: "Admin" },
-              ].map((d) => (
-                <TouchableOpacity
-                  key={d.name}
-                  style={styles.demoChip}
-                  onPress={() => {
-                    setUsername(d.name);
-                    setPassword("Password1!");
-                  }}
-                >
-                  <Text style={styles.demoChipText}>{d.role}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
 
             <Link href="/auth/register" style={styles.link}>
               Don&apos;t have an account? Register

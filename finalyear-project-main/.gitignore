@@ -30,16 +30,10 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# Cloudflare tunnel — never commit credentials or the populated config.
-# `config.yml.example` IS tracked (it's the safe template); the bare
-# `config.yml` and any `*.json` credentials file are not.
-cloudflared/*.json
-cloudflared/config.yml
-
 # local env files
 .env*.local
 
-# dev-tunnel launcher scratch dir — daemon PIDs, log files
+# dev launcher scratch dir — preserved across runs for state
 .runtime/
 
 # typescript

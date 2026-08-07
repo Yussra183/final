@@ -3,40 +3,20 @@
  *
  * USE_MOCK is `false` — the app talks to the live Spring Boot backend.
  *
- * ## The stable-URL rule (never edit source for a Wi-Fi change again)
+ * ## The base-URL rule (LAN IP, kept fresh on every dev launch)
  *
  * The backend URL is read from the `EXPO_PUBLIC_API_BASE_URL` environment
- * variable. Set it once in `.env.local` (git-ignored) and it applies to
- * BOTH the REST client and the WebSocket tracking channel — `buildWsUrl()`
- * below derives `ws(s)://…/ws/tracking` from this same value, so there is
- * only ever one URL to configure.
+ * variable. The `npm run dev:lan` launcher (`scripts/dev-lan-url.js`)
+ * detects the laptop's current LAN IPv4 on every run, probes the
+ * backend on that IP, and writes the URL here *and* injects it into the
+ * Expo child's environment so the bundle is rebuilt with the right
+ * value. As long as the phone shares the laptop's Wi-Fi, the app
+ * reaches the backend with zero manual edits.
  *
- * ## Recommended: Cloudflare Tunnel (stable across every network)
- *
- * A LAN IP changes every time you switch Wi-Fi (home, campus, hotspot),
- * which is what breaks physical-device builds with "Network request
- * failed". A dev tunnel gives you a fixed public URL that survives any
- * network change.
- *
- * RECOMMENDED — a Cloudflare *named* tunnel gives you a URL (under YOUR
- * domain) that never changes between runs. One-time setup + per-session
- * commands are in `scripts/setup-named-tunnel.md`:
- *
- *   1. Follow scripts/setup-named-tunnel.md once (login, tunnel create,
- *      route dns, copy config.yml.example → ~/.cloudflared/config.yml).
- *   2. Each session, in two terminals:
- *        cd gas-delivery && mvn spring-boot:run            # port 8080
- *        cloudflared tunnel run <your-tunnel-name>          # stable URL
- *   3. Set EXPO_PUBLIC_API_BASE_URL=https://<your-reserved-hostname>
- *      in .env.local and restart Expo (`npx expo start`).
- *
- * FALLBACK — `cloudflared tunnel --url http://localhost:8080` mints a
- * fresh `*.trycloudflare.com` URL every restart; works in a pinch but
- * you'll be editing `.env.local` after every restart. Ngrok is the same
- * pattern: `ngrok http 8080` → use its `https://` URL.
- *
- * An `https://` URL automatically yields a secure `wss://` WebSocket.
- * Ngrok works the same way: `ngrok http 8080` → use its `https://` URL.
+ * Wi-Fi changes automatically. If you switch Wi-Fi (or DHCP hands out
+ * a new IP after a reboot), just re-run `npm run dev:lan` — the
+ * launcher redetects the IP, rewrites `.env.local`, and starts Expo
+ * against the new value.
  *
  * ## Fallback (no env var set): emulator / simulator loopback probe
  *
@@ -44,12 +24,13 @@
  * list of loopback candidates and uses the first that answers within 2 s
  * (see `CANDIDATE_HOSTS` / `resolveBaseUrl` below). This keeps a
  * freshly-cloned project working on an emulator/simulator with zero
- * config. Physical devices should always set the env var above.
+ * config. Physical devices should always run `npm run dev:lan` so the
+ * URL stays in sync with the laptop's current LAN IP.
  *
  * Platform cheatsheet:
  *   - Android emulator:    http://10.0.2.2:8080   (host-loopback alias)
  *   - iOS simulator / web: http://localhost:8080
- *   - Physical device:     set EXPO_PUBLIC_API_BASE_URL (tunnel URL)
+ *   - Physical device:     `npm run dev:lan` keeps the URL fresh
  *
  * If the backend is unreachable, the login screen surfaces a clear
  * "Could not reach backend at …" alert.
@@ -61,13 +42,12 @@ import { Platform } from "react-native";
  * Default base URL baked into the bundle, used only when
  * {@link EXPO_PUBLIC_API_BASE_URL} is unset. Points at the plain
  * loopback so an iOS-simulator / web build works out-of-the-box; the
- * Android-emulator alias and physical-device tunnel URL are supplied by
- * the probe ({@link CANDIDATE_HOSTS}) and the env var respectively.
+ * Android-emulator alias and physical-device URL are supplied by the
+ * probe ({@link CANDIDATE_HOSTS}) and `npm run dev:lan` respectively.
  *
- * There is intentionally NO hardcoded LAN IP here — a LAN IP changes on
- * every Wi-Fi switch and is the classic cause of "Network request
- * failed". Set {@link EXPO_PUBLIC_API_BASE_URL} (ideally a stable tunnel
- * URL) instead of editing this constant.
+ * There is intentionally NO hardcoded LAN IP here — a LAN IP changes
+ * on every Wi-Fi switch and is the classic cause of "Network request
+ * failed". Run `npm run dev:lan` instead of editing this constant.
  */
 const DEFAULT_BASE_URL = "http://localhost:8080";
 
@@ -81,12 +61,8 @@ const DEFAULT_BASE_URL = "http://localhost:8080";
  * build works with zero config. They exist so a freshly-cloned project
  * works without any `EXPO_PUBLIC_API_BASE_URL` setup.
  *
- * For a physical device on a real Wi-Fi, the auto-detect in
- * `resolveBaseUrl()` (it reads the device's own LAN IP via
- * `react-native`'s `Network.getIPAddress()` and probes `<ip>:8080`)
- * usually finds a backend running on the dev laptop without any user
- * setup. For a permanent, network-agnostic URL, prefer the Cloudflare
- * tunnel path described at the top of this file.
+ * For a physical device on a real Wi-Fi, run `npm run dev:lan` so the
+ * URL tracks the dev laptop's current LAN IP without any user setup.
  */
 const CANDIDATE_HOSTS: string[] = [
   // Android emulator alias for the host machine's localhost.
@@ -101,7 +77,7 @@ const CANDIDATE_HOSTS: string[] = [
 /**
  * Returns the active base URL. Priority:
  *   1. `EXPO_PUBLIC_API_BASE_URL` (Expo public env vars are inlined at
- *      build time — restart `expo start` after changing them).
+ *      build time — `npm run dev:lan` keeps this fresh automatically).
  *   2. {@link DEFAULT_BASE_URL} (edit this file).
  *
  * Note: this is the synchronous "first guess". The async
@@ -167,6 +143,14 @@ export function buildWsUrl(httpBase: string): string {
 }
 
 /**
+ * Last host that answered the probe. Persisted in memory so a NETWORK
+ * recovery skips every candidate we already proved dead and gets to
+ * the working host faster. Cleared whenever the device changes network
+ * (see {@link subscribeToNetworkChanges}).
+ */
+let lastKnownGoodHost: string | null = null;
+
+/**
  * Asynchronously picks the first reachable backend host by probing
  * `/api/sellers` (the cheapest endpoint that returns JSON). Mutates
  * `API_CONFIG.BASE_URL` in place so the rest of the app picks up the
@@ -174,13 +158,14 @@ export function buildWsUrl(httpBase: string): string {
  *
  * Candidate order:
  *   1. The explicitly configured base URL (env var or DEFAULT_BASE_URL).
- *   2. The device's own LAN IP, port 8080 (only probed when it isn't
+ *   2. The last-known-good host from a previous successful probe.
+ *   3. The device's own LAN IP, port 8080 (only probed when it isn't
  *      already a loopback). This is what makes the app find a Spring
  *      Boot backend running on the dev laptop *with no env var set at
  *      all* — as long as the phone and laptop share a Wi-Fi.
- *   3. The platform loopback alias (`10.0.2.2` on Android emulator,
+ *   4. The platform loopback alias (`10.0.2.2` on Android emulator,
  *      `localhost` elsewhere).
- *   4. {@link CANDIDATE_HOSTS} as a final fallback.
+ *   5. {@link CANDIDATE_HOSTS} as a final fallback.
  *
  * The probe runs in the background — the caller can `await` it before
  * the first request, or let it complete lazily. The returned promise
@@ -188,7 +173,43 @@ export function buildWsUrl(httpBase: string): string {
  * configured `BASE_URL` untouched.
  */
 export async function resolveBaseUrl(timeoutMs = 2000): Promise<string> {
-  // Build the candidate list in priority order.
+  const resolved = await probeForReachableBaseUrl(timeoutMs);
+  if (resolved) {
+    lastKnownGoodHost = resolved;
+    return resolved;
+  }
+  return API_CONFIG.BASE_URL;
+}
+
+/**
+ * Re-probe the candidate list, returning the first host that answers
+ * (or `null` if every candidate fails). Used by the API client when a
+ * request fails with a NETWORK error so the next retry attempt can hit
+ * the right host without the user manually editing `.env.local`.
+ *
+ * The candidate ordering is identical to {@link resolveBaseUrl} but
+ * the last-known-good host is tested first — that's the host that was
+ * working seconds ago, so it's the most likely candidate to be live
+ * again after a brief backend restart.
+ */
+export async function recoverBaseUrl(timeoutMs = 1500): Promise<string | null> {
+  const resolved = await probeForReachableBaseUrl(timeoutMs);
+  if (resolved) {
+    lastKnownGoodHost = resolved;
+    return resolved;
+  }
+  return null;
+}
+
+/**
+ * Internal: probe every candidate in priority order, return the first
+ * host that answers. Pulled out of {@link resolveBaseUrl} so both the
+ * boot-time resolver and the runtime NETWORK-recovery code share one
+ * candidate pipeline.
+ */
+async function probeForReachableBaseUrl(
+  timeoutMs: number,
+): Promise<string | null> {
   const configured = API_CONFIG.BASE_URL;
   const platformLocal =
     Platform.OS === "android" ? "10.0.2.2:8080" : "localhost:8080";
@@ -210,6 +231,8 @@ export async function resolveBaseUrl(timeoutMs = 2000): Promise<string> {
       }
     }
   };
+  // Last-known-good wins first — the user was just connected there.
+  if (lastKnownGoodHost) push(lastKnownGoodHost);
   push(configured);
 
   // Auto-detect the device's own LAN IP. If the phone says it's on
@@ -225,7 +248,7 @@ export async function resolveBaseUrl(timeoutMs = 2000): Promise<string> {
   push(`http://${platformLocal}`);
   for (const h of CANDIDATE_HOSTS) push(h);
 
-  // Try each candidate in order; resolve with the first that answers.
+  // Try each candidate in order; return the first that answers.
   for (const url of candidates) {
     try {
       const ok = await probe(url, timeoutMs);
@@ -237,7 +260,17 @@ export async function resolveBaseUrl(timeoutMs = 2000): Promise<string> {
       // Continue to next candidate.
     }
   }
-  return configured;
+  return null;
+}
+
+/**
+ * Mark the cached last-known-good host as stale. Called whenever the
+ * device's network interface changes (Wi-Fi switch, VPN tunnel up,
+ * etc.) so the next probe re-discovers the live host rather than
+ * sticking with a possibly-unreachable cache entry.
+ */
+export function invalidateCachedHost(): void {
+  lastKnownGoodHost = null;
 }
 
 /**
@@ -256,8 +289,8 @@ async function getDeviceLanIp(): Promise<string | null> {
   // The lightweight, dep-free path: `react-native`'s built-in
   // `Network` module via `getIPAddress()`. It returns the device's
   // primary IPv4 as a string, or `null` on failure. Wrapped in a
-   // dynamic require so this module is still web-safe (where the
-   // polyfill would throw).
+  // dynamic require so this module is still web-safe (where the
+  // polyfill would throw).
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const RN: { Network?: { getIPAddress?: () => Promise<string | null> } } =

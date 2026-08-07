@@ -76,14 +76,19 @@ export interface User {
   role: UserRole;
   createdAt: string;
   /**
-   * Customer-profile location. Optional today; when present it will be
-   * used by the home-screen "Nearby Sellers" pipeline to scope the
-   * recommendation list. Once GPS is wired up, `lat` / `lng` will take
-   * precedence over the textual `address` for distance sorting.
+   * Customer-profile location. Persisted in `customer_profiles` on the
+   * backend and loaded once after login via `GET /api/customers/me`.
+   * This is the official customer location: the home-screen "Nearby
+   * Sellers" pipeline sorts approved sellers by their distance from
+   * `lat` / `lng`, which the backend derives from `address` on save.
    */
   address?: string;
   district?: string;
   region?: string;
+  /** Ward within the district. Part of the saved customer location. */
+  ward?: string;
+  /** Street / area line. Part of the saved customer location. */
+  street?: string;
   lat?: number;
   lng?: number;
   /**
@@ -112,6 +117,28 @@ export interface Location {
   region?: string;
   lat?: number;
   lng?: number;
+}
+
+/**
+ * The customer's saved location — the wire shape of
+ * `GET/PUT /api/customers/me` (backend `CustomerLocationDto`).
+ *
+ * Field names deliberately match the `User` interface above so the store
+ * can merge a response straight onto `session.user` with no remapping.
+ *
+ * On write, `region` / `district` / `street` are required and `lat` /
+ * `lng` are omitted — the backend geocodes `address` and returns the
+ * resolved coordinates. On read, every field may be null for a customer
+ * who has not saved a location yet.
+ */
+export interface CustomerLocation {
+  region?: string | null;
+  district?: string | null;
+  ward?: string | null;
+  street?: string | null;
+  address?: string | null;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 export interface AuthSession {
@@ -259,6 +286,15 @@ export interface SellerProfile {
    */
   lat?: number;
   lng?: number;
+  /**
+   * Mirrors the backend `SellerProfileDto.region` / `.district` fields.
+   * Populated by `GET /api/sellers` and `GET /api/sellers/me` so the
+   * seller Profile screen can re-seed the "Region" / "District" inputs
+   * on edit, and the admin surfaces can render an at-a-glance location
+   * alongside the business name.
+   */
+  region?: string | null;
+  district?: string | null;
 }
 
 /**
@@ -363,7 +399,188 @@ export interface Rider {
   phone: string;
   licenseNo: string;
   active: boolean;
+  /**
+   * Identity fields surfaced by the rider self-service Profile screen
+   * (backed by `rider_profiles` after the V6 migration). The dispatch
+   * queue / admin views can keep ignoring them.
+   */
+  email?: string;
+  username?: string;
+  region?: string | null;
+  district?: string | null;
+  address?: string | null;
+  nationalId?: string | null;
+  vehicleType?: string | null;
+  vehiclePlate?: string | null;
+  vehicleModel?: string | null;
+  available?: boolean;
+  lat?: number | null;
+  lng?: number | null;
 }
+
+/**
+ * Read-only summary of the seller a rider is currently assigned to.
+ * Returned by `GET /api/riders/me/assigned-seller`; the frontend reads
+ * `null` to mean "the rider has not been assigned to a seller yet" and
+ * surfaces the verbatim waiting message from the brief.
+ */
+export interface RiderAssignedSeller {
+  sellerId: string;
+  sellerName: string;
+  businessName: string;
+  phone: string;
+  location: string;
+  district: string | null;
+  region: string | null;
+}
+
+/**
+ * A teammate surfaced by `GET /api/riders/me/team` — one of the other
+ * approved riders assigned to the same seller as the signed-in rider.
+ * The signed-in rider's own row is flagged with `isMe = true` so the
+ * My Team page can highlight it.
+ */
+export interface RiderTeamMember {
+  id: string;
+  fullName: string;
+  phone: string | null;
+  vehicleType: string | null;
+  vehiclePlate: string | null;
+  available: boolean;
+  active: boolean;
+  isMe: boolean;
+}
+
+/**
+ * The "My Team" payload returned by `GET /api/riders/me/team`.
+ * `seller` is null when the rider has not yet been assigned, in which
+ * case `riders` is empty (we never leak riders from other sellers).
+ */
+export interface RiderTeam {
+  seller: RiderAssignedSeller | null;
+  riders: RiderTeamMember[];
+}
+
+/**
+ * Minimal permit summary surfaced on the rider Profile screen.
+ * Returned by `GET /api/riders/me/permit` (404 when no permit row
+ * exists yet, so the frontend can render the "not yet issued" message).
+ *
+ * Extended by the Rider Verification workflow with `documents`,
+ * `submittedAt`, `reviewedAt`, `reviewedByName`, `rejectionReason`
+ * so the same DTO can power the Profile + the Verification section.
+ */
+export interface RiderPermitSummary {
+  id: string;
+  riderId: string;
+  status: PermitStatus;
+  certificateNumber: string | null;
+  certificateUrl: string;
+  issuedAt: string | null;
+  validFrom: string | null;
+  validUntil: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+  /**
+   * Applicant's full name resolved from the `users` table by the
+   * backend. Surfaced on the rider Profile / application summary card
+   * so the rider sees their own name in the application details.
+   */
+  applicantName: string | null;
+  rejectionReason: string | null;
+  /** Uploaded documents (rider + admin view). Empty for unstarted applications. */
+  documents: RiderApplicationDocument[];
+}
+
+/**
+ * The PDF/image slot uploaded as part of the rider's verification
+ * application. Mirrors the wire shape `RiderPermitDocumentDto` from the
+ * backend. `downloadUrl` is a server-relative path the React Native
+ * client appends to `API_CONFIG.BASE_URL` when streaming the bytes.
+ */
+export interface RiderApplicationDocument {
+  id: string;
+  documentType: RiderApplicationDocumentType;
+  originalName: string | null;
+  sizeBytes: number;
+  contentType: string;
+  uploadedAt: string;
+  downloadUrl: string;
+}
+
+/** Slot keys the rider must fill before submission. */
+export type RiderApplicationDocumentType =
+  | "rider_application_form"
+  | "rider_national_id"
+  | "rider_driving_licence"
+  | "rider_passport_photo"
+  | "rider_vehicle_registration"
+  | "rider_permit";
+
+/**
+ * The supplier's verification application. Mirrors the wire shape
+ * `SupplierApplicationDto` from the backend, returned by
+ * `GET /api/supplier-applications/me` (which lazy-creates a draft
+ * PENDING row) and by the admin review queue.
+ *
+ * The `supplier*` fields are denormalised by the backend so the admin
+ * review screen can render the applicant without a second lookup.
+ *
+ * `certificateUrl` only resolves once `status === "approved"` — the
+ * endpoint returns HTTP 409 before that, which is what keeps the
+ * certificate unavailable prior to approval.
+ */
+export interface SupplierApplication {
+  id: string;
+  supplierId: string;
+  supplierName: string | null;
+  supplierUsername: string | null;
+  supplierEmail: string | null;
+  supplierPhone: string | null;
+  status: PermitStatus;
+  certificateNumber: string | null;
+  certificateUrl: string;
+  issuedAt: string | null;
+  validFrom: string | null;
+  validUntil: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+  rejectionReason: string | null;
+  /** Uploaded documents (supplier + admin view). Empty for unstarted applications. */
+  documents: SupplierApplicationDocument[];
+}
+
+/**
+ * The PDF/image slot uploaded as part of the supplier's verification
+ * application. Mirrors the wire shape `SupplierApplicationDocumentDto`
+ * from the backend. `downloadUrl` is a server-relative path the React
+ * Native client appends to `API_CONFIG.BASE_URL` when streaming bytes.
+ */
+export interface SupplierApplicationDocument {
+  id: string;
+  documentType: SupplierApplicationDocumentType;
+  originalName: string | null;
+  sizeBytes: number;
+  contentType: string;
+  uploadedAt: string;
+  downloadUrl: string;
+}
+
+/**
+ * Slot keys the supplier must fill before submission. The trailing
+ * `supplier_certificate` slot is admin-managed (generated on approval)
+ * and is never uploadable by the supplier.
+ */
+export type SupplierApplicationDocumentType =
+  | "supplier_application_form"
+  | "supplier_national_id"
+  | "supplier_business_registration"
+  | "supplier_tin_certificate"
+  | "supplier_business_licence"
+  | "supplier_passport_photo"
+  | "supplier_certificate";
 
 /**
  * A live (or historical) delivery trip. Created by `startTrip()` and

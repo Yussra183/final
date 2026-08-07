@@ -18,6 +18,8 @@ import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { LogoutButton } from "../../src/components/LogoutButton";
 import { AppButton } from "../../src/components/AppButton";
+import { RiderVerificationRequiredCard } from "../../src/components/RiderVerificationRequiredCard";
+import { useRiderVerificationStatus } from "../../src/hooks/useRiderVerificationStatus";
 import {
   formatCurrency,
   orderStatusLabel,
@@ -31,7 +33,15 @@ export default function RiderDashboard() {
   const router = useRouter();
   const { session, getOrdersForUser } = useStore();
   const user = session!.user;
-  const orders = getOrdersForUser(user.id, "rider");
+  // Verification gate — mirrors the seller "pending permit" pattern.
+  // The card itself is only rendered when the rider is NOT approved
+  // (see RiderVerificationRequiredCard). Delivery-related sections
+  // (Next delivery, Recent history, Browse requests CTA) are hidden
+  // until the admin approves the application.
+  const verification = useRiderVerificationStatus();
+  const orders = verification.isApproved
+    ? getOrdersForUser(user.id, "rider")
+    : [];
 
   const active = orders.filter(
     (o) => o.status !== "delivered" && o.status !== "cancelled",
@@ -64,6 +74,17 @@ export default function RiderDashboard() {
       />
 
       <ScrollView contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
+        {/* Rider Verification Required banner — only renders when the
+            rider is NOT approved (see RiderVerificationRequiredCard). */}
+        {!verification.isApproved ? (
+          <View style={{ paddingHorizontal: Spacing.lg, marginTop: Spacing.sm }}>
+            <RiderVerificationRequiredCard
+              info={verification}
+              onOpenVerification={() => router.push("/rider/profile")}
+            />
+          </View>
+        ) : null}
+
         <View style={styles.statsRow}>
           <StatCard
             label="Active"
@@ -128,7 +149,7 @@ export default function RiderDashboard() {
               />
             </Card>
           </View>
-        ) : (
+        ) : verification.isApproved ? (
           <View style={{ paddingHorizontal: Spacing.lg }}>
             <Card>
               <Text style={styles.cardTitle}>No active deliveries</Text>
@@ -143,63 +164,67 @@ export default function RiderDashboard() {
               />
             </Card>
           </View>
-        )}
+        ) : null}
 
-        <Text style={styles.sectionTitle}>Shortcuts</Text>
-        <View style={styles.shortcutRow}>
-          <ShortcutCard
-            icon="📥"
-            label="Requests"
-            onPress={() => router.push("/rider/delivery-requests")}
-          />
-          <ShortcutCard
-            icon="💸"
-            label="Earnings"
-            onPress={() => router.push("/rider/earnings")}
-          />
-          <ShortcutCard
-            icon="🛡️"
-            label="Safety"
-            onPress={() => router.push("/rider/safety-guidelines")}
-          />
-        </View>
+        {verification.isApproved ? (
+          <>
+            <Text style={styles.sectionTitle}>Shortcuts</Text>
+            <View style={styles.shortcutRow}>
+              <ShortcutCard
+                icon="📥"
+                label="Requests"
+                onPress={() => router.push("/rider/delivery-requests")}
+              />
+              <ShortcutCard
+                icon="💸"
+                label="Earnings"
+                onPress={() => router.push("/rider/earnings")}
+              />
+              <ShortcutCard
+                icon="🛡️"
+                label="Safety"
+                onPress={() => router.push("/rider/safety-guidelines")}
+              />
+            </View>
 
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent history</Text>
-          {completed.length > 0 ? (
-            <TouchableOpacity onPress={() => router.push("/rider/delivery-history")}>
-              <Text style={styles.linkText}>See all</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        {recent.length === 0 ? (
-          <View style={{ paddingHorizontal: Spacing.lg }}>
-            <Card>
-              <Text style={styles.sub}>
-                Completed trips will appear here once you finish a delivery.
-              </Text>
-            </Card>
-          </View>
-        ) : (
-          <View style={{ paddingHorizontal: Spacing.lg }}>
-            {recent.map((o) => (
-              <Card key={o.id} style={{ marginBottom: Spacing.sm }}>
-                <View style={styles.row}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.cardTitle}>
-                      Order #{o.id.slice(-4)} • {o.customerName}
-                    </Text>
-                    <Text style={styles.sub}>{o.deliveryLocation.address}</Text>
-                  </View>
-                  <StatusPill
-                    label={orderStatusLabel(o.status)}
-                    tone={orderTone(o.status)}
-                  />
-                </View>
-              </Card>
-            ))}
-          </View>
-        )}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Recent history</Text>
+              {completed.length > 0 ? (
+                <TouchableOpacity onPress={() => router.push("/rider/delivery-history")}>
+                  <Text style={styles.linkText}>See all</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {recent.length === 0 ? (
+              <View style={{ paddingHorizontal: Spacing.lg }}>
+                <Card>
+                  <Text style={styles.sub}>
+                    Completed trips will appear here once you finish a delivery.
+                  </Text>
+                </Card>
+              </View>
+            ) : (
+              <View style={{ paddingHorizontal: Spacing.lg }}>
+                {recent.map((o) => (
+                  <Card key={o.id} style={{ marginBottom: Spacing.sm }}>
+                    <View style={styles.row}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.cardTitle}>
+                          Order #{o.id.slice(-4)} • {o.customerName}
+                        </Text>
+                        <Text style={styles.sub}>{o.deliveryLocation.address}</Text>
+                      </View>
+                      <StatusPill
+                        label={orderStatusLabel(o.status)}
+                        tone={orderTone(o.status)}
+                      />
+                    </View>
+                  </Card>
+                ))}
+              </View>
+            )}
+          </>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );

@@ -21,7 +21,7 @@ export default function ProductDetail() {
   const { products, session, placeOrder } = useStore();
   const product = products.find((p) => p.id === id);
   const [qty, setQty] = useState(1);
-  const [address, setAddress] = useState("Plot 12, Mikocheni B, Dar es Salaam");
+  const [address, setAddress] = useState(session?.user.address ?? "");
   const [phone, setPhone] = useState(session?.user.phone ?? "");
   const [notes, setNotes] = useState("");
 

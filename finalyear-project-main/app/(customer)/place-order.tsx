@@ -36,7 +36,7 @@ export default function PlaceOrderScreen() {
   );
   const [size, setSize] = useState("");
   const [quantity, setQuantity] = useState("1");
-  const [address, setAddress] = useState("Plot 12, Mikocheni B, Dar es Salaam");
+  const [address, setAddress] = useState(user.address ?? "");
   const [phone, setPhone] = useState(user.phone);
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});

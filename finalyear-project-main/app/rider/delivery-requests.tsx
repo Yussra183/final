@@ -18,6 +18,8 @@ import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { LogoutButton } from "../../src/components/LogoutButton";
 import { EmptyState } from "../../src/components/EmptyState";
 import { AppButton } from "../../src/components/AppButton";
+import { useRiderVerificationStatus } from "../../src/hooks/useRiderVerificationStatus";
+import { useRiderLock } from "../../src/hooks/useRiderLock";
 import {
   formatCurrency,
   orderStatusLabel,
@@ -28,6 +30,9 @@ import { OrderServiceError } from "../../src/services/orderErrors";
 type Tab = "available" | "accepted" | "active";
 
 export default function DeliveryRequests() {
+  // Single page — no wrapper. The lock banner is rendered inline at the
+  // top of the existing layout, and the modal is mounted inside the
+  // existing SafeAreaView so the page remains a single render tree.
   const router = useRouter();
   const {
     session,
@@ -37,12 +42,16 @@ export default function DeliveryRequests() {
     claimOrder,
   } = useStore();
   const user = session!.user;
+  const verification = useRiderVerificationStatus();
+  const { Banner, Modal, onLockedAction, isApproved } = useRiderLock();
+
   const [tab, setTab] = useState<Tab>("available");
 
   // Orders accepted by sellers, awaiting a rider. The store layer
   // already filters out anything the actor can't claim (e.g. orders
   // already assigned to someone else).
   const available = useMemo(() => {
+    if (!verification.isApproved) return [];
     const next = availableOrdersForUser();
     if (__DEV__) {
       console.info(
@@ -54,7 +63,7 @@ export default function DeliveryRequests() {
     // `availableOrdersForUser` is stable per-render via `useCallback`,
     // but we list its dep so React's lint sees the relationship.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableOrdersForUser, session, /* re-derive on store refresh */]);
+  }, [availableOrdersForUser, session, verification.isApproved /* re-derive on store refresh */]);
 
   // Orders already assigned to this rider but not yet picked up.
   const accepted = useMemo(() => {
@@ -76,10 +85,6 @@ export default function DeliveryRequests() {
   // `seller_riders` set, sorted by `updatedAt DESC`. The terminal
   // states (DELIVERED, CANCELLED, REJECTED) are intentionally excluded
   // here because the Delivery History screen surfaces those.
-  //
-  // This is the "everything the rider is currently responsible for"
-  // list — without it, a rider had no way to see PICKED_UP or
-  // IN_TRANSIT orders that aren't yet completed.
   const active = useMemo(() => {
     const next = getOrdersForUser(user.id, "rider").filter((o) =>
       ["pending", "accepted", "assigned", "picked_up", "in_transit"].includes(
@@ -130,6 +135,11 @@ export default function DeliveryRequests() {
         right={<LogoutButton />}
       />
 
+      {/* Lock status banner — renders inline at the top of the page
+          for NEW / PENDING / REJECTED riders. Renders nothing for
+          approved riders. The page layout is unchanged. */}
+      {Banner}
+
       <View style={styles.tabRow}>
         {(
           [
@@ -154,107 +164,128 @@ export default function DeliveryRequests() {
         })}
       </View>
 
-      <FlatList
-        data={listData}
-        keyExtractor={(o) => o.id}
-        contentContainerStyle={{ padding: Spacing.lg, paddingTop: 0 }}
-        ItemSeparatorComponent={() => <View style={{ height: Spacing.sm }} />}
-        ListEmptyComponent={
-          tab === "available" ? (
-            <EmptyState
-              icon="📭"
-              title="No available orders"
-              message="When a seller accepts an order, it will appear here. Closest riders see it first."
-            />
-          ) : tab === "accepted" ? (
-            <EmptyState
-              icon="🛵"
-              title="Nothing accepted yet"
-              message="Accept an order from the Available tab and it will show up here until pickup."
-            />
-          ) : (
-            <EmptyState
-              icon="📋"
-              title="No active orders"
-              message="When a seller has work for you it will show up here."
-            />
-          )
-        }
-        renderItem={({ item }) => {
-          if (__DEV__) {
-            console.info(
-              "[RIDER_ORDERS][RENDER_ITEM]",
-              JSON.stringify({
-                tab,
-                orderId: item.id,
-                status: item.status,
-                sellerId: item.sellerId,
-                riderId: item.riderId ?? null,
-              }),
-            );
+      <View style={{ flex: 1 }}>
+        <FlatList
+          data={listData}
+          keyExtractor={(o) => o.id}
+          contentContainerStyle={{ padding: Spacing.lg, paddingTop: 0 }}
+          ItemSeparatorComponent={() => <View style={{ height: Spacing.sm }} />}
+          ListEmptyComponent={
+            tab === "available" ? (
+              <EmptyState
+                icon="📭"
+                title="No available orders"
+                message="When a seller accepts an order, it will appear here. Closest riders see it first."
+              />
+            ) : tab === "accepted" ? (
+              <EmptyState
+                icon="🛵"
+                title="Nothing accepted yet"
+                message="Accept an order from the Available tab and it will show up here until pickup."
+              />
+            ) : (
+              <EmptyState
+                icon="📋"
+                title="No active orders"
+                message="When a seller has work for you it will show up here."
+              />
+            )
           }
-          return (
-            <Card>
-              <View style={styles.row}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>
-                    Order #{item.id.slice(-4)}
-                  </Text>
-                  <Text style={styles.sub}>{item.customerName}</Text>
-                  <Text style={styles.sub}>{item.deliveryLocation.address}</Text>
+          renderItem={({ item }) => {
+            if (__DEV__) {
+              console.info(
+                "[RIDER_ORDERS][RENDER_ITEM]",
+                JSON.stringify({
+                  tab,
+                  orderId: item.id,
+                  status: item.status,
+                  sellerId: item.sellerId,
+                  riderId: item.riderId ?? null,
+                }),
+              );
+            }
+            return (
+              <Card
+                style={[
+                  !isApproved ? styles.cardLocked : null,
+                ]}
+              >
+                <View style={styles.row}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cardTitle}>
+                      Order #{item.id.slice(-4)}
+                    </Text>
+                    <Text style={styles.sub}>{item.customerName}</Text>
+                    <Text style={styles.sub}>{item.deliveryLocation.address}</Text>
+                  </View>
+                  <StatusPill
+                    label={orderStatusLabel(item.status)}
+                    tone={orderTone(item.status)}
+                  />
                 </View>
-                <StatusPill
-                  label={orderStatusLabel(item.status)}
-                  tone={orderTone(item.status)}
-                />
-              </View>
-              <View style={styles.footer}>
-                <Text style={styles.value}>{formatCurrency(item.total)}</Text>
-                {tab === "available" ? (
-                  <AppButton
-                    title="Accept"
-                    style={styles.actionBtn}
-                    onPress={async () => {
-                      try {
-                        await claimOrder(item.id);
-                        Alert.alert(
-                          "Accepted",
-                          `Order #${item.id.slice(-4)} added to your list.`,
-                        );
-                      } catch (err) {
-                        const code =
-                          err instanceof OrderServiceError
-                            ? err.code
-                            : undefined;
-                        const message =
-                          code === "RIDER_BUSY"
-                            ? "Another rider got there first."
-                            : code === "RIDER_OFFLINE"
-                              ? "You're not marked as available right now."
-                              : (err as Error)?.message ??
-                                "Could not claim this delivery.";
-                        Alert.alert("Could not accept", message);
-                      }
-                    }}
-                  />
-                ) : (
-                  <AppButton
-                    title="Open"
-                    variant="outline"
-                    style={styles.actionBtn}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/rider/active-delivery",
-                        params: { id: item.id },
-                      })
-                    }
-                  />
-                )}
-              </View>
-            </Card>
-          );
-        }}
-      />
+                <View style={styles.footer}>
+                  <Text style={styles.value}>{formatCurrency(item.total)}</Text>
+                  {tab === "available" ? (
+                    <AppButton
+                      title="Accept"
+                      style={styles.actionBtn}
+                      disabled={!isApproved}
+                      onPress={async () => {
+                        if (!isApproved) {
+                          onLockedAction();
+                          return;
+                        }
+                        try {
+                          await claimOrder(item.id);
+                          Alert.alert(
+                            "Accepted",
+                            `Order #${item.id.slice(-4)} added to your list.`,
+                          );
+                        } catch (err) {
+                          const code =
+                            err instanceof OrderServiceError
+                              ? err.code
+                              : undefined;
+                          const message =
+                            code === "RIDER_BUSY"
+                              ? "Another rider got there first."
+                              : code === "RIDER_OFFLINE"
+                                ? "You're not marked as available right now."
+                                : (err as Error)?.message ??
+                                  "Could not claim this delivery.";
+                          Alert.alert("Could not accept", message);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <AppButton
+                      title="Open"
+                      variant="outline"
+                      style={styles.actionBtn}
+                      disabled={!isApproved}
+                      onPress={() => {
+                        if (!isApproved) {
+                          onLockedAction();
+                          return;
+                        }
+                        router.push({
+                          pathname: "/rider/active-delivery",
+                          params: { id: item.id },
+                        });
+                      }}
+                    />
+                  )}
+                </View>
+              </Card>
+            );
+          }}
+        />
+      </View>
+
+      {/* Locked-action modal — renders nothing while the rider is
+          approved. Mounted inside the page so the modal lifecycle is
+          scoped to the screen. */}
+      {Modal}
     </SafeAreaView>
   );
 }
@@ -292,4 +323,7 @@ const styles = StyleSheet.create({
   },
   value: { color: Colors.primary, fontWeight: "800" },
   actionBtn: { paddingHorizontal: 20 },
+  cardLocked: {
+    opacity: 0.55,
+  },
 });

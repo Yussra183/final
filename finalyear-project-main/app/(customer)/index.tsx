@@ -191,7 +191,7 @@ export default function CustomerHome() {
             <Text style={styles.emptyText}>
               {usingDefaultLocation
                 ? "Set a delivery address on your profile to see sellers in your area."
-                : "Try changing your profile address to find more sellers."}
+                : "No nearby approved gas sellers found in your area."}
             </Text>
           </Card>
         ) : (

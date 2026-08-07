@@ -4,6 +4,7 @@ export { ApiError } from "./errors";
 export {
   AuthApi,
   UsersApi,
+  CustomersApi,
   ProductsApi,
   SellersApi,
   RidersApi,

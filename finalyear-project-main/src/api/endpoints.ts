@@ -19,6 +19,8 @@ import {
   AdminStats,
   AdminUser,
   Complaint,
+  CustomerLocation,
+  DeliveryRoute,
   GasProduct,
   NotificationItem,
   Order,
@@ -29,10 +31,17 @@ import {
   PermitStatus,
   RestockRequest,
   Rider,
+  RiderApplicationDocument,
+  RiderAssignedSeller,
+  RiderPermitSummary,
+  RiderTeam,
   SellerPermit,
   SellerProfile,
+  SupplierApplication,
+  SupplierApplicationDocument,
   User,
   UserRole,
+  Vehicle,
 } from "../../constants/types";
 
 // ---- Auth --------------------------------------------------------------
@@ -82,6 +91,46 @@ export const UsersApi = {
   ) => api.patch<User>(`/api/users/${id}`, patch),
 };
 
+// ---- Customer location -------------------------------------------------
+// The signed-in customer's saved location, persisted in
+// `customer_profiles`. This is the official customer location: it is
+// loaded once after login and drives the "Nearby Sellers" pipeline, so
+// the customer never has to re-enter their address.
+export const CustomersApi = {
+  /**
+   * The saved location. Returns a payload with all-null fields (200,
+   * not 404) when the customer has never saved one.
+   */
+  myLocation: () => api.get<CustomerLocation>("/api/customers/me"),
+  /**
+   * Persist the location. The backend validates the required fields and
+   * geocodes `address`, so the response carries the resolved
+   * `lat`/`lng` — merge the *response* into the session, not the patch.
+   */
+  updateMyLocation: (patch: CustomerLocation) =>
+    api.put<CustomerLocation>("/api/customers/me", patch),
+  /**
+   * Patch the signed-in customer's editable personal fields on the
+   * `users` row: full name, username, email, phone. Each field is
+   * optional — null means "don't touch". Used by the Profile screen's
+   * "personal information" half of the save flow. The route lives on
+   * the customer-scoped URL so the actor id comes from the auth
+   * filter rather than the path.
+   */
+  patchMyProfile: (patch: {
+    fullName?: string;
+    username?: string;
+    email?: string;
+    phone?: string;
+  }) =>
+    api.patch<{
+      fullName: string;
+      username: string;
+      email: string;
+      phone: string;
+    }>("/api/customers/me", patch),
+};
+
 // ---- Products ----------------------------------------------------------
 
 export const ProductsApi = {
@@ -99,7 +148,16 @@ export const ProductsApi = {
 // pipeline. Public read; the me/upsert endpoints back the seller profile
 // page.
 export const SellersApi = {
-  list: () => api.get<SellerProfile[]>("/api/sellers"),
+  /**
+   * Public list endpoint backing the customer "Nearby Sellers" screen.
+   *
+   * When the caller passes `lat` / `lng` the backend filters to the
+   * configured nearby radius and returns rows sorted by distance. Without
+   * coordinates the backend returns every approved+active seller
+   * (alphabetical) — used by admin / debug surfaces.
+   */
+  list: (filter?: { lat?: number; lng?: number; radiusKm?: number }) =>
+    api.get<SellerProfile[]>("/api/sellers", filter),
   me: () => api.get<SellerProfile>("/api/sellers/me"),
   updateMe: (patch: Partial<SellerProfile>) =>
     api.post<SellerProfile>("/api/sellers/me", patch),
@@ -117,6 +175,307 @@ export const RidersApi = {
     api.patch<Rider>(`/api/riders/${encodeURIComponent(riderId)}/availability`, {
       available,
     }),
+  /**
+   * The signed-in rider's own profile. Backed by `rider_profiles` joined
+   * with `users`; surfaces every field the Rider Profile screen needs
+   * (region, district, address, national ID, vehicle, licence).
+   */
+  me: () => api.get<Rider>("/api/riders/me"),
+  /**
+   * Patch the signed-in rider's editable contact / location fields
+   * (phone, region, district, address, lat, lng). Backend refuses with
+   * 403 if the rider has not been approved — same gate as the admin
+   * approval requirement described in the brief.
+   */
+  updateMyContact: (patch: {
+    phone?: string | null;
+    region?: string | null;
+    district?: string | null;
+    address?: string | null;
+    lat?: number | null;
+    lng?: number | null;
+  }) => api.patch<Rider>("/api/riders/me", patch),
+
+  /**
+   * Fetch the rider's seller + every other approved rider sharing that
+   * seller. The signed-in rider is always part of the team and the
+   * client highlights their own row. Used by the My Team page.
+   */
+  team: () => api.get<RiderTeam>("/api/riders/me/team"),
+
+  /**
+   * The seller the signed-in rider is currently assigned to. The
+   * backend returns HTTP 204 (no body) when no assignment exists yet
+   * so the frontend can render the brief's waiting message verbatim.
+   *
+   * Note: the bare `api.get` rejects on a 204, so callers should use
+   * {@link RidersApi.assignedSellerOrNull} below for the not-assigned
+   * path; this entry point is kept for callers that want to surface
+   * the raw error (e.g. an analytics event).
+   */
+  assignedSeller: () =>
+    api.get<RiderAssignedSeller>("/api/riders/me/assigned-seller"),
+  /**
+   * Convenience wrapper around {@link RidersApi.assignedSeller} that
+   * resolves to `null` when the rider hasn't been assigned yet. Maps
+   * the HTTP 204 response to a `null` payload so the React Native
+   * client can render the brief's waiting message without
+   * try/catching the ApiError.
+   */
+  assignedSellerOrNull: async (): Promise<RiderAssignedSeller | null> => {
+    try {
+      return await api.get<RiderAssignedSeller>(
+        "/api/riders/me/assigned-seller",
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 204) {
+        return null;
+      }
+      throw err;
+    }
+  },
+};
+
+// ---- Rider permits -----------------------------------------------------
+// Rider-facing permit + verification workflow. The backend exposes:
+//   - `/api/riders/me/permit*` (legacy certificate summary from part 1,
+//     reusing `seller_permits` so the Profile screen continues to work)
+//   - `/api/rider-permits/me/*` (the new verification workflow — upload
+//     docs, submit, admin review, official certificate PDF)
+export const RiderPermitsApi = {
+  // ---- Legacy certificate summary (part 1) ----
+  /** The rider's permit summary, or rejects with 404 when no permit exists yet. */
+  myPermit: () => api.get<RiderPermitSummary>("/api/riders/me/permit"),
+  /**
+   * Server-relative URL for the rider's approved certificate PDF
+   * (legacy certificate endpoint from part 1).
+   */
+  certificateUrl: () => "/api/riders/me/permit/certificate",
+  /** Resolves to `null` when the rider has no permit yet. */
+  myPermitOrNull: async (): Promise<RiderPermitSummary | null> => {
+    try {
+      return await api.get<RiderPermitSummary>("/api/riders/me/permit");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  },
+
+  // ---- Verification workflow ----
+  /**
+   * The signed-in rider's full verification application (lazy-creates a
+   * draft PENDING row on first call).
+   */
+  myApplication: () => api.get<RiderPermitSummary>("/api/rider-permits/me"),
+  /** Server-relative URL for the blank Rider Application Form PDF. */
+  applicationFormUrl: () => "/api/rider-permits/me/application-form",
+  /**
+   * Upload a single PDF or image for one slot. The caller builds the
+   * multipart `FormData` (kept out of this layer so the api package
+   * stays DOM-agnostic).
+   *
+   * Backend expects multipart fields:
+   *   - `type`:  one of `rider_application_form | rider_national_id |
+   *               rider_driving_licence | rider_passport_photo |
+   *               rider_vehicle_registration`
+   *   - `file`:  the file blob
+   */
+  uploadDocument: (
+    type: string,
+    form: FormData,
+    options?: { timeoutMs?: number },
+  ): Promise<RiderApplicationDocument> =>
+    api.upload<RiderApplicationDocument>(
+      "/api/rider-permits/me/documents",
+      form,
+      { ...options, query: { type } },
+    ),
+  /** Remove a rider-uploaded document before submission. */
+  deleteDocument: (id: string) =>
+    api.delete<void>(`/api/rider-permits/me/documents/${encodeURIComponent(id)}`),
+  /** Submit the live application — validates required slots + notifies the rider. */
+  submitApplication: () =>
+    api.post<RiderPermitSummary>("/api/rider-permits/me/submit", {}),
+  /** Streaming URL for the official Gas Delivery Rider Certificate PDF. */
+  riderCertificateUrl: () => "/api/rider-permits/me/certificate",
+  /** Streaming URL for any document the rider is allowed to read. */
+  documentUrl: (id: string) => `/api/rider-permits/documents/${encodeURIComponent(id)}`,
+  /**
+   * Convenience wrapper that resolves to `null` when the rider has not
+   * yet started an application. Mirrors {@link RidersApi.assignedSellerOrNull}.
+   */
+  myApplicationOrNull: async (): Promise<RiderPermitSummary | null> => {
+    try {
+      return await api.get<RiderPermitSummary>("/api/rider-permits/me");
+    } catch (err) {
+      // The lazy-create path should never 404 (it creates a PENDING
+      // row on first call), but a defensive catch keeps the caller
+      // symmetric with the other `*OrNull` wrappers.
+      if (err instanceof ApiError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  },
+};
+
+// ---- Admin: rider permits ----------------------------------------------
+// Admin review surface for rider verification applications. Mirrors
+// the seller-permit admin API (`PermitsApi.admin*`).
+export const AdminRiderPermitsApi = {
+  /** Review queue, optionally narrowed by status. */
+  listForAdmin: (status?: PermitStatus) =>
+    api.get<RiderPermitSummary[]>(
+      "/api/admin/rider-permits",
+      status ? { status } : undefined,
+    ),
+  /** Single application row including documents metadata. */
+  getForAdmin: (id: string) =>
+    api.get<RiderPermitSummary>(`/api/admin/rider-permits/${encodeURIComponent(id)}`),
+  /** Document metadata for the admin viewer. */
+  listDocumentsForAdmin: (id: string) =>
+    api.get<RiderApplicationDocument[]>(
+      `/api/admin/rider-permits/${encodeURIComponent(id)}/documents`,
+    ),
+  /**
+   * Server-relative streaming URL for the official Gas Delivery Rider
+   * Certificate PDF, regenerable on demand by the backend (APPROVED only).
+   */
+  adminCertificateUrl: (id: string) =>
+    `/api/admin/rider-permits/${encodeURIComponent(id)}/certificate`,
+  /** Approve the application (no file body required — JSON POST). */
+  approveJson: (id: string): Promise<RiderPermitSummary> =>
+    api.post<RiderPermitSummary>(
+      `/api/admin/rider-permits/${encodeURIComponent(id)}/approve`,
+      {},
+    ),
+  /** Reject the application. Body carries the rider-facing reason. */
+  reject: (id: string, reason: string): Promise<RiderPermitSummary> =>
+    api.post<RiderPermitSummary>(
+      `/api/admin/rider-permits/${encodeURIComponent(id)}/reject`,
+      { reason },
+    ),
+  /** Streaming URL for any document the admin is allowed to read. */
+  documentUrl: (id: string) =>
+    `/api/rider-permits/documents/${encodeURIComponent(id)}`,
+};
+
+// ---- Supplier applications ---------------------------------------------
+// Supplier-facing verification workflow. Mirrors `RiderPermitsApi`:
+// download the blank form, upload/replace/remove the six required
+// documents, submit, then (post-approval only) stream the official
+// Gas Supplier Certificate PDF.
+export const SupplierApplicationsApi = {
+  /**
+   * The signed-in supplier's full verification application
+   * (lazy-creates a draft PENDING row on first call).
+   */
+  myApplication: () =>
+    api.get<SupplierApplication>("/api/supplier-applications/me"),
+  /** Server-relative URL for the blank Supplier Application Form PDF. */
+  applicationFormUrl: () => "/api/supplier-applications/me/application-form",
+  /**
+   * Upload a single PDF or image for one slot. The caller builds the
+   * multipart `FormData` (kept out of this layer so the api package
+   * stays DOM-agnostic).
+   *
+   * Backend expects:
+   *   - `type` query param: one of `supplier_application_form |
+   *      supplier_national_id | supplier_business_registration |
+   *      supplier_tin_certificate | supplier_business_licence |
+   *      supplier_passport_photo`
+   *   - `file` multipart part: the file blob
+   */
+  uploadDocument: (
+    type: string,
+    form: FormData,
+    options?: { timeoutMs?: number },
+  ): Promise<SupplierApplicationDocument> =>
+    api.upload<SupplierApplicationDocument>(
+      "/api/supplier-applications/me/documents",
+      form,
+      { ...options, query: { type } },
+    ),
+  /** Remove a supplier-uploaded document before submission. */
+  deleteDocument: (id: string) =>
+    api.delete<void>(
+      `/api/supplier-applications/me/documents/${encodeURIComponent(id)}`,
+    ),
+  /** Submit the application — validates required slots + notifies the supplier. */
+  submitApplication: () =>
+    api.post<SupplierApplication>("/api/supplier-applications/me/submit", {}),
+  /**
+   * Streaming URL for the official Gas Supplier Certificate PDF. Only
+   * resolves once the application is APPROVED — the backend returns
+   * HTTP 409 before that.
+   */
+  certificateUrl: () => "/api/supplier-applications/me/certificate",
+  /** Streaming URL for any document the supplier is allowed to read. */
+  documentUrl: (id: string) =>
+    `/api/supplier-applications/documents/${encodeURIComponent(id)}`,
+  /**
+   * Convenience wrapper that resolves to `null` when the supplier has
+   * not yet started an application. Mirrors
+   * {@link RiderPermitsApi.myApplicationOrNull}.
+   */
+  myApplicationOrNull: async (): Promise<SupplierApplication | null> => {
+    try {
+      return await api.get<SupplierApplication>("/api/supplier-applications/me");
+    } catch (err) {
+      // The lazy-create path should never 404 (it creates a PENDING
+      // row on first call), but a defensive catch keeps the caller
+      // symmetric with the other `*OrNull` wrappers.
+      if (err instanceof ApiError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  },
+};
+
+// ---- Admin: supplier applications --------------------------------------
+// Admin review surface for supplier verification applications. Mirrors
+// `AdminRiderPermitsApi`.
+export const AdminSupplierApplicationsApi = {
+  /** Review queue, optionally narrowed by status. */
+  listForAdmin: (status?: PermitStatus) =>
+    api.get<SupplierApplication[]>(
+      "/api/admin/supplier-applications",
+      status ? { status } : undefined,
+    ),
+  /** Single application row including documents metadata. */
+  getForAdmin: (id: string) =>
+    api.get<SupplierApplication>(
+      `/api/admin/supplier-applications/${encodeURIComponent(id)}`,
+    ),
+  /** Document metadata for the admin viewer. */
+  listDocumentsForAdmin: (id: string) =>
+    api.get<SupplierApplicationDocument[]>(
+      `/api/admin/supplier-applications/${encodeURIComponent(id)}/documents`,
+    ),
+  /**
+   * Server-relative streaming URL for the official Gas Supplier
+   * Certificate PDF, regenerable on demand by the backend (APPROVED only).
+   */
+  adminCertificateUrl: (id: string) =>
+    `/api/admin/supplier-applications/${encodeURIComponent(id)}/certificate`,
+  /** Approve the application (no file body required — JSON POST). */
+  approve: (id: string): Promise<SupplierApplication> =>
+    api.post<SupplierApplication>(
+      `/api/admin/supplier-applications/${encodeURIComponent(id)}/approve`,
+      {},
+    ),
+  /** Reject the application. Body carries the supplier-facing reason. */
+  reject: (id: string, reason: string): Promise<SupplierApplication> =>
+    api.post<SupplierApplication>(
+      `/api/admin/supplier-applications/${encodeURIComponent(id)}/reject`,
+      { reason },
+    ),
+  /** Streaming URL for any document the admin is allowed to read. */
+  documentUrl: (id: string) =>
+    `/api/supplier-applications/documents/${encodeURIComponent(id)}`,
 };
 
 // ---- Orders ------------------------------------------------------------
@@ -267,10 +626,15 @@ export const PermitsApi = {
    * backend's `BadRequestException` text verbatim.
    */
   uploadDocument: (
+    type: string,
     form: FormData,
     options?: { timeoutMs?: number },
   ): Promise<PermitDocument> =>
-    api.upload<PermitDocument>("/api/permits/me/documents", form, options),
+    api.upload<PermitDocument>(
+      "/api/permits/me/documents",
+      form,
+      { ...options, query: { type } },
+    ),
 
   /** Remove a seller-uploaded document before submission. */
   deleteDocument: (id: string) =>
@@ -298,6 +662,16 @@ export const PermitsApi = {
     ),
 
   /**
+   * Server-relative streaming URL for the official Gas Selling Permit PDF,
+   * regenerable on demand by the backend. Admin-gated — the server
+   * re-renders the issued licence using the latest application + review
+   * data, so the admin can view / re-download it even when no
+   * admin-uploaded licence file is attached to the permit row.
+   */
+  adminLicenseUrl: (id: string) =>
+    `/api/admin/permits/${encodeURIComponent(id)}/license`,
+
+  /**
    * Approve a permit. Optional `license` multipart file is the admin-
    * uploaded licence PDF; if absent, the seller's download button is
    * disabled until a licence is uploaded.
@@ -311,6 +685,21 @@ export const PermitsApi = {
       `/api/admin/permits/${encodeURIComponent(id)}/approve`,
       form,
       options,
+    ),
+
+  /**
+   * Approve a permit WITHOUT uploading a license file. Sends a regular
+   * JSON `POST` instead of an empty `multipart/form-data` envelope.
+   * Empty multipart bodies are the documented source of RN's
+   * "Network request failed" error on Hermes, so we avoid the envelope
+   * entirely when there's nothing to upload. The backend's
+   * `AdminPermitController.approve` accepts both content types — when
+   * this JSON path is taken, the `license` parameter is `null`.
+   */
+  approveJson: (id: string): Promise<SellerPermit> =>
+    api.post<SellerPermit>(
+      `/api/admin/permits/${encodeURIComponent(id)}/approve`,
+      {},
     ),
 
   /** Reject a permit. Body carries the seller-facing reason. */
@@ -355,6 +744,15 @@ export const NotificationsApi = {
   list: () => api.get<NotificationItem[]>("/api/notifications"),
   markRead: (id: string) =>
     api.patch<NotificationItem>(`/api/notifications/${id}/read`),
+  /**
+   * Mark every notification belonging to the currently authenticated
+   * user as read in a single round-trip. Scoped to the actor's user_id
+   * on the backend, so this endpoint only ever touches the caller's own
+   * rows — calling it from a seller session only marks the seller's
+   * notifications, never another role's.
+   */
+  markAllRead: () =>
+    api.post<{ updated: number }>("/api/notifications/read-all"),
 };
 
 // ---- Admin -------------------------------------------------------------
@@ -458,6 +856,36 @@ export const ComplaintsApi = {
     api.post<Complaint>("/api/complaints", body),
   resolve: (id: string) =>
     api.patch<Complaint>(`/api/complaints/${id}/resolve`),
+};
+
+// ---- Supplier logistics: routes + vehicles -----------------------------
+// Backed by the supplier module's SupplierLogisticsController. The
+// endpoints are scoped to the signed-in supplier; no client-side
+// filter is applied because the backend already returns only that
+// supplier's rows.
+export const RoutesApi = {
+  list: () => api.get<DeliveryRoute[]>("/api/routes"),
+  create: (body: {
+    name: string;
+    scheduleDay: string;
+    scheduleTime: string;
+  }) => api.post<DeliveryRoute>("/api/routes", body),
+  setActive: (id: string, active: boolean) =>
+    api.patch<DeliveryRoute>(
+      `/api/routes/${encodeURIComponent(id)}/active`,
+      { active },
+    ),
+};
+
+export const VehiclesApi = {
+  list: () => api.get<Vehicle[]>("/api/vehicles"),
+  create: (body: { plate: string; model: string; capacityKg: number }) =>
+    api.post<Vehicle>("/api/vehicles", body),
+  setActive: (id: string, active: boolean) =>
+    api.patch<Vehicle>(
+      `/api/vehicles/${encodeURIComponent(id)}/active`,
+      { active },
+    ),
 };
 
 // ---- Delivery tracking ------------------------------------------------

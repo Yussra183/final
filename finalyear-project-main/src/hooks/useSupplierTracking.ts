@@ -25,9 +25,11 @@
  *     by the store (`startTrip` / `tickTrip` / `markStopDelivered`
  *     call `fanOutLocalNotifications`), so we don't emit new ones.
  *
- * Today this runs entirely on the seed/mock state machine; swapping
- * in real GPS only requires wiring `Location.watchPositionAsync` into
- * the same return shape.
+ * Trips and routes live on the backend today (`refresh()` populates
+ * `trips` / `routes`); this hook simply wires the supplier's active
+ * trip into the trip-ticker + map. Swapping in real GPS only
+ * requires wiring `Location.watchPositionAsync` into the same
+ * return shape.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";

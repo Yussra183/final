@@ -10,8 +10,8 @@
  *     simulator, status timeline, distance/ETA, and route polyline
  *     behave identically to the existing Delivery Tracking screen.
  *   • Synthesize a `Route` from the shop to the customer when the
- *     order lacks `lat`/`lng` (the seed orders use address-only —
- *     we offset ~2 km from the shop so the map still has geometry).
+ *     order lacks `lat`/`lng` (we offset ~2 km from the shop so the
+ *     map still has geometry).
  *   • Fire seller-only fire-and-forget local notifications when the
  *     rider crosses three key transitions:
  *
@@ -149,9 +149,9 @@ function findActiveOrder(orders: Order[], sellerId: string | undefined): Order |
 
 /**
  * Synthesize a `LatLng` for the customer's destination when the order
- * only carries an address (the seed data is address-only). We offset
- * ~2 km north-east of the shop so the polyline has something to
- * draw. Mirrors the fallback used by `app/seller/delivery.tsx`.
+ * only carries an address. We offset ~2 km north-east of the shop so
+ * the polyline has something to draw. Mirrors the fallback used by
+ * `app/seller/delivery.tsx`.
  */
 function customerLatLng(order: Order, shop: LatLng): LatLng {
   const lat = order.deliveryLocation?.lat;
@@ -187,24 +187,19 @@ export function useRiderTracking(): RiderTrackingState {
     token: session?.token ?? null,
   });
 
-  // Reuse the existing simulator. We only invoke it when there's a
-  // real order + customer + route, so it advances through the
-  // rider lifecycle automatically.
+  // The local simulator is gone — backend order status + WebSocket GPS
+  // (consumed by useOrderTracking inside useDeliveryTracking) drive the
+  // timeline end-to-end. We forward the signed-in session token and the
+  // authoritative `Order` so the hook can subscribe.
   const tracking = useDeliveryTracking({
     order: {
-      orderId: order?.id ?? "mock",
-      orderNumber: order ? order.id.slice(-4).toUpperCase() : "DEMO",
+      orderId: order?.id ?? "",
       sellerId: order?.sellerId ?? "",
       sellerName: order?.sellerName ?? "Seller",
-      shopLocation: "My Shop",
       shopLatLng,
-      customerName: order?.customerName ?? "Customer",
-      customerLocation: order?.deliveryLocation?.address ?? "Customer address",
       customerLatLng: customer ?? shopLatLng,
-      gasType: order?.items[0]?.productName ?? "LPG Refill",
-      cylinderSize: order?.items[0]?.size ?? "13kg",
-      quantity: order?.items[0]?.quantity ?? 1,
-      radiusMeters: 8000,
+      order: order ?? null,
+      token: session?.token ?? null,
     },
     route,
   });

@@ -1,61 +1,846 @@
 /**
- * Admin Dashboard – Rider Applications page.
+ * Admin Dashboard → Rider Applications page.
  *
- * No `rider_applications` table exists in the database and there is no
- * backend endpoint for rider onboarding. Previously this page showed a
- * hard-coded list of applications and let the admin approve/reject them
- * locally. With the move to backend-driven data, both the rows and the
- * actions are gone — the page is a real, honest empty state.
+ * Lists every rider verification application, supports search, status
+ * filter, view details (with document previews), and approve/reject
+ * actions. Backed by the live API (`/api/admin/rider-permits`) through
+ * {@link useStore}.
  *
- * The information an admin needs about riders (vehicle, availability,
- * workload) is on the Riders page, which reads the live `rider_profiles`
- * table.
+ * Mirrors `seller-applications.tsx` end-to-end so the two admin review
+ * queues share the same UX.
  */
-import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { AdminLayout } from "../../src/components/admin/AdminLayout";
 import {
+  AdminAvatar,
   AdminButton,
   AdminCard,
   AdminEmptyState,
+  AdminModal,
+  AdminSearchBar,
+  AdminStatTile,
+  AdminTable,
+  ApplicationStatusBadge,
 } from "../../src/components/admin";
-import { Colors, FontSize, Spacing } from "../../constants/colors";
-import { useRouter } from "expo-router";
+import { AdminTableColumn } from "../../src/components/admin/AdminTable";
+import {
+  Colors,
+  FontSize,
+  Radius,
+  Spacing,
+} from "../../constants/colors";
+import { useStore } from "../../src/store/StoreContext";
+import { DocumentPreviewModal } from "../../src/components/DocumentPreviewModal";
+import {
+  AdminRiderPermitsApi,
+  UsersApi,
+} from "../../src/api/endpoints";
+import type {
+  RiderApplicationDocument,
+  RiderPermitSummary,
+} from "../../constants/types";
+
+type FilterKey = "all" | "pending" | "approved" | "rejected" | "under_review";
 
 export default function RiderApplicationsPage() {
-  const router = useRouter();
+  const store = useStore();
+
+  // ---- Live state ----------------------------------------------------
+  const [applications, setApplications] = useState<RiderPermitSummary[]>([]);
+  const [riderNames, setRiderNames] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // ---- Shared UI state ------------------------------------------------
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<FilterKey>("all");
+  const [viewTarget, setViewTarget] = useState<RiderPermitSummary | null>(
+    null,
+  );
+  const [viewDocs, setViewDocs] = useState<RiderApplicationDocument[] | null>(
+    null,
+  );
+  const [previewDoc, setPreviewDoc] =
+    useState<RiderApplicationDocument | null>(null);
+  /** Certificate preview state — distinct from `previewDoc` because the
+   * admin certificate endpoint returns raw bytes, not a document row. */
+  const [certPreview, setCertPreview] = useState<
+    { url: string; filename: string } | null
+  >(null);
+  const [approveTarget, setApproveTarget] =
+    useState<RiderPermitSummary | null>(null);
+  const [rejectTarget, setRejectTarget] =
+    useState<RiderPermitSummary | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+
+  // ---- Data loading --------------------------------------------------
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await store.fetchAdminRiderApplications();
+      setApplications(rows);
+      // Fetch each rider's user record so the table can show full name.
+      // One round-trip per rider keeps the admin UI honest with the
+      // backend's name (the rider_dto carries phone/email but not the
+      // full User.fullName).
+      const names: Record<string, string> = {};
+      await Promise.all(
+        rows.map(async (a) => {
+          if (!a.riderId || names[a.riderId]) return;
+          try {
+            const user = await UsersApi.byId(a.riderId);
+            names[a.riderId] = user.fullName;
+          } catch {
+            // Fall back to the rider id when the user lookup fails so the
+            // row still renders — the action buttons stay usable.
+            names[a.riderId] = `Rider #${a.riderId}`;
+          }
+        }),
+      );
+      setRiderNames(names);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(
+        (err as Error)?.message ?? "Couldn't load rider applications.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [store]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return applications.filter((a) => {
+      const matchQ =
+        !q ||
+        (riderNames[a.riderId] ?? "").toLowerCase().includes(q) ||
+        (a.certificateNumber ?? "").toLowerCase().includes(q);
+      const matchF = filter === "all" || a.status === filter;
+      return matchQ && matchF;
+    });
+  }, [applications, search, filter, riderNames]);
+
+  const counts = useMemo(
+    () => ({
+      all: applications.length,
+      pending: applications.filter((a) => a.status === "pending").length,
+      under_review: applications.filter(
+        (a) => a.status === "under_review",
+      ).length,
+      approved: applications.filter((a) => a.status === "approved").length,
+      rejected: applications.filter((a) => a.status === "rejected").length,
+    }),
+    [applications],
+  );
+
+  // ---- Actions -------------------------------------------------------
+  const handleApprove = async () => {
+    if (!approveTarget) return;
+    setActionError(null);
+    setActionBusy(true);
+    try {
+      await store.approveAdminRiderApplication(approveTarget.id);
+      await reload();
+      setApproveTarget(null);
+    } catch (err) {
+      setActionError(
+        (err as Error)?.message ?? "Could not approve this application.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!rejectTarget) return;
+    if (!rejectionReason.trim()) {
+      setActionError("Please provide a rejection reason.");
+      return;
+    }
+    setActionError(null);
+    setActionBusy(true);
+    try {
+      await store.rejectAdminRiderApplication(
+        rejectTarget.id,
+        rejectionReason.trim(),
+      );
+      await reload();
+      setRejectTarget(null);
+      setRejectionReason("");
+    } catch (err) {
+      setActionError(
+        (err as Error)?.message ?? "Could not reject this application.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const openDocuments = async (application: RiderPermitSummary) => {
+    setViewTarget(application);
+    try {
+      const docs = await AdminRiderPermitsApi.listDocumentsForAdmin(
+        application.id,
+      );
+      setViewDocs(docs);
+    } catch {
+      setViewDocs([]);
+    }
+  };
+
+  const formatSubmitted = (iso: string | null | undefined) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleDateString();
+    } catch {
+      return "—";
+    }
+  };
+
+  const columns: AdminTableColumn<RiderPermitSummary>[] = [
+    {
+      key: "rider",
+      label: "Rider",
+      flex: 2.2,
+      render: (a) => (
+        <View style={styles.cellRow}>
+          <AdminAvatar
+            name={riderNames[a.riderId] ?? `Rider #${a.riderId}`}
+            size={36}
+          />
+          <View>
+            <Text style={styles.cellTitle}>
+              {riderNames[a.riderId] ?? `Rider #${a.riderId}`}
+            </Text>
+            <Text style={styles.cellMeta}>#{a.id.slice(-4)}</Text>
+          </View>
+        </View>
+      ),
+    },
+    {
+      key: "rider-id",
+      label: "Rider ID",
+      flex: 0.9,
+      render: (a) => (
+        <Text style={[styles.cellText, { color: Colors.textSecondary }]}>
+          #{a.riderId}
+        </Text>
+      ),
+    },
+    {
+      key: "submitted",
+      label: "Submitted",
+      flex: 0.9,
+      render: (a) => (
+        <Text style={[styles.cellText, { color: Colors.textSecondary }]}>
+          {formatSubmitted(a.submittedAt)}
+        </Text>
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      flex: 0.9,
+      render: (a) => <ApplicationStatusBadge status={a.status} />,
+    },
+  ];
+
   return (
     <AdminLayout
       title="Rider Applications"
-      subtitle="Rider onboarding applications"
+      subtitle="Review and approve riders applying to deliver on the platform"
     >
-      <AdminCard>
-        <View style={styles.body}>
-          <AdminEmptyState
-            icon="📥"
-            title="No rider application workflow yet"
-            message="The database does not currently store rider applications — riders register directly as users. The data you need (vehicle details, availability, workload) is on the Riders page."
-          />
-          <View style={styles.buttonRow}>
+      <View style={styles.kpiRow}>
+        <AdminStatTile
+          label="Total Applications"
+          value={counts.all}
+          icon="📋"
+          tone="info"
+        />
+        <AdminStatTile
+          label="Pending"
+          value={counts.pending + counts.under_review}
+          icon="⏳"
+          tone="warning"
+        />
+        <AdminStatTile
+          label="Approved"
+          value={counts.approved}
+          icon="✅"
+          tone="success"
+        />
+        <AdminStatTile
+          label="Rejected"
+          value={counts.rejected}
+          icon="⛔"
+          tone="danger"
+        />
+      </View>
+
+      <AdminCard style={{ marginTop: Spacing.lg }}>
+        <AdminSearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search by rider name or certificate"
+          filters={[
+            { key: "all", label: "All", count: counts.all },
+            { key: "pending", label: "Pending", count: counts.pending },
+            { key: "under_review", label: "Under Review", count: counts.under_review },
+            { key: "approved", label: "Approved", count: counts.approved },
+            { key: "rejected", label: "Rejected", count: counts.rejected },
+          ]}
+          activeFilter={filter}
+          onFilterChange={(k) => setFilter(k as FilterKey)}
+        />
+        {loadError ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{loadError}</Text>
             <AdminButton
-              label="Go to Riders"
-              icon="🛵"
-              onPress={() => router.push("/riders" as any)}
+              label="Retry"
+              variant="secondary"
+              size="sm"
+              onPress={reload}
             />
           </View>
-        </View>
+        ) : null}
+        {loading && applications.length === 0 ? (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="small" color={Colors.primary} />
+            <Text style={styles.loadingText}>Loading applications…</Text>
+          </View>
+        ) : filtered.length === 0 ? (
+          <AdminEmptyState
+            icon="📋"
+            title="No applications found"
+            message="Try adjusting your search or filters."
+          />
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={{ minWidth: 900 }}>
+              <AdminTable
+                columns={columns}
+                rows={filtered}
+                keyExtractor={(a) => a.id}
+                rowActions={(a) => (
+                  <View style={styles.actionRow}>
+                    <AdminButton
+                      label="View"
+                      variant="secondary"
+                      size="sm"
+                      onPress={() => openDocuments(a)}
+                    />
+                    {a.status === "pending" || a.status === "under_review" ? (
+                      <>
+                        <AdminButton
+                          label="Approve"
+                          variant="success"
+                          size="sm"
+                          icon="✓"
+                          onPress={() => setApproveTarget(a)}
+                        />
+                        <AdminButton
+                          label="Reject"
+                          variant="danger"
+                          size="sm"
+                          icon="✕"
+                          onPress={() => setRejectTarget(a)}
+                        />
+                      </>
+                    ) : (
+                      <AdminButton
+                        label={
+                          a.status === "approved" ? "Approved" : "Rejected"
+                        }
+                        variant="ghost"
+                        size="sm"
+                        disabled
+                      />
+                    )}
+                  </View>
+                )}
+              />
+            </View>
+          </ScrollView>
+        )}
       </AdminCard>
+
+      {/* View Details + Documents */}
+      {viewTarget ? (
+        <AdminModal
+          visible
+          onClose={() => {
+            setPreviewDoc(null);
+            setViewTarget(null);
+            setViewDocs(null);
+            setCertPreview(null);
+          }}
+          title={riderNames[viewTarget.riderId] ?? `Rider #${viewTarget.riderId}`}
+          subtitle={`Application #${viewTarget.id}`}
+          hideFooter
+        >
+          <ScrollView
+            style={{ maxHeight: 460 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.detailHeader}>
+              <AdminAvatar
+                name={riderNames[viewTarget.riderId] ?? `Rider #${viewTarget.riderId}`}
+                size={56}
+              />
+              <View style={{ flex: 1, marginLeft: Spacing.md }}>
+                <Text style={styles.detailTitle}>
+                  {riderNames[viewTarget.riderId] ??
+                    `Rider #${viewTarget.riderId}`}
+                </Text>
+                <Text style={styles.detailMeta}>
+                  Rider ID #{viewTarget.riderId}
+                </Text>
+                <View style={{ marginTop: 6 }}>
+                  <ApplicationStatusBadge status={viewTarget.status} />
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.detailGrid}>
+              <Row
+                label="Rider ID"
+                value={`#${viewTarget.riderId}`}
+              />
+              <Row
+                label="Certificate No."
+                value={viewTarget.certificateNumber ?? "—"}
+              />
+              <Row
+                label="Submitted"
+                value={formatSubmitted(viewTarget.submittedAt)}
+              />
+              <Row
+                label="Reviewed"
+                value={formatSubmitted(viewTarget.reviewedAt)}
+              />
+              {viewTarget.reviewedByName ? (
+                <Row
+                  label="Reviewed By"
+                  value={viewTarget.reviewedByName}
+                />
+              ) : null}
+              {viewTarget.rejectionReason ? (
+                <Row
+                  label="Rejection Reason"
+                  value={viewTarget.rejectionReason}
+                />
+              ) : null}
+              {viewTarget.validUntil ? (
+                <Row
+                  label="Valid Until"
+                  value={viewTarget.validUntil}
+                />
+              ) : null}
+            </View>
+
+            <Text style={styles.subSection}>Documents</Text>
+            {viewDocs === null ? (
+              <View style={styles.loadingBox}>
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading documents…</Text>
+              </View>
+            ) : viewDocs.length === 0 ? (
+              <Text style={styles.docHelper}>
+                No documents attached yet.
+              </Text>
+            ) : (
+              <View style={styles.docList}>
+                {viewDocs.map((d) => (
+                  <View key={d.id} style={styles.docItem}>
+                    <Text style={styles.docIcon}>📄</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.docName}>
+                        {humanDocumentLabel(d.documentType)}
+                      </Text>
+                      <Text style={styles.docMeta}>
+                        {d.originalName} ·{" "}
+                        {(d.sizeBytes / 1024).toFixed(1)} KB
+                      </Text>
+                    </View>
+                    <AdminButton
+                      label="Open"
+                      variant="secondary"
+                      size="sm"
+                      onPress={() => setPreviewDoc(d)}
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {viewTarget.status === "pending" ||
+            viewTarget.status === "under_review" ? (
+              <View style={styles.detailActions}>
+                <AdminButton
+                  label="Approve Application"
+                  variant="success"
+                  icon="✓"
+                  onPress={() => {
+                    setApproveTarget(viewTarget);
+                    setViewTarget(null);
+                  }}
+                  style={{ flex: 1, marginRight: Spacing.sm }}
+                />
+                <AdminButton
+                  label="Reject"
+                  variant="danger"
+                  icon="✕"
+                  onPress={() => {
+                    setRejectTarget(viewTarget);
+                    setViewTarget(null);
+                  }}
+                  style={{ flex: 1 }}
+                />
+              </View>
+            ) : null}
+
+            {viewTarget.status === "approved" ? (
+              <View style={styles.permitSection}>
+                <Text style={styles.subSection}>Rider Certificate</Text>
+                <Text style={styles.permitHelper}>
+                  This application is approved. The official Gas Delivery
+                  Rider Certificate PDF is regenerated on demand by the
+                  server from the latest application data — you can view
+                  or re-download it any time.
+                </Text>
+                <View style={styles.detailActions}>
+                  <AdminButton
+                    label="View Certificate"
+                    variant="secondary"
+                    icon="👁"
+                    onPress={() =>
+                      setCertPreview({
+                        url: AdminRiderPermitsApi.adminCertificateUrl(viewTarget.id),
+                        filename: `Rider_Permit-${viewTarget.riderId}.pdf`,
+                      })
+                    }
+                    style={{ flex: 1, marginRight: Spacing.sm }}
+                  />
+                  <AdminButton
+                    label="Download Certificate"
+                    variant="primary"
+                    icon="⬇"
+                    onPress={() =>
+                      setCertPreview({
+                        url: AdminRiderPermitsApi.adminCertificateUrl(viewTarget.id),
+                        filename: `Rider_Permit-${viewTarget.riderId}.pdf`,
+                      })
+                    }
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </View>
+            ) : null}
+          </ScrollView>
+        </AdminModal>
+      ) : null}
+
+      {/* Approve confirmation */}
+      <AdminModal
+        visible={!!approveTarget}
+        onClose={() => setApproveTarget(null)}
+        title="Approve Rider Application?"
+        subtitle={`${
+          approveTarget
+            ? riderNames[approveTarget.riderId] ??
+              `Rider #${approveTarget.riderId}`
+            : ""
+        } will become a verified rider.`}
+        onConfirm={handleApprove}
+        confirmLabel="Approve"
+        confirmVariant="success"
+      >
+        <Text style={styles.dialogText}>
+          The applicant will be notified and immediately become eligible to
+          receive delivery orders. An official Gas Delivery Rider
+          Certificate will be available for download from their Profile.
+        </Text>
+        {actionError ? (
+          <Text style={styles.actionError}>{actionError}</Text>
+        ) : null}
+      </AdminModal>
+
+      {/* Reject confirmation */}
+      <AdminModal
+        visible={!!rejectTarget}
+        onClose={() => {
+          setRejectTarget(null);
+          setRejectionReason("");
+          setActionError(null);
+        }}
+        title="Reject Rider Application?"
+        subtitle={`${
+          rejectTarget
+            ? riderNames[rejectTarget.riderId] ??
+              `Rider #${rejectTarget.riderId}`
+            : ""
+        } will be notified with your reason.`}
+        onConfirm={handleReject}
+        confirmLabel="Reject"
+        confirmVariant="danger"
+      >
+        <Text style={styles.dialogText}>
+          The applicant will receive your reason in their in-app feed and
+          may re-upload corrected documents and submit a new application.
+        </Text>
+        <View style={{ marginTop: Spacing.md }}>
+          <Text style={styles.label}>Rejection reason</Text>
+          <TextInput
+            value={rejectionReason}
+            onChangeText={setRejectionReason}
+            placeholder="Provide a clear reason…"
+            placeholderTextColor={Colors.textMuted}
+            multiline
+            style={styles.textarea}
+          />
+        </View>
+        {actionError ? (
+          <Text style={styles.actionError}>{actionError}</Text>
+        ) : null}
+      </AdminModal>
+
+      <DocumentPreviewModal
+        visible={previewDoc != null}
+        onClose={() => setPreviewDoc(null)}
+        downloadUrl={previewDoc?.downloadUrl ?? ""}
+        contentType={previewDoc?.contentType ?? ""}
+        originalName={previewDoc?.originalName ?? previewDoc?.documentType}
+      />
+
+      <DocumentPreviewModal
+        visible={certPreview != null}
+        onClose={() => setCertPreview(null)}
+        downloadUrl={certPreview?.url ?? ""}
+        contentType="application/pdf"
+        originalName={certPreview?.filename ?? "Rider_Permit.pdf"}
+      />
     </AdminLayout>
   );
 }
 
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.detailRow}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue} numberOfLines={2}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function humanDocumentLabel(t: string): string {
+  switch (t) {
+    case "rider_application_form":
+      return "Signed Rider Application Form";
+    case "rider_national_id":
+      return "National ID Copy";
+    case "rider_driving_licence":
+      return "Driving Licence";
+    case "rider_passport_photo":
+      return "Passport Photo";
+    case "rider_vehicle_registration":
+      return "Vehicle Registration Card";
+    case "rider_permit":
+      return "Gas Delivery Rider Certificate";
+    default:
+      return t;
+  }
+}
+
 const styles = StyleSheet.create({
-  body: {
+  kpiRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: Spacing.md,
+  },
+  cellRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+  cellTitle: {
+    fontWeight: "800",
+    color: Colors.text,
+    fontSize: FontSize.sm,
+  },
+  cellMeta: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  cellText: {
+    color: Colors.text,
+    fontSize: FontSize.sm,
+    fontWeight: "600",
+  },
+  actionRow: {
+    flexDirection: "row",
+    gap: 4,
+    justifyContent: "flex-end",
+  },
+  detailHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: Spacing.md,
+  },
+  detailTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: "800",
+    color: Colors.text,
+  },
+  detailMeta: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    marginTop: 2,
+  },
+  detailGrid: {
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  detailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  detailLabel: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    fontWeight: "700",
+    minWidth: 110,
+  },
+  detailValue: {
+    fontSize: FontSize.sm,
+    color: Colors.text,
+    fontWeight: "800",
+    flexShrink: 1,
+    textAlign: "right",
+  },
+  subSection: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  permitSection: {
+    marginTop: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceMuted,
+  },
+  permitHelper: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.xs,
+    marginBottom: Spacing.sm,
+    lineHeight: 18,
+  },
+  docList: {
+    gap: 6,
+  },
+  docItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surfaceMuted,
+    padding: Spacing.sm,
+    borderRadius: Radius.md,
+    gap: Spacing.sm,
+  },
+  docIcon: {
+    fontSize: 18,
+  },
+  docName: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.text,
+    fontWeight: "700",
+  },
+  docMeta: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+  },
+  docHelper: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    fontStyle: "italic",
+  },
+  detailActions: {
+    flexDirection: "row",
+    marginTop: Spacing.lg,
+  },
+  dialogText: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    fontWeight: "600",
+  },
+  label: {
+    fontSize: FontSize.sm,
+    fontWeight: "700",
+    color: Colors.text,
+    marginBottom: 6,
+  },
+  textarea: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    padding: Spacing.md,
+    minHeight: 80,
+    color: Colors.text,
+    fontSize: FontSize.sm,
+    textAlignVertical: "top",
+  },
+  loadingBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
     paddingVertical: Spacing.md,
   },
-  buttonRow: {
+  loadingText: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+  },
+  errorBox: {
     flexDirection: "row",
-    justifyContent: "center",
-    marginTop: Spacing.md,
+    alignItems: "center",
+    gap: Spacing.sm,
+    backgroundColor: "#FEE2E2",
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  errorText: {
+    color: Colors.danger,
+    fontSize: FontSize.sm,
+    flex: 1,
+  },
+  actionError: {
+    color: Colors.danger,
+    fontSize: FontSize.xs,
+    marginTop: Spacing.sm,
+    fontWeight: "600",
   },
 });

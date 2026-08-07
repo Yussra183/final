@@ -1,8 +1,8 @@
 /**
- * Service façade over `src/lib/riderMatching.ts`.
+ * Service façade for the rider broadcast / dispatch flow.
  *
  * Goals:
- *   • Hide the in-memory lock implementation behind a stable interface
+ *   • Hide the in-memory claim-lock implementation behind a stable interface
  *     so the store layer doesn't import the lib directly.
  *   • Provide a single function that takes an `Order` and:
  *       - returns the proximity-ordered list of eligible riders
@@ -11,116 +11,72 @@
  *
  * Real integration (documented for the backend team):
  *   • `eligibleRidersForOrder` is implemented server-side at
- *     `GET /api/orders/dispatch/available`. The mock here keeps the UI
- *     fully exercisable while the backend writes are still in flight.
+ *     `GET /api/orders/dispatch/available`. The frontend no longer
+ *     maintains a local rider pool — the backend is the source of truth.
  *   • `claimForRider(orderId, riderId)` is implemented server-side at
- *     `POST /api/orders/{id}/claim`. The server uses an atomic SETNX to
- *     make sure only the first rider succeeds; everyone else gets 409
- *     with code `RIDER_BUSY`.
+ *     `POST /api/orders/{id}/claim`. The server uses an atomic UPDATE
+ *     to make sure only the first rider succeeds; everyone else gets
+ *     a conflict and we throw `RIDER_BUSY`.
+ *
+ * NOTE: seed/mock rider pool and seller↔rider assignment were removed.
+ * The broadcast service now returns the empty eligible-rider list
+ * (the backend fires the real broadcast when the seller accepts), and
+ * the claim lock short-circuits to "true" because the server's
+ * atomic claim is the actual lock today.
  */
-import {
-  listEligibleRiders,
-  acceptDelivery,
-  fetchOnlineRidersForSeller,
-  type Rider,
-} from "../lib/riderMatching";
 import type { Order } from "../../constants/types";
 import { OrderServiceError } from "./orderErrors";
 
-/**
- * Snapshot of the rider pool. The store feeds this in from
- * `useStore().users.filter(role === "rider")` (or its backend
- * equivalent) — we don't pull it ourselves so the service remains
- * pure against the inputs it's given.
- */
-export interface RiderPool {
-  list(): Promise<Rider[]> | Rider[];
+export interface Rider {
+  id: string;
+  fullName: string;
+  phone: string;
+  status: "online" | "offline" | "on_delivery";
+  available: boolean;
+  vehicle?: string;
+  rating?: number;
+  lat: number;
+  lng: number;
 }
 
 export interface RiderBroadcastService {
   /**
    * Riders who are online, available, and within `radiusM` of the
-   * shop — sorted by proximity (closest first). `null` means the
-   * order has no shop coordinates so we can't filter by distance; the
-   * caller should fall back to broadcasting to the whole pool.
+   * shop — sorted by proximity (closest first).
+   *
+   * The live system answers this through
+   * `GET /api/orders/dispatch/available` so the local service just
+   * returns `[]` and lets the backend drive the broadcast.
    */
   eligibleRidersForOrder(order: Order): Promise<Rider[]>;
   /**
-   * Try to claim an order for a specific rider. Returns true if the
-   * rider wins the race, false if another rider already claimed.
-   * Throws `RIDER_BUSY` so the store can surface a friendly message.
+   * Try to claim an order for a specific rider. Returns the rider if
+   * the rider wins the race, throws `RIDER_BUSY` if another rider
+   * already claimed.
    */
   claimForRider(orderId: string, rider: Rider): Promise<Rider>;
 }
 
-/** Optional shop coordinates — used for the distance filter. */
-const shopCoords = (
-  order: Order,
-): { lat: number; lng: number } | null => {
-  // Future: the seller profile carries lat/lng. Today the order itself
-  // doesn't, so we fall back to the delivery coordinates when present
-  // (the rider rides between shop and customer, so either is a fine
-  // proxy for "near the job").
-  const dl = order.deliveryLocation;
-  if (typeof dl.lat === "number" && typeof dl.lng === "number") {
-    return { lat: dl.lat, lng: dl.lng };
-  }
-  return null;
-};
-
 /**
- * Default implementation. Holds no state — the underlying lock is owned
- * by `src/lib/riderMatching.ts` which is itself a singleton at runtime.
- *
- * IMPORTANT: the broadcast pool is filtered by `order.sellerId` via
- * `fetchOnlineRidersForSeller` — mirroring the backend's `seller_riders`
- * rule. Riders from other sellers never appear here, never get a
- * notification, and can never race for an order outside their team.
+ * Default implementation. The backend owns rider eligibility and the
+ * claim lock today, so the local stub is intentionally minimal.
  */
 export const defaultRiderBroadcastService: RiderBroadcastService = {
-  async eligibleRidersForOrder(order) {
-    const here = shopCoords(order);
-    if (!here) return [];
-    const team = await fetchOnlineRidersForSeller(order.sellerId);
-    return listEligibleRiders(
-      {
-        orderId: order.id,
-        orderNumber: order.id.slice(-4),
-        sellerId: order.sellerId,
-        sellerName: order.sellerName,
-        shopLocation:
-          order.deliveryLocation.address ?? "Customer address",
-        shopLatLng: here,
-        customerName: order.customerName,
-        customerLocation: order.deliveryLocation.address ?? "",
-        customerLatLng: here,
-        gasType: order.items[0]?.productName ?? "Gas",
-        cylinderSize: order.items[0]?.size ?? "",
-        quantity: order.items[0]?.quantity ?? 1,
-        // The lib reads order.radiusMeters off this shape. We default
-        // to the standard 5 km broadcast radius from the lib.
-      },
-      team,
-    );
+  async eligibleRidersForOrder(_order) {
+    // Backend will broadcast on accept via /api/orders/dispatch/available.
+    return [];
   },
 
-  async claimForRider(orderId, rider) {
-    // Mirror the backend's atomic claim — first rider wins. The lib's
-    // `acceptDelivery` returns false on a contested order, which is
-    // exactly the condition we want to surface to the UI.
+  async claimForRider(_orderId, rider) {
     if (rider.status !== "online" || !rider.available) {
       throw new OrderServiceError(
         "RIDER_OFFLINE",
         "You are not available to take deliveries.",
       );
     }
-    const ok = acceptDelivery(orderId, rider.id);
-    if (!ok) {
-      throw new OrderServiceError(
-        "RIDER_BUSY",
-        "Another rider already accepted this delivery.",
-      );
-    }
+    // The atomic claim lives server-side at POST /api/orders/{id}/claim
+    // — local short-circuit returns the rider so the store's caller
+    // can continue; the repo will raise RIDER_BUSY on contention.
     return rider;
   },
 };

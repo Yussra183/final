@@ -1,4 +1,4 @@
-import { API_CONFIG } from "./config";
+import { API_CONFIG, recoverBaseUrl } from "./config";
 import { ApiError } from "./errors";
 
 /** Resolves with the current bearer token (or null when unauthenticated). */
@@ -9,7 +9,13 @@ export type TokenProvider = () => string | null | Promise<string | null>;
  * later by reimplementing this single file.
  */
 export class ApiClient {
-  private readonly baseUrl: string;
+  /**
+   * Mutable on purpose — the network-recovery wrapper rebinds this
+   * when it discovers a new reachable host (see
+   * {@link requestWithNetworkRecovery}). All subsequent requests use
+   * the freshly discovered URL until something else mutates it again.
+   */
+  private baseUrl: string;
   private readonly timeoutMs: number;
   private readonly tokenProvider: TokenProvider;
 
@@ -27,23 +33,23 @@ export class ApiClient {
   // ---- Public verbs ----------------------------------------------------
 
   get<T>(path: string, query?: Record<string, unknown>): Promise<T> {
-    return this.request<T>("GET", path, undefined, query);
+    return this.requestWithNetworkRecovery<T>("GET", path, undefined, query);
   }
 
   post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>("POST", path, body);
+    return this.requestWithNetworkRecovery<T>("POST", path, body);
   }
 
   put<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>("PUT", path, body);
+    return this.requestWithNetworkRecovery<T>("PUT", path, body);
   }
 
   patch<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>("PATCH", path, body);
+    return this.requestWithNetworkRecovery<T>("PATCH", path, body);
   }
 
   delete<T>(path: string): Promise<T> {
-    return this.request<T>("DELETE", path);
+    return this.requestWithNetworkRecovery<T>("DELETE", path);
   }
 
   /**
@@ -56,9 +62,30 @@ export class ApiClient {
    * The default deadline is `API_CONFIG.UPLOAD_TIMEOUT_MS` so a
    * connection on a slow network can finish uploading without being
    * killed by the JSON-RPC budget.
+   *
+   * Goes through {@link uploadWithNetworkRecovery} so a transient
+   * NETWORK failure (e.g. backend restarted on a new LAN IP) recovers
+   * transparently rather than surfacing a hard error.
    */
-  async upload<T>(path: string, form: FormData, options?: { timeoutMs?: number }): Promise<T> {
-    const url = this.buildUrl(path);
+  upload<T>(
+    path: string,
+    form: FormData,
+    options?: { timeoutMs?: number; query?: Record<string, unknown> },
+  ): Promise<T> {
+    return this.uploadWithNetworkRecovery<T>(path, form, options);
+  }
+
+  /**
+   * Internal multipart upload implementation. Marked `private` so the
+   * public {@link upload} entry point can route through the network
+   * recovery wrapper without callers bypassing it.
+   */
+  private async uploadImpl<T>(
+    path: string,
+    form: FormData,
+    options?: { timeoutMs?: number; query?: Record<string, unknown> },
+  ): Promise<T> {
+    const url = this.buildUrl(path, options?.query);
     const deadline = options?.timeoutMs ?? API_CONFIG.UPLOAD_TIMEOUT_MS;
 
     const controller = new AbortController();
@@ -135,12 +162,69 @@ export class ApiClient {
         );
       }
       throw new ApiError(
-        (err as Error)?.message ?? "Network error",
+        `Network request failed (${url}): ${
+          (err as Error)?.message ?? "unknown error"
+        }`,
         0,
         "NETWORK",
       );
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  // ---- Network recovery -----------------------------------------------
+
+  /**
+   * Wraps {@link requestImpl} with a one-shot recovery: if the call
+   * throws an {@link ApiError} with code `NETWORK`, we re-probe the
+   * candidate list (see {@link recoverBaseUrl} in `config.ts`) and,
+   * if a new reachable host is found, retry the original request once
+   * against the updated `BASE_URL`.
+   *
+   * The recovery is intentionally bounded to a single retry so we
+   * never silently mask a real backend outage — if the retry also
+   * fails, the error propagates as a normal `NETWORK` ApiError.
+   */
+  private async requestWithNetworkRecovery<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<T> {
+    try {
+      return await this.requestImpl<T>(method, path, body, query, options);
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+      const recovered = await recoverBaseUrl();
+      if (!recovered) throw err;
+      // Refresh the singleton's baseUrl so the retry uses the freshly
+      // discovered host. The next call goes through this same path
+      // and rebuilds the URL from `API_CONFIG.BASE_URL` directly.
+      this.baseUrl = recovered;
+      return this.requestImpl<T>(method, path, body, query, options);
+    }
+  }
+
+  /**
+   * Same as {@link requestWithNetworkRecovery} but for the multipart
+   * upload path. The seller-approval flow uses multipart on every
+   * approve, so we want the same auto-recovery there.
+   */
+  private async uploadWithNetworkRecovery<T>(
+    path: string,
+    form: FormData,
+    options?: { timeoutMs?: number; query?: Record<string, unknown> },
+  ): Promise<T> {
+    try {
+      return await this.uploadImpl<T>(path, form, options);
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+      const recovered = await recoverBaseUrl();
+      if (!recovered) throw err;
+      this.baseUrl = recovered;
+      return this.uploadImpl<T>(path, form, options);
     }
   }
 
@@ -151,8 +235,14 @@ export class ApiClient {
    * {@link post}, etc. — exposed publicly so endpoints that need a
    * longer deadline (e.g. `refresh()` bulk-fetching 9 resources) can
    * pass `{ timeoutMs }` without bumping the singleton default.
+   *
+   * Marked `private` so the only public surface is the network-
+   * recovery wrapper {@link requestWithNetworkRecovery}. Anything
+   * that bypasses the recovery would re-introduce the hard
+   * "Network request failed" surface on the first failed request
+   * after a backend restart.
    */
-  async request<T>(
+  private async requestImpl<T>(
     method: string,
     path: string,
     body?: unknown,
@@ -300,6 +390,36 @@ function safeJsonParse(text: string): unknown {
 
 /** Default singleton — bind a token provider from the store at app boot. */
 export const api = new ApiClient();
+
+/**
+ * True when an `ApiError` (or any thrown value) signals a connectivity
+ * failure rather than a server-side rejection. Used by the network-
+ * recovery wrapper to decide whether to re-probe for a reachable host
+ * before giving up.
+ *
+ * The check is deliberately conservative: any 4xx / 5xx response from
+ * the server is treated as authoritative — only the `NETWORK` /
+ * `TIMEOUT` / `AUTH_TIMEOUT` synthetic codes (and a few raw fetch
+ * failures) trigger recovery.
+ */
+function isNetworkError(err: unknown): boolean {
+  if (err instanceof ApiError) {
+    return (
+      err.code === "NETWORK" ||
+      err.code === "TIMEOUT" ||
+      err.code === "AUTH_TIMEOUT"
+    );
+  }
+  // Raw `fetch()` rejections (no ApiError wrapping) are connectivity
+  // failures — RN surfaces "Network request failed", web surfaces
+  // "Load failed". Treat them as recoverable.
+  const msg = (err as Error | undefined)?.message ?? "";
+  return (
+    msg.toLowerCase().includes("network request failed") ||
+    msg.toLowerCase().includes("load failed") ||
+    msg.toLowerCase().includes("failed to fetch")
+  );
+}
 
 /** Re-bind the token provider after the user logs in/out. */
 export function setTokenProvider(provider: TokenProvider) {

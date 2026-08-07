@@ -23,7 +23,10 @@ public record SellerProfileDto(
         String[] availableSizes,
         boolean openNow,
         Double lat,
-        Double lng
+        Double lng,
+        /** Admin / district view of where the Business Address sits. */
+        String region,
+        String district
 ) {
 
     public static SellerProfileDto from(SellerProfileEntity e, String sellerName, double distanceKm,
@@ -39,7 +42,9 @@ public record SellerProfileDto(
                 availableSizes,
                 e.isOpenNow(),
                 e.getLat(),
-                e.getLng()
+                e.getLng(),
+                e.getRegion(),
+                e.getDistrict()
         );
     }
 }

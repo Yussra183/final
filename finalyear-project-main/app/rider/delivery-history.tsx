@@ -9,6 +9,7 @@ import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { LogoutButton } from "../../src/components/LogoutButton";
 import { EmptyState } from "../../src/components/EmptyState";
+import { useRiderLock } from "../../src/hooks/useRiderLock";
 import {
   formatCurrency,
   formatDate,
@@ -19,6 +20,9 @@ import {
 export default function DeliveryHistory() {
   const { session, getOrdersForUser } = useStore();
   const user = session!.user;
+  // Lock banner + modal — rendered inline at the top of the page so
+  // the original layout (cards, list, spacing) is unchanged.
+  const { Banner, Modal, isApproved } = useRiderLock();
   const history = useMemo(
     () =>
       getOrdersForUser(user.id, "rider").filter(
@@ -38,6 +42,7 @@ export default function DeliveryHistory() {
         left={<DrawerMenuButton />}
         right={<LogoutButton />}
       />
+      {Banner}
       <FlatList
         data={history}
         keyExtractor={(o) => o.id}
@@ -51,7 +56,9 @@ export default function DeliveryHistory() {
           />
         }
         renderItem={({ item }) => (
-          <Card>
+          <Card
+            style={!isApproved ? styles.cardLocked : null}
+          >
             <View style={styles.row}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>
@@ -71,6 +78,7 @@ export default function DeliveryHistory() {
           </Card>
         )}
       />
+      {Modal}
     </SafeAreaView>
   );
 }
@@ -83,5 +91,8 @@ const styles = StyleSheet.create({
     marginTop: Spacing.sm,
     color: Colors.primary,
     fontWeight: "800",
+  },
+  cardLocked: {
+    opacity: 0.55,
   },
 });

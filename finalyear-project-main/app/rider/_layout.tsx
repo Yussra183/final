@@ -1,38 +1,103 @@
 /**
  * Rider Module — Drawer Sidebar Navigation
  *
- * Uses Expo Router's built-in `Drawer` export (`expo-router/drawer`) which
- * wraps `@react-navigation/drawer` with the correct `Screen` component
- * so each file in `app/rider/` becomes a drawer entry.
+ * Uses Expo Router's built-in `Drawer` export (`expo-router/drawer`) with
+ * a fully custom sidebar body. Each menu entry stays visible for every
+ * rider — new, pending, rejected and approved riders all see the same
+ * menu. Locked entries:
  *
- * - Route guard: signed-in riders only; everyone else → /auth/login.
- * - Custom sidebar header: branded logo + name above the menu list.
- * - Active item styling uses the rider emerald tone (`Colors.rider`).
+ *   • render with a 🔒 lock icon on the right
+ *   • are tinted at 50% opacity (matching the supplier sidebar)
+ *   • still navigate to the destination when tapped (so the rider can
+ *     preview the page) instead of forwarding to Profile
+ *
+ * Individual page bodies wrap their interactive bits in
+ * {@link RiderAccessGate} for the per-page banner + tap-to-modal UX.
  */
 import React from "react";
-import { Redirect } from "expo-router";
+import { Redirect, useRouter, usePathname } from "expo-router";
 import { Drawer } from "expo-router/drawer";
 import {
   DrawerContentScrollView,
-  DrawerItemList,
   type DrawerContentComponentProps,
+  type DrawerItem,
 } from "@react-navigation/drawer";
-import { View, Text, StyleSheet } from "react-native";
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useStore } from "../../src/store/StoreContext";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import { useRiderVerificationStatus } from "../../src/hooks/useRiderVerificationStatus";
+
+interface RiderRoute {
+  key: string;
+  label: string;
+  icon: string;
+  path: string;
+  /**
+   * Rider *business* features stay locked until the admin approves the
+   * application. Account-level routes (Dashboard, Notifications,
+   * Profile, Safety Guidelines) are always reachable.
+   */
+  requiresApproval?: boolean;
+}
+
+const RIDER_ROUTES: RiderRoute[] = [
+  { key: "dashboard", label: "Dashboard", icon: "grid-outline", path: "/rider/dashboard" },
+  { key: "delivery-requests", label: "Delivery Requests", icon: "download-outline", path: "/rider/delivery-requests", requiresApproval: true },
+  { key: "active-delivery", label: "Active Delivery", icon: "navigate-outline", path: "/rider/active-delivery", requiresApproval: true },
+  { key: "delivery-history", label: "Delivery History", icon: "time-outline", path: "/rider/delivery-history", requiresApproval: true },
+  { key: "earnings", label: "Earnings", icon: "cash-outline", path: "/rider/earnings", requiresApproval: true },
+  { key: "my-team", label: "My Team", icon: "people-outline", path: "/rider/my-team", requiresApproval: true },
+  { key: "safety-guidelines", label: "Safety Guidelines", icon: "shield-checkmark-outline", path: "/rider/safety-guidelines" },
+  { key: "profile", label: "Profile", icon: "person-circle-outline", path: "/rider/profile" },
+];
+
+const ICON_MAP: Record<string, keyof typeof Ionicons.glyphMap> = {
+  "grid-outline": "grid-outline",
+  "download-outline": "download-outline",
+  "navigate-outline": "navigate-outline",
+  "time-outline": "time-outline",
+  "cash-outline": "cash-outline",
+  "people-outline": "people-outline",
+  "shield-checkmark-outline": "shield-checkmark-outline",
+  "person-circle-outline": "person-circle-outline",
+};
 
 /**
  * Custom sidebar body.
- * Renders the default DrawerItemList (with icons & labels) plus a branded
- * header at the top of the panel.
+ * Renders the menu rows directly (icons + labels + lock indicator) and
+ * a branded header at the top of the panel.
  */
 function RiderDrawerContent(props: DrawerContentComponentProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { session } = useStore();
+  const user = session?.user;
+  // Approval status drives the lock affordance on each row.
+  const verification = useRiderVerificationStatus();
+  const isApproved = verification.isApproved;
+
+  const isActive = (target: string) => {
+    const norm = (s: string) => s.replace(/^\/rider\/?/, "");
+    const a = norm(target);
+    const p = norm(pathname ?? "");
+    if (a === "") return p === "";
+    return p.startsWith(a);
+  };
+
+  const handlePress = (path: string) => {
+    router.push(path as any);
+    props.navigation.closeDrawer?.();
+  };
+
   return (
-    <DrawerContentScrollView
-      {...props}
-      contentContainerStyle={styles.drawerContent}
-    >
+    <DrawerContentScrollView {...props} contentContainerStyle={styles.drawerContent}>
       <View style={styles.drawerHeader}>
         <View style={styles.logo}>
           <Text style={styles.logoEmoji}>🛵</Text>
@@ -40,7 +105,48 @@ function RiderDrawerContent(props: DrawerContentComponentProps) {
         <Text style={styles.brand}>Gas Delivery</Text>
         <Text style={styles.brandSub}>Rider Portal</Text>
       </View>
-      <DrawerItemList {...props} />
+
+      <ScrollView contentContainerStyle={styles.menuSection}>
+        {RIDER_ROUTES.map((r) => {
+          const active = isActive(r.path);
+          const locked = !!r.requiresApproval && !isApproved;
+          const iconName = ICON_MAP[r.icon] ?? "ellipse-outline";
+          return (
+            <TouchableOpacity
+              key={r.key}
+              activeOpacity={0.85}
+              onPress={() => handlePress(r.path)}
+              style={[
+                styles.menuRow,
+                active && styles.menuRowActive,
+                locked && styles.menuRowLocked,
+              ]}
+            >
+              <View
+                style={[
+                  styles.iconBubble,
+                  active && { backgroundColor: Colors.rider },
+                ]}
+              >
+                <Ionicons
+                  name={iconName}
+                  size={18}
+                  color={active ? "#FFF" : Colors.text}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.menuLabel,
+                  active && { color: Colors.rider, fontWeight: "800" },
+                ]}
+              >
+                {r.label}
+              </Text>
+              {locked ? <Text style={styles.lockIcon}>🔒</Text> : null}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
     </DrawerContentScrollView>
   );
 }
@@ -59,107 +165,26 @@ export default function RiderLayout() {
 
   return (
     <TypedDrawer
-      drawerContent={(props: DrawerContentComponentProps) => <RiderDrawerContent {...props} />}
+      drawerContent={(props: DrawerContentComponentProps) => (
+        <RiderDrawerContent {...props} />
+      )}
       screenOptions={{
-        // Hide the default navigation header — every screen ships its own
-        // branded header (☰ + title + avatar).
         headerShown: false,
-
-        // Active item styling — emerald tone matches the rider role color.
-        drawerActiveTintColor: Colors.rider,
-        drawerActiveBackgroundColor: "#D1FAE5",
-        drawerInactiveTintColor: Colors.text,
-
-        // Drawer panel
         drawerStyle: {
           backgroundColor: Colors.surface,
           width: 280,
         },
-        drawerLabelStyle: {
-          fontSize: FontSize.md,
-          fontWeight: "700",
-          marginLeft: -8,
-        },
-        drawerItemStyle: {
-          borderRadius: Radius.md,
-          marginVertical: 2,
-          paddingHorizontal: Spacing.sm,
-        },
-
-        // Smooth slide animation
         drawerType: "slide",
       }}
     >
-      <TypedDrawer.Screen
-        name="dashboard"
-        options={{
-          drawerLabel: "Dashboard",
-          title: "Dashboard",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="grid-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <TypedDrawer.Screen
-        name="delivery-requests"
-        options={{
-          drawerLabel: "Delivery Requests",
-          title: "Delivery Requests",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="download-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <TypedDrawer.Screen
-        name="active-delivery"
-        options={{
-          drawerLabel: "Active Delivery",
-          title: "Active Delivery",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="navigate-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <TypedDrawer.Screen
-        name="delivery-history"
-        options={{
-          drawerLabel: "Delivery History",
-          title: "Delivery History",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="time-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <TypedDrawer.Screen
-        name="earnings"
-        options={{
-          drawerLabel: "Earnings",
-          title: "Earnings",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="cash-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <TypedDrawer.Screen
-        name="safety-guidelines"
-        options={{
-          drawerLabel: "Safety Guidelines",
-          title: "Safety Guidelines",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="shield-checkmark-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <TypedDrawer.Screen
-        name="profile"
-        options={{
-          drawerLabel: "Profile",
-          title: "Profile",
-          drawerIcon: ({ color, size }: { color: string; size: number }) => (
-            <Ionicons name="person-circle-outline" size={size} color={color} />
-          ),
-        }}
-      />
+      <TypedDrawer.Screen name="dashboard" />
+      <TypedDrawer.Screen name="delivery-requests" />
+      <TypedDrawer.Screen name="active-delivery" />
+      <TypedDrawer.Screen name="delivery-history" />
+      <TypedDrawer.Screen name="earnings" />
+      <TypedDrawer.Screen name="safety-guidelines" />
+      <TypedDrawer.Screen name="my-team" />
+      <TypedDrawer.Screen name="profile" />
     </TypedDrawer>
   );
 }
@@ -195,5 +220,41 @@ const styles = StyleSheet.create({
     color: "#D1FAE5",
     fontSize: FontSize.sm,
     marginTop: 2,
+  },
+  menuSection: {
+    paddingHorizontal: Spacing.sm,
+    paddingBottom: Spacing.xl,
+  },
+  menuRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.md,
+    marginVertical: 2,
+    gap: Spacing.md,
+  },
+  menuRowActive: {
+    backgroundColor: "#D1FAE5",
+  },
+  menuRowLocked: {
+    opacity: 0.5,
+  },
+  iconBubble: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.surfaceMuted,
+  },
+  menuLabel: {
+    fontSize: FontSize.md,
+    fontWeight: "700",
+    color: Colors.text,
+    flex: 1,
+  },
+  lockIcon: {
+    fontSize: 13,
   },
 });

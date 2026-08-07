@@ -9,7 +9,8 @@
  * (Spring Boot backend) only needs to swap the mock store — no screen
  * changes required.
  */
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   RefreshControl,
   ScrollView,
@@ -150,10 +151,39 @@ export default function SellerDashboard() {
     products,
     notifications,
     sellerPermits,
+    refresh,
     getOrdersForUser,
     getProductsForSeller,
     getNotificationsForUser,
   } = useStore();
+
+  // Pull-to-refresh wiring: hits the store-level `refresh()` so the
+  // seller's permit (and notification feed) re-hydrate from the backend.
+  // Without this, an admin's approval performed in another session is
+  // never picked up until the seller signs out and back in.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
+
+  // Auto-refresh on screen focus. This is what makes the dashboard
+  // unlock after the admin approves the permit in another session:
+  // every time the seller returns to this tab, the store re-fetches
+  // `/api/permits/me` and mirrors the latest `status` onto the session,
+  // which the layout and banner read off.
+  useFocusEffect(
+    useCallback(() => {
+      refresh().catch(() => {
+        // Silent — the pull-to-refresh surface gives the seller a manual
+        // retry path; we don't want to surface a toast every focus.
+      });
+    }, [refresh]),
+  );
 
   const user = session?.user;
   const sellerPermit = user ? sellerPermits[user.id] : undefined;
@@ -204,7 +234,9 @@ export default function SellerDashboard() {
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={false} onRefresh={() => {}} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
         {/* ---- Welcome banner ---- */}
         <View style={styles.welcome}>

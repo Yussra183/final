@@ -6,10 +6,15 @@
  * from `useStore().session.user` and the active permit (if any) is
  * surfaced to show the Business Permit Status.
  *
+ * The permit is read straight from the live `sellerPermits` slice
+ * (populated by `fetchMyPermit` from `GET /api/permits/me`) and
+ * refetched on every focus so the green "Approved" pill flips
+ * immediately after the admin approves the application.
+ *
  * Editing is wired to `updateProfile()` so saving a change goes
  * straight to the data layer.
  */
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Modal,
@@ -20,6 +25,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { SellerHeader } from "../../src/components/SellerHeader";
@@ -32,7 +38,8 @@ import {
 } from "../../src/components/LicenseApplicationSection";
 import { useStore } from "../../src/store/StoreContext";
 import { permitTone } from "../../src/utils/format";
-import { User } from "../../constants/types";
+import { resolveCurrentDeviceCoords } from "../../src/lib/deviceLocation";
+import type { User } from "../../constants/types";
 
 /** Field row used inside the profile. */
 function Field(props: {
@@ -72,22 +79,46 @@ function permitLabel(s: string) {
 export default function SellerProfile() {
   const {
     session,
-    getPermitForSeller,
+    sellerPermits,
+    fetchMyPermit,
     updateProfile,
+    saveSellerLocation,
     submitPermit,
   } = useStore();
 
   const [editOpen, setEditOpen] = useState(false);
+  const [addressOpen, setAddressOpen] = useState(false);
   const [pwdOpen, setPwdOpen] = useState(false);
 
   const user = session?.user;
+  // Read the live permit from the sellerPermits slice — the same slice
+  // the dashboard banner consumes, so the two surfaces stay in sync.
   const permit = useMemo(
-    () => (user ? getPermitForSeller(user.id) : undefined),
-    [user, getPermitForSeller],
+    () => (user ? sellerPermits[user.id] : undefined),
+    [user, sellerPermits],
   );
 
-  // Static business metadata that is not in the store today — shown
-  // here so the page is non-placeholder. Backend will replace these.
+  // Refetch the permit every time the Profile screen regains focus.
+  // Without this, an admin approval performed in another session is
+  // never picked up until the seller signs out and back in — the same
+  // focus-refresh pattern the dashboard uses.
+  useFocusEffect(
+    useCallback(() => {
+      fetchMyPermit().catch(() => {
+        // Silent — the banner + status pill already handle the "no
+        // permit yet" state, and the user can pull-to-refresh from
+        // sibling screens to retry.
+      });
+    }, [fetchMyPermit]),
+  );
+
+  // Business metadata is read straight from the signed-in user's profile
+  // (filled in via registration / Edit Profile / permit submission).
+  // The granular location fields on `user` are mirrored onto the
+  // session by `refresh()`'s seller branch (`SellersApi.me`) so they
+  // are populated after login even when no permit has been submitted
+  // yet. Composing the display string from those pieces keeps the
+  // header in sync with whatever the seller typed in either place.
   const business = useMemo(() => {
     if (!user) {
       return {
@@ -96,16 +127,17 @@ export default function SellerProfile() {
         hours: "Mon–Sat, 08:00 – 20:00",
       };
     }
-    if (user.username === "gaspro") {
-      return {
-        name: "GasPro Supplies",
-        address: "Kariakoo Market, Block D, Dar es Salaam",
-        hours: "Mon–Sat, 08:00 – 20:00",
-      };
-    }
+    const composed = [user.street, user.ward, user.district, user.region]
+      .map((p) => (p ?? "").trim())
+      .filter(Boolean)
+      .join(", ");
+    const displayAddress =
+      user.address?.trim() ||
+      composed ||
+      "Address not set";
     return {
       name: `${user.fullName}'s Shop`,
-      address: user.address ?? "Address not set",
+      address: displayAddress,
       hours: "Mon–Sat, 08:00 – 20:00",
     };
   }, [user]);
@@ -167,22 +199,56 @@ export default function SellerProfile() {
             tint={Colors.info}
           />
           <Divider />
-          <Field
-            icon="document-text-outline"
-            label="Business Permit Status"
-            value={
-              permit
-                ? `${permitLabel(permit.status)} • #${permit.registrationNumber}`
-                : "Not yet submitted"
-            }
-            tint={
-              permit && permit.status === "approved"
-                ? Colors.success
-                : permit && permit.status === "rejected"
-                  ? Colors.danger
-                  : Colors.warning
-            }
-          />
+          <View style={styles.field}>
+            <View
+              style={[
+                styles.fieldIcon,
+                {
+                  backgroundColor:
+                    permit && permit.status === "approved"
+                      ? Colors.success + "22"
+                      : permit && permit.status === "rejected"
+                        ? Colors.danger + "22"
+                        : Colors.warning + "22",
+                },
+              ]}
+            >
+              <Ionicons
+                name="document-text-outline"
+                size={18}
+                color={
+                  permit && permit.status === "approved"
+                    ? Colors.success
+                    : permit && permit.status === "rejected"
+                      ? Colors.danger
+                      : Colors.warning
+                }
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Business Permit Status</Text>
+              <View style={styles.permitRow}>
+                <Text style={styles.fieldValue}>
+                  {permit ? permitLabel(permit.status) : "Not yet submitted"}
+                </Text>
+                {permit ? (
+                  <StatusPill
+                    label={permitLabel(permit.status)}
+                    tone={
+                      permit.status === "approved"
+                        ? "success"
+                        : permit.status === "rejected"
+                          ? "danger"
+                          : permit.status === "under_review"
+                            ? "info"
+                            : "warning"
+                    }
+                    style={styles.permitPill}
+                  />
+                ) : null}
+              </View>
+            </View>
+          </View>
         </Card>
 
         {/* Owner section */}
@@ -255,6 +321,21 @@ export default function SellerProfile() {
           />
         </View>
 
+        {/* Business Address edit. Mirrors the customer Profile's
+            "Location Information" card — same field shape, same save
+            semantics (PUT /api/sellers/me via the store). The header
+            above reflects whatever the seller saves here on the next
+            render. */}
+        <View style={[styles.actionRow, { marginTop: Spacing.sm }]}>
+          <AppButton
+            title="Edit Business Address"
+            variant="outline"
+            leftIcon={<Ionicons name="location-outline" size={18} color={Colors.primary} />}
+            style={{ flex: 1 }}
+            onPress={() => setAddressOpen(true)}
+          />
+        </View>
+
         <View style={{ height: Spacing.xxl }} />
       </ScrollView>
 
@@ -267,6 +348,31 @@ export default function SellerProfile() {
           await updateProfile(patch);
           Alert.alert("Saved", "Your profile has been updated.");
           setEditOpen(false);
+        }}
+      />
+
+      <EditBusinessAddressModal
+        visible={addressOpen}
+        onClose={() => setAddressOpen(false)}
+        user={user ?? null}
+        businessName={business.name}
+        onSave={async (patch) => {
+          // saveSellerLocation calls POST /api/sellers/me with the
+          // full business address patch; the response carries the
+          // server-resolved lat/lng (when the patch omitted them)
+          // which the store merges onto `session.user`.
+          //
+          // The modal also forwards an optional device GPS fix
+          // (`deviceCoords`) captured at save time so the saved row
+          // gets the exact foreground fix when permission is granted;
+          // otherwise the backend's geocoder fills in the coordinates
+          // — the seller never sees a lat/lng field either way.
+          await saveSellerLocation(patch);
+          Alert.alert(
+            "Business address updated",
+            "Your shop location has been saved.",
+          );
+          setAddressOpen(false);
         }}
       />
 
@@ -475,6 +581,189 @@ function ChangePasswordModal({
   );
 }
 
+/**
+ * Edit Business Address modal.
+ *
+ * Mirrors the customer Profile's "Location Information" card field
+ * for field so a seller can fill in the same business address that
+ * the registration form collects (Region / District / Ward / Street /
+ * Full Address / Latitude / Longitude). Saving here calls
+ * `saveSellerLocation` (which itself posts to `/api/sellers/me`),
+ * and the store merges the server's response onto `session.user` —
+ * including the resolved lat/lng the customer "Nearby Sellers"
+ * pipeline reads on its next query.
+ */
+function EditBusinessAddressModal({
+  visible,
+  onClose,
+  user,
+  businessName,
+  onSave,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  user: User | null;
+  businessName: string;
+  onSave: (patch: {
+    businessName?: string;
+    location: string;
+    region?: string | null;
+    district?: string | null;
+    deviceCoords?: { lat: number; lng: number } | null;
+  }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [region, setRegion] = useState("");
+  const [district, setDistrict] = useState("");
+  const [ward, setWard] = useState("");
+  const [street, setStreet] = useState("");
+  const [fullAddress, setFullAddress] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  // Re-seed the form whenever the modal opens — handles the case
+  // where a successful save just before updated `user` and the modal
+  // is reopened on the next tap. Latitude / longitude are intentionally
+  // NOT re-seeded: the seller never sees them, and the value to save
+  // is captured from the device at submit time below.
+  React.useEffect(() => {
+    if (!visible) return;
+    setName(user?.fullName ?? "");
+    setRegion(user?.region ?? "");
+    setDistrict(user?.district ?? "");
+    setWard(user?.ward ?? "");
+    setStreet(user?.street ?? "");
+    setFullAddress(user?.address ?? "");
+    setErrors({});
+  }, [visible, user]);
+
+  const composed = useMemo(
+    () =>
+      [street, ward, district, region]
+        .map((p) => (p ?? "").trim())
+        .filter(Boolean)
+        .join(", "),
+    [street, ward, district, region],
+  );
+  const effectiveAddress = fullAddress.trim() || composed;
+
+  const submit = async () => {
+    const next: Record<string, string> = {};
+    if (!effectiveAddress) next.fullAddress = "Business address is required";
+    setErrors(next);
+    if (Object.keys(next).length) {
+      Alert.alert(
+        "Check your details",
+        "Please fix the highlighted fields and try again.",
+      );
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // Capture the device GPS fix once, at the moment of save. The
+      // helper is silent on every failure (denied permission, timeout,
+      // unsupported platform) and resolves to null — the backend then
+      // falls back to its existing geocoder so the saved row always
+      // has valid coordinates regardless of the device outcome.
+      const deviceCoords = await resolveCurrentDeviceCoords();
+      await onSave({
+        businessName: name.trim() || undefined,
+        location: effectiveAddress,
+        region: region.trim() || null,
+        district: district.trim() || null,
+        deviceCoords,
+      });
+    } catch (err) {
+      Alert.alert(
+        "Save failed",
+        (err as Error)?.message ?? "Please try again in a moment.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Edit Business Address</Text>
+          <Text style={styles.modalSub}>{businessName}</Text>
+
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <AppInput
+              label="Business Name"
+              value={name}
+              onChangeText={setName}
+              autoCapitalize="words"
+            />
+            <AppInput
+              label="Region"
+              value={region}
+              onChangeText={setRegion}
+            />
+            <AppInput
+              label="District"
+              value={district}
+              onChangeText={setDistrict}
+            />
+            <AppInput
+              label="Ward"
+              value={ward}
+              onChangeText={setWard}
+            />
+            <AppInput
+              label="Street / Area"
+              value={street}
+              onChangeText={setStreet}
+            />
+            <AppInput
+              label="Full Business Address"
+              value={fullAddress}
+              onChangeText={setFullAddress}
+              multiline
+              numberOfLines={2}
+              error={errors.fullAddress}
+              helperText={
+                composed
+                  ? `Will be saved as: ${composed}`
+                  : undefined
+              }
+            />
+            {/* The seller never types a coordinate here either. The
+                helper-text style mirrors the customer Profile's
+                "Location Information" card so the modal reads as a
+                single, consistent flow on both sides. Coordinates are
+                resolved automatically when Save is tapped. */}
+            <Text style={styles.businessHelp}>
+              Your shop's map pin updates automatically from your
+              address — no need to type coordinates.
+            </Text>
+          </ScrollView>
+
+          <View style={styles.modalActions}>
+            <AppButton
+              title="Cancel"
+              variant="outline"
+              style={{ flex: 1 }}
+              onPress={onClose}
+            />
+            <AppButton
+              title="Save"
+              variant="primary"
+              style={{ flex: 1 }}
+              loading={saving}
+              onPress={submit}
+            />
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.background },
   content: { padding: Spacing.lg, paddingBottom: Spacing.xxl },
@@ -540,10 +829,37 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontWeight: "700",
   },
+  /**
+   * Permit row — keeps the textual status next to the professional
+   * status badge so the seller sees both the value and the colour-coded
+   * pill in one glance.
+   */
+  permitRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginTop: 2,
+  },
+  permitPill: {
+    marginTop: 0,
+  },
   divider: {
     height: 1,
     backgroundColor: Colors.border,
     marginVertical: 4,
+  },
+  /**
+   * Modal helper note shown beneath the address inputs. Same visual
+   * treatment as the registration form's `businessHelp` and the
+   * customer Profile's location-instruction copy — keeps the address
+   * capture pattern consistent across every seller-side touchpoint.
+   */
+  businessHelp: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    marginTop: -Spacing.sm,
+    marginBottom: Spacing.md,
+    lineHeight: 16,
   },
 
   // Stats

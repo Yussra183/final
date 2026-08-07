@@ -47,6 +47,34 @@ public class RiderProfileEntity {
     @Column(name = "lng")
     private Double lng;
 
+    /**
+     * Region field added by V6 — nullable so existing seeded riders
+     * continue to load. Surfaced by the rider self-service profile screen.
+     */
+    @Column(name = "region", length = 120)
+    private String region;
+
+    /**
+     * District field added by V6 — nullable so existing seeded riders
+     * continue to load.
+     */
+    @Column(name = "district", length = 120)
+    private String district;
+
+    /**
+     * Physical address added by V6 — nullable so existing seeded riders
+     * continue to load.
+     */
+    @Column(name = "address", length = 500)
+    private String address;
+
+    /**
+     * National ID number added by V6 — nullable so existing seeded riders
+     * continue to load.
+     */
+    @Column(name = "national_id", length = 60)
+    private String nationalId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -59,6 +87,20 @@ public class RiderProfileEntity {
     public RiderProfileEntity(Long userId, String vehicleType, String vehiclePlate,
                               String vehicleModel, String licenseNo,
                               boolean available, String phone, Double lat, Double lng) {
+        this(userId, vehicleType, vehiclePlate, vehicleModel, licenseNo,
+                available, phone, lat, lng, null, null, null, null);
+    }
+
+    /**
+     * Extended constructor used by the V6 migration consumers — accepts
+     * the four optional rider-profile location / NID fields. Existing
+     * callers continue to compile via the 9-argument overload above.
+     */
+    public RiderProfileEntity(Long userId, String vehicleType, String vehiclePlate,
+                              String vehicleModel, String licenseNo,
+                              boolean available, String phone, Double lat, Double lng,
+                              String region, String district, String address,
+                              String nationalId) {
         this.userId = userId;
         this.vehicleType = vehicleType == null ? "motorcycle" : vehicleType;
         this.vehiclePlate = vehiclePlate;
@@ -68,6 +110,10 @@ public class RiderProfileEntity {
         this.phone = phone;
         this.lat = lat;
         this.lng = lng;
+        this.region = region;
+        this.district = district;
+        this.address = address;
+        this.nationalId = nationalId;
     }
 
     @jakarta.persistence.PrePersist
@@ -154,6 +200,38 @@ public class RiderProfileEntity {
 
     public void setLng(Double lng) {
         this.lng = lng;
+    }
+
+    public String getRegion() {
+        return region;
+    }
+
+    public void setRegion(String region) {
+        this.region = region;
+    }
+
+    public String getDistrict() {
+        return district;
+    }
+
+    public void setDistrict(String district) {
+        this.district = district;
+    }
+
+    public String getAddress() {
+        return address;
+    }
+
+    public void setAddress(String address) {
+        this.address = address;
+    }
+
+    public String getNationalId() {
+        return nationalId;
+    }
+
+    public void setNationalId(String nationalId) {
+        this.nationalId = nationalId;
     }
 
     public Instant getCreatedAt() {

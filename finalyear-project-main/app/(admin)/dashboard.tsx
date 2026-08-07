@@ -67,9 +67,31 @@ export default function AdminDashboardHome() {
     await Promise.all([stats.reload(), orders.reload(), activity.reload()]);
   }, [stats, orders, activity]);
 
+  // The body (KPI grids + bottom cards) renders ONCE, after all three
+  // resources have resolved for the first time. Until then we show the
+  // project's official loading state via `AdminAsyncBoundary`. This
+  // prevents the brief layout flash that used to appear on mount — where
+  // the top bar, sidebar, "Quick Actions" tiles and "No notifications
+  // yet" / "No orders yet" empty cards painted for a frame before the
+  // statistics request resolved.
   const s = stats.data;
   const recentOrders = (orders.data ?? []).slice(0, 5);
   const recentActivity = (activity.data ?? []).slice(0, 6);
+  const bodyLoading =
+    (stats.loading && !s) ||
+    (orders.loading && !orders.data) ||
+    (activity.loading && !activity.data);
+  const bodyError =
+    (!stats.loading && stats.error && !s) ||
+    (!orders.loading && orders.error && !orders.data) ||
+    (!activity.loading && activity.error && !activity.data)
+      ? stats.error ?? orders.error ?? activity.error
+      : null;
+  const hasBodyData = !!s && !!orders.data && !!activity.data;
+  const refreshErrorBanner =
+    !bodyError && (stats.error || orders.error || activity.error)
+      ? stats.error ?? orders.error ?? activity.error
+      : null;
 
   return (
     <AdminLayout
@@ -82,7 +104,7 @@ export default function AdminDashboardHome() {
             icon="↻"
             variant="secondary"
             onPress={reloadAll}
-            loading={stats.refreshing}
+            loading={stats.refreshing || orders.refreshing || activity.refreshing}
           />
           <TouchableOpacity
             style={styles.headerBtn}
@@ -94,14 +116,19 @@ export default function AdminDashboardHome() {
         </View>
       }
       refreshControl={
-        <RefreshControl refreshing={stats.refreshing} onRefresh={reloadAll} />
+        <RefreshControl
+          refreshing={
+            stats.refreshing || orders.refreshing || activity.refreshing
+          }
+          onRefresh={reloadAll}
+        />
       }
     >
       <AdminAsyncBoundary
-        loading={stats.loading}
-        error={stats.error}
-        onRetry={stats.reload}
-        hasData={!!s}
+        loading={bodyLoading}
+        error={bodyError}
+        onRetry={reloadAll}
+        hasData={hasBodyData}
         loadingLabel="Loading dashboard statistics…"
       >
         {s ? (
@@ -314,79 +341,101 @@ export default function AdminDashboardHome() {
             </View>
           </>
         ) : null}
+
+        {/* Activity + recent orders — kept inside the boundary so these
+            cards do not paint with empty placeholders before the data
+            arrives. The empty states below match the official design
+            vocabulary, so when a list is legitimately empty we still
+            surface them — but only AFTER the first fetch resolves. */}
+        <View style={styles.bottomGrid}>
+          <AdminCard style={{ flex: 1 }}>
+            <Text style={styles.cardHeading}>Recent Activity</Text>
+            <View style={{ marginTop: Spacing.md, gap: 12 }}>
+              {recentActivity.length === 0 ? (
+                <AdminEmptyState
+                  icon="🔔"
+                  title="No notifications yet"
+                  message="System notifications will appear here as they are recorded."
+                />
+              ) : (
+                recentActivity.map((n) => (
+                  <View key={n.id} style={styles.activityRow}>
+                    <View style={styles.activityIcon}>
+                      <Text style={{ fontSize: 16 }}>
+                        {NOTIFICATION_ICON[n.type] ?? "•"}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.activityText}>{n.title}</Text>
+                      <Text style={styles.activityTime}>
+                        {n.userName ? `${n.userName} • ` : ""}
+                        {formatWhen(n.createdAt)}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          </AdminCard>
+
+          <AdminCard style={{ flex: 1 }}>
+            <View style={styles.cardHeaderRow}>
+              <Text style={styles.cardHeading}>Recent Orders</Text>
+              <TouchableOpacity onPress={() => router.push("/orders" as any)}>
+                <Text style={styles.cardLink}>See all</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ marginTop: Spacing.md, gap: Spacing.sm }}>
+              {recentOrders.length === 0 ? (
+                <AdminEmptyState
+                  icon="📦"
+                  title="No orders yet"
+                  message="Orders placed by customers will appear here."
+                />
+              ) : (
+                recentOrders.map((o) => (
+                  <View key={o.id} style={styles.orderRow}>
+                    <AdminAvatar name={o.customerName} size={36} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.orderName}>{o.customerName}</Text>
+                      <Text style={styles.orderMeta}>
+                        #{o.id} • {o.sellerName}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text style={styles.orderTotal}>
+                        {formatCurrency(o.total)}
+                      </Text>
+                      <AdminBadge
+                        label={orderStatusLabel(o.status)}
+                        tone={toBadgeTone(o.status)}
+                      />
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          </AdminCard>
+        </View>
+
+        {/* If a refresh fails while stale data is on screen, surface the
+            official banner so the admin knows the figures are old. Kept
+            inside the boundary so it only appears once data has loaded. */}
+        {refreshErrorBanner ? (
+          <View style={styles.refreshBanner}>
+            <Text style={styles.refreshBannerText}>
+              Showing the last loaded data — refresh failed:{" "}
+              {refreshErrorBanner}
+            </Text>
+            <AdminButton
+              label="Retry"
+              variant="ghost"
+              size="sm"
+              onPress={reloadAll}
+            />
+          </View>
+        ) : null}
       </AdminAsyncBoundary>
-
-      {/* Activity + recent orders */}
-      <View style={styles.bottomGrid}>
-        <AdminCard style={{ flex: 1 }}>
-          <Text style={styles.cardHeading}>Recent Activity</Text>
-          <View style={{ marginTop: Spacing.md, gap: 12 }}>
-            {recentActivity.length === 0 ? (
-              <AdminEmptyState
-                icon="🔔"
-                title="No notifications yet"
-                message="System notifications will appear here as they are recorded."
-              />
-            ) : (
-              recentActivity.map((n) => (
-                <View key={n.id} style={styles.activityRow}>
-                  <View style={styles.activityIcon}>
-                    <Text style={{ fontSize: 16 }}>
-                      {NOTIFICATION_ICON[n.type] ?? "•"}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.activityText}>{n.title}</Text>
-                    <Text style={styles.activityTime}>
-                      {n.userName ? `${n.userName} • ` : ""}
-                      {formatWhen(n.createdAt)}
-                    </Text>
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-        </AdminCard>
-
-        <AdminCard style={{ flex: 1 }}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardHeading}>Recent Orders</Text>
-            <TouchableOpacity onPress={() => router.push("/orders" as any)}>
-              <Text style={styles.cardLink}>See all</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={{ marginTop: Spacing.md, gap: Spacing.sm }}>
-            {recentOrders.length === 0 ? (
-              <AdminEmptyState
-                icon="📦"
-                title="No orders yet"
-                message="Orders placed by customers will appear here."
-              />
-            ) : (
-              recentOrders.map((o) => (
-                <View key={o.id} style={styles.orderRow}>
-                  <AdminAvatar name={o.customerName} size={36} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.orderName}>{o.customerName}</Text>
-                    <Text style={styles.orderMeta}>
-                      #{o.id} • {o.sellerName}
-                    </Text>
-                  </View>
-                  <View style={{ alignItems: "flex-end" }}>
-                    <Text style={styles.orderTotal}>
-                      {formatCurrency(o.total)}
-                    </Text>
-                    <AdminBadge
-                      label={orderStatusLabel(o.status)}
-                      tone={toBadgeTone(o.status)}
-                    />
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-        </AdminCard>
-      </View>
     </AdminLayout>
   );
 }
@@ -480,6 +529,23 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: Spacing.md,
     marginTop: Spacing.lg,
+  },
+  refreshBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+    backgroundColor: "#FEF3C7",
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  refreshBannerText: {
+    flex: 1,
+    color: "#92400E",
+    fontWeight: "700",
+    fontSize: FontSize.sm,
   },
   cardHeaderRow: {
     flexDirection: "row",

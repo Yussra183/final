@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -25,7 +25,6 @@ import { StatusPill } from "../../src/components/StatusPill";
 import { useStore } from "../../src/store/StoreContext";
 import { isEmail, isPhone } from "../../src/utils/validators";
 import { formatDate } from "../../src/utils/format";
-import type { Location, User } from "../../constants/types";
 
 /**
  * Customer Profile screen.
@@ -34,19 +33,21 @@ import type { Location, User } from "../../constants/types";
  *   • Render the customer's profile information (photo, personal,
  *     location, account, security).
  *   • Let the customer edit their profile and address.
- *   • Persist the new location tuple via `updateProfile` so that the
- *     Home Screen's `useNearbySellers` hook re-derives its list from
- *     the new district/region/street/address. This is the seam the
- *     future backend will plug into — the store signature is already
- *     aligned with the planned `PATCH /api/users/{id}` endpoint.
+ *   • Persist the location tuple via `saveCustomerLocation`, which
+ *     writes to `customer_profiles` through `PUT /api/customers/me`.
+ *     The backend geocodes the address and returns coordinates, which
+ *     the store merges onto `session.user` — that's what lets the Home
+ *     screen's `useNearbySellers` hook query the nearby endpoint and
+ *     rank sellers by real distance.
  *
- * Today the screen runs against the in-memory mock; switching to a
- * real backend requires no UI change.
+ * The saved location is loaded once after login (see the customer
+ * branch of `refresh()` in StoreContext) and cached for the session, so
+ * the customer is never asked to re-enter it.
  */
 export default function CustomerProfileScreen() {
   const router = useRouter();
   const drawer = useNavigation<any>();
-  const { session, updateProfile } = useStore();
+  const { session, updateProfile, saveCustomerLocation } = useStore();
   const user = session?.user;
 
   // ---- Form state -------------------------------------------------------
@@ -57,18 +58,55 @@ export default function CustomerProfileScreen() {
   const [phone, setPhone] = useState(user?.phone ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
 
-  // Location fields. These are the keys `useNearbySellers` reads, so
-  // when we save the screen will trigger a re-filter on Home.
-  const [region, setRegion] = useState(user?.region ?? "Zanzibar Urban West");
-  const [district, setDistrict] = useState(user?.district ?? "Urban");
-  const [ward, setWard] = useState((user as any)?.ward ?? "Malindi");
-  const [street, setStreet] = useState((user as any)?.street ?? "Stone Town");
-  const [fullAddress, setFullAddress] = useState(
-    user?.address ?? "Stone Town, Zanzibar",
-  );
+  // Location fields. These are the keys the nearby-seller pipeline
+  // reads, so saving here refreshes the Home screen's list.
+  const [region, setRegion] = useState(user?.region ?? "");
+  const [district, setDistrict] = useState(user?.district ?? "");
+  const [ward, setWard] = useState(user?.ward ?? "");
+  const [street, setStreet] = useState(user?.street ?? "");
+  const [fullAddress, setFullAddress] = useState(user?.address ?? "");
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  // ---- Load saved data --------------------------------------------------
+  /**
+   * Re-seed the form whenever the signed-in user changes.
+   *
+   * `useState` initializers run only on the FIRST render. The saved
+   * location arrives asynchronously — the store fetches it from
+   * `GET /api/customers/me` just after login — and the drawer navigator
+   * keeps this screen mounted across navigations. Without this effect
+   * the inputs keep their initial empty values and the saved location
+   * appears not to have persisted at all, even though it loaded fine.
+   *
+   * Keyed on the individual fields rather than the `user` object so a
+   * new object identity with identical values doesn't clobber
+   * in-progress edits.
+   */
+  useEffect(() => {
+    if (!user) return;
+    setFullName(user.fullName ?? "");
+    setUsername(user.username ?? "");
+    setPhone(user.phone ?? "");
+    setEmail(user.email ?? "");
+    setRegion(user.region ?? "");
+    setDistrict(user.district ?? "");
+    setWard(user.ward ?? "");
+    setStreet(user.street ?? "");
+    setFullAddress(user.address ?? "");
+  }, [
+    user?.id,
+    user?.fullName,
+    user?.username,
+    user?.phone,
+    user?.email,
+    user?.region,
+    user?.district,
+    user?.ward,
+    user?.street,
+    user?.address,
+  ]);
 
   // ---- Derived data -----------------------------------------------------
   /**
@@ -135,30 +173,27 @@ export default function CustomerProfileScreen() {
 
     setSaving(true);
     try {
-      // The same `Location` shape `useNearbySellers` consumes on Home.
-      const location: Location = {
-        address: effectiveFullAddress,
-        district: district.trim(),
-        region: region.trim(),
-        // lat/lng stay undefined until GPS lookup is wired up.
-      };
-
-      const patch: Partial<Omit<User, "id" | "role" | "createdAt">> & {
-        ward?: string;
-        street?: string;
-      } = {
+      // 1. Personal information (name / username / phone / email).
+      //    Unchanged path — still goes through `updateProfile`.
+      await updateProfile({
         fullName: fullName.trim(),
         username: username.trim(),
         phone: phone.trim(),
         email: email.trim(),
-        address: location.address,
-        district: location.district,
-        region: location.region,
+      });
+
+      // 2. Location. Persisted to `customer_profiles` via
+      //    `PUT /api/customers/me`. We deliberately send no lat/lng —
+      //    the backend geocodes the address and returns the resolved
+      //    coordinates, which the store merges into the session so the
+      //    Home screen's nearby list refreshes on the next render.
+      await saveCustomerLocation({
+        region: region.trim(),
+        district: district.trim(),
         ward: ward.trim(),
         street: street.trim(),
-      };
-
-      await updateProfile(patch);
+        address: effectiveFullAddress,
+      });
 
       Alert.alert(
         "Profile updated",

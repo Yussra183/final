@@ -6,10 +6,12 @@ import com.project.gas_delivery.order.exception.NotAuthorizedException;
 import com.project.gas_delivery.seller.dto.SellerProfileDto;
 import com.project.gas_delivery.seller.service.SellerProfileService;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.lang.Nullable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -34,7 +36,19 @@ public class SellerProfileController {
     }
 
     @GetMapping
-    public List<SellerProfileDto> list() {
+    public List<SellerProfileDto> list(
+            @RequestParam(value = "lat", required = false) @Nullable Double lat,
+            @RequestParam(value = "lng", required = false) @Nullable Double lng,
+            @RequestParam(value = "radiusKm", required = false) @Nullable Double radiusKm
+    ) {
+        // Customer-facing "Nearby Sellers" pipeline. When the caller
+        // supplies lat/lng the service filters to the supplied radius
+        // (default 25 km) and sorts nearest-first. Without coordinates
+        // every approved+active seller is returned, alphabetised by
+        // business name — preserves the prior admin / debug behaviour.
+        if (lat != null && lng != null) {
+            return sellerProfileService.listAllNear(lat, lng, radiusKm);
+        }
         return sellerProfileService.listAll();
     }
 

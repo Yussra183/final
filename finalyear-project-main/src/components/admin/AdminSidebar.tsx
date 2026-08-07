@@ -47,6 +47,7 @@ export const ADMIN_SIDEBAR_ROUTES: AdminSidebarRoute[] = [
   { key: "suppliers", label: "Suppliers", icon: "🏭", path: "/suppliers" },
   { key: "seller-apps", label: "Seller Applications", icon: "📥", path: "/seller-applications", screenName: "seller-applications" },
   { key: "rider-apps", label: "Rider Applications", icon: "📥", path: "/rider-applications", screenName: "rider-applications" },
+  { key: "supplier-apps", label: "Supplier Applications", icon: "📥", path: "/supplier-applications", screenName: "supplier-applications" },
   { key: "assignments", label: "Rider Assignments", icon: "🛵", path: "/rider-assignments", screenName: "rider-assignments" },
   { key: "sellers", label: "Sellers", icon: "🏪", path: "/sellers" },
   { key: "riders", label: "Riders", icon: "🪪", path: "/riders" },

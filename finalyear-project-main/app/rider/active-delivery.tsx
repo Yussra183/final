@@ -55,6 +55,7 @@ import {
   TrackingClient,
 } from "../../src/services/TrackingClient";
 import { TrackingApi } from "../../src/api/endpoints";
+import { useRiderLock } from "../../src/hooks/useRiderLock";
 
 type ProgressStatus = "picked_up" | "in_transit" | "delivered";
 
@@ -70,6 +71,10 @@ export default function ActiveDelivery() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { orders, advanceDelivery, session } = useStore();
   const order = id ? orders.find((o) => o.id === id) : undefined;
+  // Verification status — keeps the existing disabled gates on the
+  // action buttons, plus the inline lock banner + modal that explain
+  // the locked state to the rider.
+  const { Banner, Modal, onLockedAction, isApproved } = useRiderLock();
 
   // ----- Live GPS tracking (rider only) --------------------------------
   const [trackingActive, setTrackingActive] = useState(false);
@@ -254,7 +259,9 @@ export default function ActiveDelivery() {
       <ScrollView
         contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 140 }}
       >
-        <Card>
+        {Banner}
+
+        <Card style={!isApproved ? styles.cardLocked : null}>
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
               <Text style={styles.heading}>Status</Text>
@@ -375,7 +382,12 @@ export default function ActiveDelivery() {
           <AppButton
             title={nextStep.label}
             fullWidth
+            disabled={!isApproved}
             onPress={async () => {
+              if (!isApproved) {
+                onLockedAction();
+                return;
+              }
               try {
                 await advanceDelivery(order.id, nextStep.status);
                 // When the rider marks the order as DELIVERED, stop
@@ -413,6 +425,7 @@ export default function ActiveDelivery() {
           />
         </View>
       )}
+      {Modal}
     </View>
   );
 }
@@ -485,5 +498,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
+  },
+  cardLocked: {
+    opacity: 0.55,
   },
 });

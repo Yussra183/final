@@ -8,7 +8,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -37,7 +36,8 @@ import {
   Spacing,
 } from "../../constants/colors";
 import { useStore } from "../../src/store/StoreContext";
-import { API_CONFIG } from "../../src/api/config";
+import { DocumentPreviewModal } from "../../src/components/DocumentPreviewModal";
+import { PermitsApi } from "../../src/api/endpoints";
 import type {
   PermitDocument,
   PermitStatus,
@@ -59,6 +59,17 @@ export default function SellerApplicationsPage() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [viewTarget, setViewTarget] = useState<SellerPermit | null>(null);
   const [viewDocs, setViewDocs] = useState<PermitDocument[] | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<PermitDocument | null>(null);
+  /**
+   * Permit preview state — used by the View modal when the admin opens
+   * the regenerated Gas Selling Permit PDF. Distinct from `previewDoc`
+   * (which carries a `PermitDocument` row from the documents listing)
+   * because the new admin license endpoint returns raw bytes, not a
+   * `PermitDocument` record. `null` means the preview is closed.
+   */
+  const [permitPreview, setPermitPreview] = useState<
+    { url: string; filename: string } | null
+  >(null);
   const [approveTarget, setApproveTarget] = useState<SellerPermit | null>(null);
   const [rejectTarget, setRejectTarget] = useState<SellerPermit | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -150,9 +161,11 @@ export default function SellerApplicationsPage() {
   const openDocuments = async (permit: SellerPermit) => {
     setViewTarget(permit);
     try {
-      const docs = await (
-        await import("../../src/api/endpoints")
-      ).PermitsApi.listDocumentsForAdmin(permit.id);
+      // Direct call — `PermitsApi` is already a top-level import. The
+      // previous dynamic `await import(...)` was redundant and added a
+      // module-resolution tick that occasionally surfaced as the
+      // documents list not rendering until the next modal open.
+      const docs = await PermitsApi.listDocumentsForAdmin(permit.id);
       setViewDocs(docs);
     } catch {
       setViewDocs([]);
@@ -336,8 +349,10 @@ export default function SellerApplicationsPage() {
         <AdminModal
           visible
           onClose={() => {
+            setPreviewDoc(null);
             setViewTarget(null);
             setViewDocs(null);
+            setPermitPreview(null);
           }}
           title={viewTarget.businessName}
           subtitle={`Application #${viewTarget.id}`}
@@ -416,11 +431,7 @@ export default function SellerApplicationsPage() {
                       label="Open"
                       variant="secondary"
                       size="sm"
-                      onPress={() =>
-                        Linking.openURL(
-                          `${API_CONFIG.BASE_URL}${d.downloadUrl}`,
-                        ).catch(() => undefined)
-                      }
+                      onPress={() => setPreviewDoc(d)}
                     />
                   </View>
                 ))}
@@ -450,6 +461,44 @@ export default function SellerApplicationsPage() {
                   }}
                   style={{ flex: 1 }}
                 />
+              </View>
+            ) : null}
+
+            {viewTarget.status === "approved" ? (
+              <View style={styles.permitSection}>
+                <Text style={styles.subSection}>Gas Selling Permit</Text>
+                <Text style={styles.permitHelper}>
+                  This application is approved. The official Gas Selling
+                  Permit PDF is regenerated on demand by the server from
+                  the latest application data — you can view or
+                  re-download it any time.
+                </Text>
+                <View style={styles.detailActions}>
+                  <AdminButton
+                    label="View Permit"
+                    variant="secondary"
+                    icon="👁"
+                    onPress={() =>
+                      setPermitPreview({
+                        url: PermitsApi.adminLicenseUrl(viewTarget.id),
+                        filename: `Gas_Selling_Permit-${viewTarget.sellerId}.pdf`,
+                      })
+                    }
+                    style={{ flex: 1, marginRight: Spacing.sm }}
+                  />
+                  <AdminButton
+                    label="Download Permit"
+                    variant="primary"
+                    icon="⬇"
+                    onPress={() =>
+                      setPermitPreview({
+                        url: PermitsApi.adminLicenseUrl(viewTarget.id),
+                        filename: `Gas_Selling_Permit-${viewTarget.sellerId}.pdf`,
+                      })
+                    }
+                    style={{ flex: 1 }}
+                  />
+                </View>
               </View>
             ) : null}
           </ScrollView>
@@ -508,6 +557,28 @@ export default function SellerApplicationsPage() {
           <Text style={styles.actionError}>{actionError}</Text>
         ) : null}
       </AdminModal>
+
+      <DocumentPreviewModal
+        visible={previewDoc != null}
+        onClose={() => setPreviewDoc(null)}
+        downloadUrl={previewDoc?.downloadUrl ?? ""}
+        contentType={previewDoc?.contentType ?? ""}
+        originalName={previewDoc?.originalName ?? previewDoc?.documentType}
+      />
+
+      {/* Gas Selling Permit preview — opened by the View Permit /
+          Download Permit buttons in the admin modal. Distinct from
+          `previewDoc` because the admin license endpoint returns raw
+          PDF bytes, not a `PermitDocument` metadata row. The modal
+          streams the bytes with the bearer token and hands the PDF to
+          the system viewer / share sheet via `expo-sharing`. */}
+      <DocumentPreviewModal
+        visible={permitPreview != null}
+        onClose={() => setPermitPreview(null)}
+        downloadUrl={permitPreview?.url ?? ""}
+        contentType="application/pdf"
+        originalName={permitPreview?.filename ?? "Gas_Selling_Permit.pdf"}
+      />
     </AdminLayout>
   );
 }
@@ -616,6 +687,20 @@ const styles = StyleSheet.create({
     color: Colors.text,
     marginTop: Spacing.md,
     marginBottom: Spacing.sm,
+  },
+  permitSection: {
+    marginTop: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceMuted,
+  },
+  permitHelper: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.xs,
+    marginBottom: Spacing.sm,
+    lineHeight: 18,
   },
   docList: {
     gap: 6,

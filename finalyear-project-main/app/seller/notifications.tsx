@@ -8,7 +8,7 @@
  * Each unread notification shows a colored badge, and tapping the
  * notification marks it as read through `markNotificationRead()`.
  */
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   RefreshControl,
   ScrollView,
@@ -152,7 +152,12 @@ function CategoryHeader({ category, unread }: { category: CategoryDef; unread: n
 }
 
 export default function SellerNotifications() {
-  const { session, getNotificationsForUser, markNotificationRead } = useStore();
+  const {
+    session,
+    getNotificationsForUser,
+    markNotificationRead,
+    markAllNotificationsRead,
+  } = useStore();
   const [activeCat, setActiveCat] = useState<CategoryKey>("all");
 
   const user = session?.user;
@@ -160,6 +165,31 @@ export default function SellerNotifications() {
     () => (user ? getNotificationsForUser(user.id) : []),
     [user, getNotificationsForUser],
   );
+
+  /**
+   * As soon as the Seller opens this screen, flip every unread
+   * notification for the signed-in seller to read. The local state is
+   * updated optimistically (the helper does the local flip before the
+   * network request) so the dashboard chrome — which subscribes to
+   * the same store notifications list — drops the red badge dot
+   * immediately, without waiting for a refresh or screen re-mount.
+   *
+   * Scoped to the seller: the helper only touches notifications whose
+   * `userId` matches the signed-in user, and the backend endpoint
+   * `POST /api/notifications/read-all` is itself scoped to the
+   * authenticated actor's user_id, so customer / rider / supplier /
+   * admin notifications are never touched by this code path.
+   */
+  useEffect(() => {
+    if (!user) return;
+    markAllNotificationsRead(user.id);
+    // Intentionally empty deps: we only want to fire this once per
+    // mount of the Seller Notifications screen. Re-running on every
+    // render would clobber any new "unread" badge that arrives while
+    // the screen is open — which is correct UX (the user is looking
+    // at the feed, so a brand-new notification arriving mid-screen is
+    // still considered "seen" the moment it lands).
+  }, [user, markAllNotificationsRead]);
 
   // Counts per category — drives the badge in the header.
   const counts = useMemo(() => {

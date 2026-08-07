@@ -32,6 +32,8 @@ import { AppButton } from "../../src/components/AppButton";
 import { SidebarLayout } from "../../src/components/SidebarLayout";
 import { EmptyState } from "../../src/components/EmptyState";
 import { StatusPill } from "../../src/components/StatusPill";
+import { SupplierVerificationRequiredCard } from "../../src/components/SupplierVerificationRequiredCard";
+import { useSupplierVerificationStatus } from "../../src/hooks/useSupplierVerificationStatus";
 import { DeliveryDay, DeliveryTrip } from "../../constants/types";
 
 const ACCENT = "#6366F1";
@@ -47,6 +49,7 @@ function todayDay(): DeliveryDay {
 
 export default function SupplierDashboard() {
   const router = useRouter();
+  const verification = useSupplierVerificationStatus();
   const {
     session,
     routes,
@@ -105,6 +108,20 @@ export default function SupplierDashboard() {
             </View>
             <Avatar name={user.fullName} size={48} color={ACCENT} />
           </View>
+
+          {/* Verification gate banner — surfaces the awaiting-approval
+              message to unapproved suppliers on their primary landing
+              page. Renders nothing once approved. */}
+          {!verification.isApproved ? (
+            <View style={{ marginHorizontal: Spacing.lg }}>
+              <SupplierVerificationRequiredCard
+                info={verification}
+                onOpenVerification={() =>
+                  router.push("/(supplier)/profile" as any)
+                }
+              />
+            </View>
+          ) : null}
 
           {/* KPI strip */}
           <View style={styles.statsRow}>
@@ -168,7 +185,7 @@ export default function SupplierDashboard() {
                   variant="primary"
                   fullWidth
                   style={{ marginTop: Spacing.sm }}
-                  onPress={() => router.push("/(supplier)/live-map" as any)}
+                  onPress={() => router.push("/(supplier)/live" as any)}
                 />
               </Card>
             </View>
@@ -223,9 +240,9 @@ export default function SupplierDashboard() {
           <Text style={styles.sectionTitle}>Quick actions</Text>
           <View style={styles.actionGrid}>
             {[
-              { label: "Start Delivery", icon: "▶️", route: "/(supplier)/start-delivery" },
-              { label: "Live Map", icon: "📍", route: "/(supplier)/live-map" },
-              { label: "Routes", icon: "🗺️", route: "/(supplier)/routes" },
+              { label: "Live Delivery", icon: "📍", route: "/(supplier)/live" },
+              { label: "Operations", icon: "🗺️", route: "/(supplier)/operations" },
+              { label: "Fleet", icon: "🚚", route: "/(supplier)/fleet" },
               { label: "Reports", icon: "📊", route: "/(supplier)/reports" },
             ].map((a) => (
               <TouchableOpacity
@@ -278,7 +295,7 @@ function TripSummary({ trip }: { trip: DeliveryTrip }) {
           variant="secondary"
           fullWidth
           style={{ marginTop: Spacing.sm }}
-          onPress={() => router.push("/(supplier)/live-map" as any)}
+          onPress={() => router.push("/(supplier)/live" as any)}
         />
       ) : null}
     </Card>

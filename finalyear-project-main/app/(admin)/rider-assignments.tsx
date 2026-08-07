@@ -1,23 +1,29 @@
 /**
  * Admin Dashboard – Rider Assignments page.
  *
- * Reads `GET /api/admin/assignments`, which returns every row of the
- * `seller_riders` join table — i.e. every (seller, rider) pairing the
- * backend currently knows about. Each row carries the seller name and
- * business name, the rider name and availability, and the timestamp of
- * when the pairing was created.
+ * Lists every approved rider and seller so the admin can:
+ *   • Assign an unassigned rider to an approved seller.
+ *   • Change a rider's seller assignment later.
+ *   • Remove the assignment entirely.
  *
- * The endpoint is read-only — the backend exposes no admin surface to
- * create or delete a pairing. Pairings are managed directly in the
- * database today, so the page displays them and explains why the
- * historical "Assign Rider" / "Simulate seller response" actions have
- * been removed. A short info line below the header makes this visible.
+ * Backed by:
+ *   GET    /api/admin/assignments            — every (seller, rider) row
+ *   GET    /api/admin/riders                 — full rider directory
+ *   GET    /api/admin/sellers?permitStatus=  — approved sellers only
+ *   PUT    /api/admin/riders/{id}/assigned-seller
+ *   DELETE /api/admin/riders/{id}/assigned-seller
  *
- * Search is performed client-side against the returned array — the
- * endpoint takes no query params and the result set is small.
+ * The PUT replaces every prior `seller_riders` row for the rider so the
+ * rider ends up assigned to exactly one seller, matching the brief.
  */
-import React, { useMemo, useState } from "react";
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { AdminLayout } from "../../src/components/admin/AdminLayout";
 import {
   AdminAsyncBoundary,
@@ -26,13 +32,20 @@ import {
   AdminButton,
   AdminCard,
   AdminEmptyState,
+  AdminModal,
   AdminSearchBar,
   AdminStatTile,
 } from "../../src/components/admin";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { AdminApi } from "../../src/api/endpoints";
+import { api } from "../../src/api/client";
 import { useAdminResource } from "../../src/hooks/useAdminResource";
-import type { AdminAssignment } from "../../constants/types";
+import { ApiError } from "../../src/api/errors";
+import type {
+  AdminAssignment,
+  AdminRider,
+  AdminSeller,
+} from "../../constants/types";
 
 const formatDate = (iso: string | null) => {
   if (!iso) return "—";
@@ -73,8 +86,39 @@ function groupBySeller(rows: AdminAssignment[]) {
   });
 }
 
+/**
+ * Derive the seller id assigned to a given rider from the latest
+ * `assignments` fetch. Returns null when the rider has no assignment.
+ */
+function assignedSellerIdFor(
+  assignments: AdminAssignment[],
+  riderId: string,
+): string | null {
+  const rows = assignments.filter((a) => a.riderId === riderId);
+  if (rows.length === 0) return null;
+  rows.sort((a, b) => (a.assignedAt < b.assignedAt ? -1 : 1));
+  return rows[0].sellerId;
+}
+
 export default function RiderAssignmentsPage() {
   const [search, setSearch] = useState("");
+  const [riderSearch, setRiderSearch] = useState("");
+  const [sellerSearch, setSellerSearch] = useState("");
+
+  const {
+    data: allRiders,
+    loading: ridersLoading,
+    reload: reloadRiders,
+  } = useAdminResource<AdminRider[]>(() => AdminApi.riders(), []);
+
+  const {
+    data: allSellers,
+    loading: sellersLoading,
+    reload: reloadSellers,
+  } = useAdminResource<AdminSeller[]>(
+    () => AdminApi.sellers({ permitStatus: "approved", active: true }),
+    [],
+  );
 
   const { data, loading, error, reload, refreshing } = useAdminResource<
     AdminAssignment[]
@@ -82,7 +126,6 @@ export default function RiderAssignmentsPage() {
 
   const assignments = data ?? [];
 
-  // Client-side search across seller / business / rider names.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return assignments;
@@ -102,30 +145,206 @@ export default function RiderAssignmentsPage() {
     [filtered],
   );
 
+  const assignedRiderIds = useMemo(
+    () => new Set(assignments.map((a) => a.riderId)),
+    [assignments],
+  );
+
+  const unassignedRiders = useMemo(() => {
+    const q = riderSearch.trim().toLowerCase();
+    return (allRiders ?? [])
+      .filter((r) => !assignedRiderIds.has(r.id))
+      .filter((r) => {
+        if (!q) return true;
+        return (
+          (r.fullName ?? "").toLowerCase().includes(q) ||
+          (r.phone ?? "").toLowerCase().includes(q)
+        );
+      });
+  }, [allRiders, assignedRiderIds, riderSearch]);
+
+  const sellersForPicker = useMemo(() => {
+    const q = sellerSearch.trim().toLowerCase();
+    return (allSellers ?? []).filter((s) => {
+      if (!q) return true;
+      return (
+        (s.businessName ?? "").toLowerCase().includes(q) ||
+        (s.fullName ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [allSellers, sellerSearch]);
+
+  // ---- Assignment mutations --------------------------------------------
+  const [assignTarget, setAssignTarget] = useState<AdminRider | null>(null);
+  const [pickSellerId, setPickSellerId] = useState<string | null>(null);
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  const [changeTarget, setChangeTarget] = useState<{
+    rider: AdminRider;
+    currentSellerId: string;
+  } | null>(null);
+  const [pickChangeSellerId, setPickChangeSellerId] = useState<string | null>(
+    null,
+  );
+  const [changeBusy, setChangeBusy] = useState(false);
+  const [changeError, setChangeError] = useState<string | null>(null);
+
+  const [removeTarget, setRemoveTarget] = useState<AdminRider | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  const openAssignFor = useCallback((rider: AdminRider) => {
+    setAssignTarget(rider);
+    setPickSellerId(null);
+    setAssignError(null);
+  }, []);
+
+  const closeAssign = useCallback(() => {
+    if (assignBusy) return;
+    setAssignTarget(null);
+    setPickSellerId(null);
+    setAssignError(null);
+  }, [assignBusy]);
+
+  const submitAssign = useCallback(async () => {
+    if (!assignTarget || !pickSellerId) {
+      setAssignError("Please choose a seller to assign.");
+      return;
+    }
+    setAssignBusy(true);
+    setAssignError(null);
+    try {
+      await api.put(
+        `/api/admin/riders/${encodeURIComponent(assignTarget.id)}/assigned-seller`,
+        { sellerId: Number(pickSellerId) },
+      );
+      setAssignTarget(null);
+      setPickSellerId(null);
+      await reload();
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : (err as Error)?.message ?? "Could not assign rider.";
+      setAssignError(message);
+    } finally {
+      setAssignBusy(false);
+    }
+  }, [assignTarget, pickSellerId, reload]);
+
+  const openChangeFor = useCallback(
+    (rider: AdminRider) => {
+      const current = assignedSellerIdFor(assignments, rider.id);
+      if (!current) return;
+      setChangeTarget({ rider, currentSellerId: current });
+      setPickChangeSellerId(null);
+      setChangeError(null);
+    },
+    [assignments],
+  );
+
+  const closeChange = useCallback(() => {
+    if (changeBusy) return;
+    setChangeTarget(null);
+    setPickChangeSellerId(null);
+    setChangeError(null);
+  }, [changeBusy]);
+
+  const submitChange = useCallback(async () => {
+    if (!changeTarget || !pickChangeSellerId) {
+      setChangeError("Please choose the new seller.");
+      return;
+    }
+    if (pickChangeSellerId === changeTarget.currentSellerId) {
+      setChangeError("Pick a different seller to change the assignment.");
+      return;
+    }
+    setChangeBusy(true);
+    setChangeError(null);
+    try {
+      await api.put(
+        `/api/admin/riders/${encodeURIComponent(changeTarget.rider.id)}/assigned-seller`,
+        { sellerId: Number(pickChangeSellerId) },
+      );
+      setChangeTarget(null);
+      setPickChangeSellerId(null);
+      await reload();
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : (err as Error)?.message ?? "Could not change assignment.";
+      setChangeError(message);
+    } finally {
+      setChangeBusy(false);
+    }
+  }, [changeTarget, pickChangeSellerId, reload]);
+
+  const openRemoveFor = useCallback((rider: AdminRider) => {
+    setRemoveTarget(rider);
+    setRemoveError(null);
+  }, []);
+
+  const closeRemove = useCallback(() => {
+    if (removeBusy) return;
+    setRemoveTarget(null);
+    setRemoveError(null);
+  }, [removeBusy]);
+
+  const submitRemove = useCallback(async () => {
+    if (!removeTarget) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      await api.delete(
+        `/api/admin/riders/${encodeURIComponent(removeTarget.id)}/assigned-seller`,
+      );
+      setRemoveTarget(null);
+      await reload();
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : (err as Error)?.message ?? "Could not remove assignment.";
+      setRemoveError(message);
+    } finally {
+      setRemoveBusy(false);
+    }
+  }, [removeTarget, reload]);
+
+  // Eagerly hydrate the rider / seller lists so the assignment UI has
+  // data the first time the admin lands on this screen.
+  useEffect(() => {
+    reloadRiders();
+    reloadSellers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([reload(), reloadRiders(), reloadSellers()]);
+  }, [reload, reloadRiders, reloadSellers]);
+
   return (
     <AdminLayout
       title="Rider Assignments"
-      subtitle="Seller ↔ rider pairings from the seller_riders table"
+      subtitle="Assign approved riders to approved sellers"
       rightActions={
         <AdminButton
           label="Refresh"
           icon="↻"
           variant="secondary"
-          onPress={reload}
+          onPress={refreshAll}
           loading={refreshing}
         />
       }
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={reload} />
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={refreshAll}
+        />
       }
     >
-      <View style={styles.infoNote}>
-        <Text style={styles.infoNoteText}>
-          Assignments are managed directly in the database today — this
-          screen only displays existing pairings and cannot yet change them.
-        </Text>
-      </View>
-
       <AdminAsyncBoundary
         loading={loading}
         error={error}
@@ -152,9 +371,16 @@ export default function RiderAssignmentsPage() {
             icon="🛵"
             tone="accent"
           />
+          <AdminStatTile
+            label="Riders Unassigned"
+            value={unassignedRiders.length}
+            icon="🪪"
+            tone="warning"
+          />
         </View>
 
         <AdminCard style={{ marginTop: Spacing.lg }}>
+          <Text style={styles.cardTitle}>Current Assignments</Text>
           <AdminSearchBar
             value={search}
             onChange={setSearch}
@@ -196,27 +422,110 @@ export default function RiderAssignmentsPage() {
                   </View>
 
                   <View style={styles.riderList}>
-                    {g.pairings.map((p) => (
-                      <View key={`${p.sellerId}-${p.riderId}`} style={styles.riderRow}>
-                        <AdminAvatar
-                          name={p.riderName ?? p.riderId}
-                          size={32}
-                        />
-                        <View style={{ flex: 1, marginLeft: Spacing.sm }}>
-                          <Text style={styles.riderName}>
-                            {p.riderName ?? p.riderId}
-                          </Text>
-                          <Text style={styles.riderMeta}>
-                            Assigned {formatDate(p.assignedAt)}
-                          </Text>
+                    {g.pairings.map((p) => {
+                      const rider: AdminRider = {
+                        id: p.riderId,
+                        fullName: p.riderName ?? `Rider #${p.riderId}`,
+                        username: "",
+                        email: "",
+                        phone: null,
+                        isActive: true,
+                        createdAt: p.assignedAt ?? new Date().toISOString(),
+                        vehicleType: null,
+                        vehiclePlate: null,
+                        vehicleModel: null,
+                        licenseNo: null,
+                        available: p.riderAvailable,
+                        lat: null,
+                        lng: null,
+                        assignedOrders: 0,
+                        completedDeliveries: 0,
+                        assignedSellers: 0,
+                      };
+                      return (
+                        <View
+                          key={`${p.sellerId}-${p.riderId}`}
+                          style={styles.riderRow}
+                        >
+                          <AdminAvatar
+                            name={p.riderName ?? p.riderId}
+                            size={32}
+                          />
+                          <View style={{ flex: 1, marginLeft: Spacing.sm }}>
+                            <Text style={styles.riderName}>
+                              {p.riderName ?? p.riderId}
+                            </Text>
+                            <Text style={styles.riderMeta}>
+                              Assigned {formatDate(p.assignedAt)}
+                            </Text>
+                          </View>
+                          <AdminBadge
+                            label={p.riderAvailable ? "Available" : "Offline"}
+                            tone={p.riderAvailable ? "success" : "neutral"}
+                          />
+                          <View style={styles.rowActions}>
+                            <AdminButton
+                              label="Change"
+                              icon="✎"
+                              variant="secondary"
+                              onPress={() => openChangeFor(rider)}
+                            />
+                            <AdminButton
+                              label="Remove"
+                              icon="✕"
+                              variant="danger"
+                              onPress={() => openRemoveFor(rider)}
+                            />
+                          </View>
                         </View>
-                        <AdminBadge
-                          label={p.riderAvailable ? "Available" : "Offline"}
-                          tone={p.riderAvailable ? "success" : "neutral"}
-                        />
-                      </View>
-                    ))}
+                      );
+                    })}
                   </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </AdminCard>
+
+        {/* Unassigned approved riders — admin can assign each from here. */}
+        <AdminCard style={{ marginTop: Spacing.lg }}>
+          <Text style={styles.cardTitle}>Unassigned Approved Riders</Text>
+          <AdminSearchBar
+            value={riderSearch}
+            onChange={setRiderSearch}
+            placeholder="Search unassigned riders by name or phone"
+          />
+          {ridersLoading ? (
+            <AdminEmptyState
+              icon="⏳"
+              title="Loading riders…"
+              message="Fetching the latest approved rider list."
+            />
+          ) : unassignedRiders.length === 0 ? (
+            <AdminEmptyState
+              icon="✅"
+              title="Every approved rider is assigned"
+              message="When a new rider is approved they will appear here."
+            />
+          ) : (
+            <View style={styles.unassignedList}>
+              {unassignedRiders.map((r) => (
+                <View key={r.id} style={styles.unassignedRow}>
+                  <AdminAvatar name={r.fullName ?? r.id} size={32} />
+                  <View style={{ flex: 1, marginLeft: Spacing.sm }}>
+                    <Text style={styles.riderName}>
+                      {r.fullName ?? r.id}
+                    </Text>
+                    {r.phone ? (
+                      <Text style={styles.riderMeta}>{r.phone}</Text>
+                    ) : null}
+                  </View>
+                  <AdminButton
+                    label="Assign"
+                    icon="➕"
+                    variant="primary"
+                    onPress={() => openAssignFor(r)}
+                  />
                 </View>
               ))}
             </View>
@@ -229,6 +538,117 @@ export default function RiderAssignmentsPage() {
           </ScrollView>
         ) : null}
       </AdminAsyncBoundary>
+
+      {/* Assign modal — pick a seller for an unassigned rider. */}
+      <AdminModal
+        visible={!!assignTarget}
+        onClose={closeAssign}
+        title="Assign Rider to Seller"
+        subtitle={
+          assignTarget
+            ? `Choose an approved seller for ${assignTarget.fullName ?? assignTarget.id}`
+            : undefined
+        }
+        onConfirm={submitAssign}
+        confirmLabel={assignBusy ? "Assigning…" : "Assign"}
+        confirmVariant="primary"
+      >
+        <AdminSearchBar
+          value={sellerSearch}
+          onChange={setSellerSearch}
+          placeholder="Search sellers by business or owner name"
+        />
+        {sellersLoading ? (
+          <Text style={styles.modalMuted}>Loading sellers…</Text>
+        ) : sellersForPicker.length === 0 ? (
+          <Text style={styles.modalMuted}>
+            No approved sellers available — ask the seller to complete their
+            permit first.
+          </Text>
+        ) : (
+          <View style={styles.pickerList}>
+            {sellersForPicker.map((s) => {
+              const selected = pickSellerId === s.id;
+              return (
+                <AdminButton
+                  key={s.id}
+                  label={`${s.businessName ?? s.fullName ?? s.id}${selected ? "  ✓" : ""}`}
+                  icon="🏪"
+                  variant={selected ? "primary" : "secondary"}
+                  fullWidth
+                  onPress={() => setPickSellerId(s.id)}
+                />
+              );
+            })}
+          </View>
+        )}
+        {assignError ? (
+          <Text style={styles.modalError}>{assignError}</Text>
+        ) : null}
+      </AdminModal>
+
+      {/* Change modal — pick a different seller for an assigned rider. */}
+      <AdminModal
+        visible={!!changeTarget}
+        onClose={closeChange}
+        title="Change Seller Assignment"
+        subtitle={
+          changeTarget
+            ? `Pick a new seller for ${changeTarget.rider.fullName ?? changeTarget.rider.id}`
+            : undefined
+        }
+        onConfirm={submitChange}
+        confirmLabel={changeBusy ? "Changing…" : "Change"}
+        confirmVariant="primary"
+      >
+        <AdminSearchBar
+          value={sellerSearch}
+          onChange={setSellerSearch}
+          placeholder="Search sellers"
+        />
+        {sellersForPicker.length === 0 ? (
+          <Text style={styles.modalMuted}>No sellers available.</Text>
+        ) : (
+          <View style={styles.pickerList}>
+            {sellersForPicker.map((s) => {
+              const selected = pickChangeSellerId === s.id;
+              const isCurrent = s.id === changeTarget?.currentSellerId;
+              return (
+                <AdminButton
+                  key={s.id}
+                  label={`${s.businessName ?? s.fullName ?? s.id}${isCurrent ? "  (current)" : ""}${selected ? "  ✓" : ""}`}
+                  icon="🏪"
+                  variant={selected ? "primary" : "secondary"}
+                  fullWidth
+                  onPress={() => setPickChangeSellerId(s.id)}
+                />
+              );
+            })}
+          </View>
+        )}
+        {changeError ? (
+          <Text style={styles.modalError}>{changeError}</Text>
+        ) : null}
+      </AdminModal>
+
+      {/* Remove modal — confirm before clearing the assignment. */}
+      <AdminModal
+        visible={!!removeTarget}
+        onClose={closeRemove}
+        title="Remove Rider Assignment"
+        subtitle={
+          removeTarget
+            ? `Remove the seller assignment for ${removeTarget.fullName ?? removeTarget.id}? The rider will go back to "Not assigned".`
+            : undefined
+        }
+        onConfirm={submitRemove}
+        confirmLabel={removeBusy ? "Removing…" : "Remove"}
+        confirmVariant="danger"
+      >
+        {removeError ? (
+          <Text style={styles.modalError}>{removeError}</Text>
+        ) : null}
+      </AdminModal>
     </AdminLayout>
   );
 }
@@ -239,17 +659,11 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: Spacing.md,
   },
-  infoNote: {
-    backgroundColor: Colors.surfaceMuted,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    marginBottom: Spacing.md,
-  },
-  infoNoteText: {
-    fontSize: FontSize.sm,
-    fontWeight: "600",
-    color: Colors.textSecondary,
+  cardTitle: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+    marginBottom: Spacing.sm,
   },
   groupList: {
     gap: Spacing.md,
@@ -287,6 +701,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.border,
+    gap: Spacing.sm,
   },
   riderName: {
     fontSize: FontSize.sm,
@@ -298,5 +713,36 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontWeight: "600",
     marginTop: 2,
+  },
+  rowActions: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+  },
+  unassignedList: {
+    gap: Spacing.sm,
+  },
+  unassignedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  pickerList: {
+    gap: Spacing.sm,
+  },
+  modalMuted: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    marginVertical: Spacing.sm,
+  },
+  modalError: {
+    color: Colors.danger,
+    fontSize: FontSize.sm,
+    marginTop: Spacing.sm,
+    fontWeight: "700",
   },
 });

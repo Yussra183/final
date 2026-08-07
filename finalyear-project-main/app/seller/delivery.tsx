@@ -2,30 +2,33 @@
  * Seller → Delivery Tracking Module
  *
  * Production-ready screen that lets the seller monitor every active
- * delivery in real time. The screen follows the spec exactly:
+ * delivery in real time. The screen shows the spec's lifecycle:
  *
  *   Step 1  Order accepted → "Waiting for Rider"
- *   Step 2  Broadcast to every online+available+rider within radius
+ *   Step 2  Broadcast to online+available+rider within radius
  *   Step 3  First rider wins (lock the order, drop it from other
  *           riders' queues)
  *   Step 4  Live tracking: rider location, route, ETA
- *   Step 5  Status timeline (7 steps, each its own colour)
- *   Step 6  Interactive map (3 markers + polyline)
- *   Step 7  Turn-by-turn instructions rendered next to the map
+ *   Step 5  Status timeline
+ *   Step 6  Map with markers + polyline
+ *   Step 7  Turn-by-turn directions
  *   Step 8  Auto-flip to "Delivered" when rider reaches customer
  *
- * Architecture is **GPS-ready** and **Google-Maps-ready**:
+ * Architecture:
  *
- *   • `src/lib/location.ts`        — Haversine, ETA, mock route
- *   • `src/lib/riderMatching.ts`   — broadcast + first-accept lock
- *   • `src/hooks/useDeliveryTracking.ts` — single source of truth
- *   • `src/hooks/useSellerLocation.ts`   — shop coordinates
- *   • `src/components/DeliveryMap.tsx`   — pin/polyline placeholder
+ *   • `src/lib/location.ts`            — Haversine, ETA, route geometry
+ *   • `src/hooks/useDeliveryTracking.ts` — single source of truth,
+ *                                          driven by `useOrderTracking`'s
+ *                                          WebSocket feed and the
+ *                                          backend's `Order.status`.
+ *   • `src/hooks/useSellerLocation.ts`  — shop coordinates
+ *   • `src/components/DeliveryMap.tsx`  — pin/polyline placeholder
  *
- * Swapping in real Google Maps / Directions / live GPS is a
- * localised change in those files only; this screen does not need to
- * be touched.
+ * All active deliveries are sourced from the live store — there is no
+ * local mock pool. When no in-flight orders exist the screen surfaces
+ * the standard empty state.
  */
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   RefreshControl,
@@ -66,42 +69,6 @@ interface ActiveDelivery {
   gasType: string;
   cylinderSize: string;
   quantity: number;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                    */
-/* -------------------------------------------------------------------------- */
-
-function buildMockOrder(sellerId: string, sellerName: string): Order {
-  const now = new Date().toISOString();
-  return {
-    id: `ord-${Math.random().toString(36).slice(2, 8)}`,
-    customerId: "c-1",
-    customerName: "Mary Achieng",
-    sellerId,
-    sellerName,
-    riderId: undefined,
-    riderName: undefined,
-    items: [
-      {
-        productId: "p1",
-        productName: "LPG Refill",
-        size: "13kg",
-        quantity: 1,
-        unitPrice: 3200,
-      },
-    ],
-    total: 3200,
-    status: "accepted",
-    createdAt: now,
-    updatedAt: now,
-    deliveryLocation: {
-      address: "Kileleshwa, Nairobi",
-      lat: -1.2783,
-      lng: 36.7833,
-    },
-    notes: "Ring the gatebell twice.",
-  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -189,10 +156,12 @@ function DeliveryCard({
   delivery,
   expanded,
   onToggle,
+  sessionToken,
 }: {
   delivery: ActiveDelivery;
   expanded: boolean;
   onToggle: () => void;
+  sessionToken: string | null;
 }) {
   const { order, customer, gasType, cylinderSize, quantity } = delivery;
   const shopCoords = useSellerLocation();
@@ -205,18 +174,12 @@ function DeliveryCard({
   const { state, cancel } = useDeliveryTracking({
     order: {
       orderId: order.id,
-      orderNumber: order.id.slice(-4).toUpperCase(),
       sellerId: order.sellerId,
       sellerName: order.sellerName,
-      shopLocation: "My Shop",
       shopLatLng: shopCoords,
-      customerName: order.customerName,
-      customerLocation: order.deliveryLocation.address,
       customerLatLng: customer,
-      gasType,
-      cylinderSize,
-      quantity,
-      radiusMeters: 8000,
+      order,
+      token: sessionToken,
     },
     route,
   });
@@ -268,7 +231,7 @@ function DeliveryCard({
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.riderName}>{state.rider.fullName}</Text>
-            <Text style={styles.riderPhone}>{state.rider.phone}</Text>
+            <Text style={styles.riderPhone}>{state.rider.phone || "—"}</Text>
           </View>
           <View style={{ alignItems: "flex-end" }}>
             <View style={styles.riderRating}>
@@ -284,7 +247,7 @@ function DeliveryCard({
         <View style={styles.waitingBox}>
           <Ionicons name="hourglass-outline" size={18} color={Colors.warning} />
           <Text style={styles.waitingText}>
-            Waiting for a rider to accept ({state.competingRiders.length} nearby)
+            Waiting for a rider to accept this delivery
           </Text>
         </View>
       )}
@@ -301,7 +264,7 @@ function DeliveryCard({
             size={18}
             color={expanded ? "#FFF" : Colors.primary}
           />
-          <Text style={[styles.expandBtnText, expanded && styles.expandBtnTextActive]}>
+          <Text style={[styles.expandBtnText, expanded && styles.expandBtnActive]}>
             {expanded ? "Hide details" : "Track on Map"}
           </Text>
         </TouchableOpacity>
@@ -383,31 +346,50 @@ function DeliveryCard({
 /* -------------------------------------------------------------------------- */
 
 export default function SellerDelivery() {
-  const { session } = useStore();
+  const { session, orders, refresh } = useStore();
   const user = session?.user;
   const shopCoords = useSellerLocation();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // For the demo: synthesize one active delivery per seller session.
-  // Production: subscribe to /orders/seller/:id?status=in_flight via
-  // the realtime pipeline.
-  const [deliveries, setDeliveries] = useState<ActiveDelivery[]>(() =>
-    user ? [buildActiveDelivery(user.id, user.fullName, shopCoords)] : [],
-  );
+  // Active deliveries = orders in `in_transit` / `picked_up` for the
+  // signed-in seller, sourced entirely from the live store.
+  const deliveries: ActiveDelivery[] = useMemo(() => {
+    if (!user) return [];
+    const sid = String(user.id);
+    const inFlight = orders
+      .filter(
+        (o) =>
+          String(o.sellerId) === sid &&
+          (o.status === "in_transit" ||
+            o.status === "picked_up" ||
+            (o.status === "accepted" && !!o.riderId)),
+      )
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    return inFlight.map((order) => {
+      const customer =
+        toLatLng(order.deliveryLocation) ?? {
+          lat: shopCoords.lat + 0.02,
+          lng: shopCoords.lng + 0.02,
+        };
+      return {
+        order,
+        customer,
+        gasType: order.items[0]?.productName ?? "LPG Refill",
+        cylinderSize: order.items[0]?.size ?? "13kg",
+        quantity: order.items[0]?.quantity ?? 1,
+      };
+    });
+  }, [orders, user, shopCoords.lat, shopCoords.lng]);
 
-  // Re-seed when the seller logs in fresh.
-  useEffect(() => {
-    if (!user) return;
-    setDeliveries([buildActiveDelivery(user.id, user.fullName, shopCoords)]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
-
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    // Simulated refresh; in production this re-pulls orders.
-    setTimeout(() => setRefreshing(false), 700);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   return (
@@ -434,7 +416,7 @@ export default function SellerDelivery() {
           <EmptyState
             icon="📦"
             title="No active deliveries"
-            message="When a customer order is accepted, the broadcast will start here."
+            message="When a customer order is accepted and a rider is on the way, it will appear here."
           />
         ) : (
           deliveries.map((d) => (
@@ -445,6 +427,7 @@ export default function SellerDelivery() {
               onToggle={() =>
                 setExpandedId((cur) => (cur === d.order.id ? null : d.order.id))
               }
+              sessionToken={session?.token ?? null}
             />
           ))
         )}
@@ -453,30 +436,6 @@ export default function SellerDelivery() {
       </ScrollView>
     </SafeAreaView>
   );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Demo data factory                                                           */
-/* -------------------------------------------------------------------------- */
-
-function buildActiveDelivery(
-  sellerId: string,
-  sellerName: string,
-  shop: LatLng,
-): ActiveDelivery {
-  const order = buildMockOrder(sellerId, sellerName);
-  const customer =
-    toLatLng(order.deliveryLocation) ?? {
-      lat: shop.lat + 0.02,
-      lng: shop.lng + 0.02,
-    };
-  return {
-    order,
-    customer,
-    gasType: order.items[0]?.productName ?? "LPG Refill",
-    cylinderSize: order.items[0]?.size ?? "13kg",
-    quantity: order.items[0]?.quantity ?? 1,
-  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -702,9 +661,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: "800",
     color: Colors.primary,
-  },
-  expandBtnTextActive: {
-    color: "#FFF",
   },
   cancelBtn: {
     flexDirection: "row",

@@ -44,6 +44,7 @@ import { File, Directory, Paths } from "expo-file-system";
 import * as FileSystemLegacy from "expo-file-system/legacy";
 import { Asset } from "expo-asset";
 import { Buffer } from "buffer";
+import * as Sharing from "expo-sharing";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { Card } from "./Card";
 import { AppButton } from "./AppButton";
@@ -51,6 +52,7 @@ import { StatusPill } from "./StatusPill";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
 import { formatDateTime } from "../utils/format";
 import { API_CONFIG } from "../api/config";
+import { PermitsApi } from "../api/endpoints";
 import { useStore } from "../store/StoreContext";
 import type {
   PermitDocument,
@@ -190,6 +192,19 @@ export function LicenseApplicationSection({ user, permit: permitProp }: Props) {
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
   /** `true` while `downloadApplicationForm` is on the fly. */
   const [downloadingForm, setDownloadingForm] = useState(false);
+  /** `true` while the official Gas Selling Permit Certificate is being
+   *  streamed from the server. Drives the Step 4 button's busy state so
+   *  the seller can't fire two concurrent downloads. */
+  const [downloadingLicense, setDownloadingLicense] = useState(false);
+  /**
+   * URI of the most recently downloaded Gas Selling Permit Certificate,
+   * persisted to a USER-VISIBLE location (Downloads on Android, the
+   * app's Documents folder on iOS). When non-null, the Step 4 section
+   * exposes a "View PDF" affordance that hands the URI to the system
+   * PDF viewer via `expo-sharing`. Cleared when the seller starts a
+   * fresh download so the banner always reflects the latest state.
+   */
+  const [licenseSavedUri, setLicenseSavedUri] = useState<string | null>(null);
   /**
    * Transient confirmation surfaced immediately after a successful
    * upload — mirrors {@link downloadSuccess}. Auto-cleared after a few
@@ -210,6 +225,23 @@ export function LicenseApplicationSection({ user, permit: permitProp }: Props) {
    * subsequent downloads.
    */
   const [downloadsSafUri, setDownloadsSafUri] = useState<string | null>(null);
+  /**
+   * Force a fresh `GET /api/permits/me` on mount so the document list is
+   * always sourced from the live backend — even if the store's bootstrap
+   * (`StoreContext.refresh`) hasn't fired yet for this session. Without
+   * this effect a seller opening the Profile screen before the bootstrap
+   * promise resolved would see "no documents uploaded" until they pulled
+   * to refresh. Silent on failure — the existing toast surface covers
+   * network errors so we don't double-alert.
+   */
+  useEffect(() => {
+    if (permitProp) return; // Caller already supplied a permit; skip.
+    store.fetchMyPermit().catch(() => {
+      // Best-effort — the store's `error` slice carries the failure.
+    });
+    // Only on mount; subsequent fetches happen via upload / submit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     if (!justSubmitted) return;
     const t = setTimeout(() => setJustSubmitted(false), 2000);
@@ -365,10 +397,19 @@ export function LicenseApplicationSection({ user, permit: permitProp }: Props) {
         "[LicenseApplicationSection] pickFile error",
         (err as Error)?.message,
       );
-      setActionError(
-        (err as Error)?.message ??
-          "Could not upload the selected file. Please try again.",
-      );
+      const rawMessage = (err as Error)?.message ?? "";
+      // Translate the cryptic RN "Network request failed" into an
+      // actionable hint. The seller is almost always on a different
+      // network than the laptop running the Spring Boot backend, or
+      // the backend isn't running yet on the dev machine.
+      const isNetworkFailure =
+        rawMessage.toLowerCase().includes("network request failed") ||
+        (err as { code?: string })?.code === "NETWORK";
+      const friendly = isNetworkFailure
+        ? "Cannot reach the server. Make sure your phone is on the same Wi-Fi as the laptop running the backend, then try again."
+        : rawMessage ||
+          "Could not upload the selected file. Please try again.";
+      setActionError(friendly);
     } finally {
       setUploading((prev) => ({ ...prev, [documentType]: false }));
     }
@@ -658,56 +699,205 @@ export function LicenseApplicationSection({ user, permit: permitProp }: Props) {
   const downloadApprovedLicense = async () => {
     setActionError(null);
     if (!permit || permit.status !== "approved") return;
-    const licenceDoc = permit.documents?.find(
-      (d) => d.documentType === "license",
-    );
-    if (!licenceDoc) {
-      Alert.alert(
-        "Licence not yet uploaded",
-        "The administrator has approved your permit but has not uploaded the licence PDF yet. Check back shortly.",
-      );
-      return;
-    }
-    try {
-      const destDir = new Directory(Paths.cache, "licenses");
-      if (!destDir.exists) destDir.create();
-      const target = new File(
-        destDir,
-        `license-${user.id}-${licenceDoc.id}.pdf`,
-      );
 
-      // Stream via fetch with the bearer token from the store's session.
-      const res = await fetch(
-        `${API_CONFIG.BASE_URL}${licenceDoc.downloadUrl}`,
+    // The backend always regenerates the official Gas Selling Permit on
+    // demand at `GET /api/permits/me/license` for any approved seller —
+    // independent of whether the admin attached a separate licence file
+    // at approval time. We hit that endpoint (NOT the seller-uploaded
+    // `license` document row, which may not exist) so the seller can
+    // always obtain the official PDF once their permit is APPROVED.
+    const licenceUrl = PermitsApi.licenseUrl();
+    const filename = `Gas_Selling_Permit_Certificate-${user.id}.pdf`;
+    // Holds the URI the user can hand to the system viewer — kept at
+    // module scope (via component state) so the success banner can offer
+    // a "View PDF" affordance without re-running the download.
+    let viewableUri: string | null = null;
+
+    setDownloadingLicense(true);
+    try {
+      // 1. Stream the PDF into a temp file with downloadAsync — this
+      //    avoids the `Blob.arrayBuffer is not a function` trap of the
+      //    previous fetch + arrayBuffer pipeline.
+      const tempDir = new Directory(Paths.cache, "licenses");
+      if (!tempDir.exists) tempDir.create();
+      const tempTarget = new File(tempDir, filename);
+      if (tempTarget.exists) tempTarget.delete();
+
+      const result = await FileSystemLegacy.downloadAsync(
+        `${API_CONFIG.BASE_URL}${licenceUrl}`,
+        tempTarget.uri,
         {
           headers: {
             Accept: "application/pdf",
             "X-Api-Version": API_CONFIG.API_VERSION,
-            // The api client manages the bearer token through setTokenProvider;
-            // for this background download we re-read session.token from
-            // store.session which is the same source.
+            // The api client manages the bearer token through
+            // setTokenProvider; for this background download we re-read
+            // session.token from store.session which is the same source.
             ...(store.session?.token
               ? { Authorization: `Bearer ${store.session.token}` }
               : {}),
           },
         },
       );
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}`);
+      if (result.status < 200 || result.status >= 300) {
+        throw new Error(`Server returned ${result.status}`);
       }
-      const blob = await res.blob();
-      const buffer = await blob.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      if (target.exists) target.delete();
-      target.write(bytes);
+      if (!tempTarget.exists || (tempTarget.size ?? 0) <= 0) {
+        throw new Error(
+          result.status === 200
+            ? "Saved permit is empty. Please try again."
+            : `Server returned ${result.status}`,
+        );
+      }
 
-      Alert.alert(
-        "Approved Licence ready",
-        `Saved to: ${target.uri}`,
+      // 2. Read the bytes once so we can hand them to either the Android
+      //    SAF (Storage Access Framework) write path or the iOS
+      //    Paths.document write path. Reading once up front keeps the
+      //    SAF and iOS branches symmetric and avoids re-issuing the
+      //    HTTP request when both paths need the bytes.
+      const tempBytes = tempTarget.bytesSync();
+      if (!tempBytes || tempBytes.length <= 0) {
+        throw new Error("Saved permit is empty. Please try again.");
+      }
+      // Magic-header sanity check — a valid PDF starts with "%PDF-".
+      const head = tempBytes.slice(0, 5);
+      const header = String.fromCharCode(...head);
+      if (header !== "%PDF-") {
+        throw new Error(
+          "Downloaded certificate is not a valid PDF. Please try again.",
+        );
+      }
+
+      // 3. Persist the certificate in TWO places on Android, ONE place on
+      //    other platforms:
+      //
+      //    a. Always: a `file://` copy under Paths.document/licenses/ —
+      //       this is what `expo-sharing`'s `Sharing.shareAsync` will
+      //       hand to the system viewer. The previous implementation
+      //       tried to pass the SAF `content://` URI directly, but
+      //       expo-sharing rejects any URI whose scheme is not `file`
+      //       (the bundled FileProvider inside expo-sharing only
+      //       covers the app's own directories). Same scheme as the
+      //       working DocumentPreviewModal flow.
+      //    b. Android only: an additional copy in the public Downloads
+      //       folder via the Storage Access Framework, so the seller
+      //       can browse to the PDF from any file manager / reader
+      //       and the file survives reinstalls / cache clears.
+      //
+      //    iOS already routes Paths.document through the system Files
+      //    app under the app's name, so no second copy is needed.
+      const docDir = new Directory(Paths.document, "licenses");
+      if (!docDir.exists) docDir.create();
+      const docTarget = new File(docDir, filename);
+      if (docTarget.exists) docTarget.delete();
+      docTarget.write(tempBytes);
+      if (!docTarget.exists || (docTarget.size ?? 0) <= 0) {
+        throw new Error("Saved permit is empty. Please try again.");
+      }
+      viewableUri = docTarget.uri;
+
+      if (Platform.OS === "android") {
+        try {
+          const safUri = await ensureDownloadsSafUri();
+          if (!safUri) {
+            // The seller declined the SAF permission dialog. The file
+            // is still saved under Paths.document and the View button
+            // still works — only the secondary "visible in Downloads"
+            // copy is skipped.
+            console.info(
+              "[downloadApprovedLicense] SAF permission declined — " +
+                "skipping the Downloads-folder copy.",
+            );
+          } else {
+            await writeBytesToSaf(
+              safUri,
+              filename,
+              "application/pdf",
+              tempBytes,
+            );
+          }
+        } catch (safErr) {
+          // SAF is a best-effort secondary location; never fail the
+          // whole download because of it. The View button still
+          // works against the Paths.document copy.
+          console.warn(
+            "[downloadApprovedLicense] SAF write failed (non-fatal):",
+            (safErr as Error)?.message,
+          );
+        }
+      }
+
+      // 4. Surface the saved location the same way the application form
+      //    does — a single green success line — and keep the file URI
+      //    in component state so the View button can re-open it.
+      setLicenseSavedUri(viewableUri);
+      setDownloadSuccess(
+        Platform.OS === "android"
+          ? "✅ Gas Selling Permit Certificate saved. Tap View Certificate to open it, or look in your Downloads folder."
+          : "✅ Gas Selling Permit Certificate saved to the app's Documents folder.",
       );
     } catch (err) {
+      const failure = err instanceof Error ? err : new Error(String(err));
+      console.error(
+        "[downloadApprovedLicense] failed",
+        failure.name,
+        failure.message,
+      );
+      setDownloadSuccess(null);
+      setLicenseSavedUri(null);
+      Alert.alert(
+        "Download failed",
+        failure.message ||
+          "Could not save the Gas Selling Permit Certificate. Please try again.",
+      );
       setActionError(
-        (err as Error)?.message ?? "Could not download the licence.",
+        failure.message ||
+          "Could not save the Gas Selling Permit Certificate. Please try again.",
+      );
+    } finally {
+      setDownloadingLicense(false);
+    }
+  };
+
+  /**
+   * Open the just-downloaded certificate in the system PDF viewer.
+   * Hands the `file://` URI (under Paths.document/licenses) to
+   * `expo-sharing`, which routes it through a FileProvider on Android
+   * so the system PDF viewer (Files, Drive, Adobe, …) can read it and
+   * through `UIActivityViewController` on iOS. Earlier we tried
+   * passing the Android SAF `content://` URI of the Downloads-folder
+   * copy, but expo-sharing rejects any non-`file://` scheme with
+   * "Only local file URLs are supported (expected scheme to be
+   * 'file', got 'content')" — the bundled FileProvider only covers
+   * the app's own directories.
+   */
+  const openSavedLicense = async () => {
+    if (!licenseSavedUri) return;
+    try {
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        Alert.alert(
+          "Open not supported",
+          "Your device does not expose a PDF viewer. Look in your Downloads folder for the certificate.",
+        );
+        return;
+      }
+      await Sharing.shareAsync(licenseSavedUri, {
+        mimeType: "application/pdf",
+        dialogTitle: "Gas Selling Permit Certificate",
+        UTI: "com.adobe.pdf",
+      });
+    } catch (err) {
+      const failure = err instanceof Error ? err : new Error(String(err));
+      console.error(
+        "[openSavedLicense] failed",
+        failure.name,
+        failure.message,
+      );
+      Alert.alert(
+        "Could not open the certificate",
+        failure.message ||
+          "Please open the certificate from your Downloads folder manually.",
       );
     }
   };
@@ -908,30 +1098,58 @@ export function LicenseApplicationSection({ user, permit: permitProp }: Props) {
         ) : null}
       </View>
 
-      {/* Step 4 — Download approved license */}
+      {/* Step 4 — Download approved Gas Selling Permit Certificate */}
       <View style={[styles.step, styles.stepLast]}>
         <View style={styles.stepHead}>
           <Text style={styles.stepNumber}>4</Text>
-          <Text style={styles.stepTitle}>Download Approved License</Text>
+          <Text style={styles.stepTitle}>
+            Download Gas Selling Permit Certificate
+          </Text>
         </View>
         {permit?.status === "approved" ? (
           <>
             <Text style={styles.stepHelper}>
-              Your license has been approved. Download a copy to keep on your
-              device.
+              Congratulations! Your application has been approved. Download
+              your official Gas Selling Permit Certificate below — a
+              landscape A4 PDF with your certificate number, validity
+              window, official seal and a verification QR code, ready
+              for printing and framing.
             </Text>
             <AppButton
-              title="Download License"
+              title={
+                downloadingLicense
+                  ? "Downloading certificate…"
+                  : "Download Gas Selling Permit Certificate"
+              }
               variant="primary"
               fullWidth
-              leftIcon={<Text style={styles.btnEmoji}>⬇️</Text>}
+              disabled={downloadingLicense}
+              leftIcon={
+                downloadingLicense ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.btnEmoji}>⬇️</Text>
+                )
+              }
               onPress={downloadApprovedLicense}
             />
+            {licenseSavedUri ? (
+              <AppButton
+                title="View Certificate"
+                variant="secondary"
+                fullWidth
+                leftIcon={<Text style={styles.btnEmoji}>👁️</Text>}
+                onPress={openSavedLicense}
+                style={{ marginTop: 10 }}
+              />
+            ) : null}
           </>
         ) : (
           <Text style={styles.pending}>
-            Approval is still pending. The download button will be enabled
-            once your application is approved by the admin.
+            The Gas Selling Permit Certificate download is only available
+            once your application is Approved. While your status is
+            Pending, Under Review or Rejected the certificate cannot be
+            downloaded.
           </Text>
         )}
       </View>

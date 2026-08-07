@@ -69,10 +69,12 @@ export default function SupplierLayout() {
         <Drawer.Screen
           key={r.key}
           // The Drawer.Screen `name` maps to the file under this layout —
-          // "home" maps to `index.tsx`; everything else maps to its
-          // filename. Nested routes (like routes/[id]) are wired
-          // automatically by expo-router.
-          name={r.key === "home" ? "index" : r.key}
+          // every key in SUPPLIER_SIDEBAR_ROUTES is the basename of an
+          // existing .tsx file (dashboard, operations, live, fleet,
+          // reports, notifications, profile, restock, guide). Nested
+          // routes (like routes/[id]) are wired automatically by
+          // expo-router.
+          name={r.key}
           options={{
             title: r.label,
             headerShown: false,

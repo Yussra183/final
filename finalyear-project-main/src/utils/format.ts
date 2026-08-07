@@ -70,11 +70,24 @@ export const roleHome = (role: string) => {
       // is missing for some reason.
       return "/seller/dashboard" as const;
     case "supplier":
-      return "/(supplier)" as const;
+      // Land suppliers directly on the dashboard file inside the
+      // (supplier) Drawer group, instead of routing through the group's
+      // index page. The group has no `index.tsx` (its role-specific
+      // landing is the supplier logistics dashboard), so navigating to
+      // the bare `/(supplier)` would resolve to "Unmatched Route".
+      // Matches the direct-file pattern used for seller / rider / admin.
+      return "/(supplier)/dashboard" as const;
     case "rider":
       return "/rider/dashboard" as const;
     case "admin":
-      return "/(admin)" as const;
+      // Land admins directly on the dashboard file inside the (admin)
+      // Drawer group, instead of routing through the group's index page.
+      // The (admin)/index.tsx route still exists for direct navigation /
+      // deep links and forwards to "/dashboard", but skipping it on the
+      // login path removes one navigation tick and prevents the Drawer
+      // shell from appearing with an empty scene before the dashboard
+      // mounts. Matches the direct-file pattern used for seller/rider.
+      return "/(admin)/dashboard" as const;
     default:
       return "/auth/login" as const;
   }

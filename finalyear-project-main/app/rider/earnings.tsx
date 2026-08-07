@@ -14,6 +14,7 @@ import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { LogoutButton } from "../../src/components/LogoutButton";
 import { EmptyState } from "../../src/components/EmptyState";
+import { useRiderLock } from "../../src/hooks/useRiderLock";
 import {
   formatCurrency,
   formatDate,
@@ -40,6 +41,9 @@ function isSameWeek(d: Date, now: Date) {
 export default function Earnings() {
   const { session, getOrdersForUser } = useStore();
   const user = session!.user;
+  // Lock banner + modal — rendered inline at the top of the page so
+  // the original layout (cards, stats, list, spacing) is unchanged.
+  const { Banner, Modal, isApproved } = useRiderLock();
   const completed = useMemo(
     () =>
       getOrdersForUser(user.id, "rider").filter(
@@ -79,7 +83,9 @@ export default function Earnings() {
       />
 
       <ScrollView contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
-        <View style={styles.statsRow}>
+        {Banner}
+
+        <View style={[styles.statsRow, !isApproved ? styles.blockLocked : null]}>
           <StatCard
             label="Today"
             value={formatCurrency(todayEarnings)}
@@ -116,7 +122,13 @@ export default function Earnings() {
         ) : (
           <View style={{ paddingHorizontal: Spacing.lg }}>
             {recent.map((o) => (
-              <Card key={o.id} style={{ marginBottom: Spacing.sm }}>
+              <Card
+                key={o.id}
+                style={[
+                  { marginBottom: Spacing.sm },
+                  !isApproved ? styles.cardLocked : null,
+                ]}
+              >
                 <View style={styles.row}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.cardTitle}>
@@ -141,6 +153,7 @@ export default function Earnings() {
           delivery. Final payout is calculated at the end of each week.
         </Text>
       </ScrollView>
+      {Modal}
     </SafeAreaView>
   );
 }
@@ -168,5 +181,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     marginTop: Spacing.lg,
     textAlign: "center",
+  },
+  cardLocked: {
+    opacity: 0.55,
+  },
+  blockLocked: {
+    opacity: 0.55,
   },
 });

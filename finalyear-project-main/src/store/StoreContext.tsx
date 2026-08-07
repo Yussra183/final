@@ -29,35 +29,31 @@ import {
   DeliveryTrip,
   LatLng,
   RouteStop,
+  RiderPermitSummary,
+  SupplierApplication,
+  SupplierApplicationDocumentType,
+  CustomerLocation,
 } from "../../constants/types";
-import {
-  seedComplaints,
-  seedEmergencyContacts,
-  seedNotifications,
-  seedOrders,
-  seedPermits,
-  seedProducts,
-  seedRestockRequests,
-  seedSellers,
-  seedUsers,
-  seedRoutes,
-  seedVehicles,
-  seedRiders,
-  seedTrips,
-} from "./data";
 import { API_CONFIG } from "../api/config";
 import { setTokenProvider, ApiError } from "../api";
 import {
+  AdminRiderPermitsApi,
+  AdminSupplierApplicationsApi,
   AuthApi,
   ComplaintsApi,
+  CustomersApi,
   NotificationsApi,
   OrdersApi,
   PermitsApi,
   ProductsApi,
   RestockApi,
+  RiderPermitsApi,
   RidersApi,
+  RoutesApi,
   SellersApi,
+  SupplierApplicationsApi,
   UsersApi,
+  VehiclesApi,
 } from "../api/endpoints";
 import { orderService } from "../services/OrderService";
 import type { CreateOrderDto } from "../services/OrderService";
@@ -68,7 +64,10 @@ import {
   scheduleLocalNotification,
 } from "../lib/notifications";
 import { haversineMeters, pointAtProgress } from "../lib/location";
-import { seededSellerRiders, sellersForRider } from "../lib/riderMatching";
+// NOTE: the in-memory `sellersForRider` / `seededSellerRiders` from
+// `lib/riderMatching` were removed alongside the demo seed data. The
+// rider dispatch flow now goes through the backend's `seller_riders`
+// table and OrderService broadcasts eligible riders server-side.
 
 interface StoreShape {
   // Auth
@@ -103,6 +102,18 @@ interface StoreShape {
    * flow.
    */
   sellerPermits: Record<string, SellerPermit>;
+  /**
+   * Live-API rider verification applications keyed by rider id. The
+   * rider-facing Profile / Verification section reads
+   * `riderPermits[me.id]` for the new server-side flow.
+   */
+  riderPermits: Record<string, RiderPermitSummary>;
+  /**
+   * Live-API supplier verification applications keyed by supplier id.
+   * The supplier-facing Verification / Profile screens read
+   * `supplierApplications[me.id]` for the server-side flow.
+   */
+  supplierApplications: Record<string, SupplierApplication>;
   notifications: NotificationItem[];
   complaints: Complaint[];
   sellers: SellerProfile[];
@@ -216,7 +227,89 @@ interface StoreShape {
   ) => Promise<SellerPermit>;
   /** Reject a permit with a seller-facing reason. */
   rejectAdminPermit: (permitId: string, reason: string) => Promise<SellerPermit>;
+
+  // ---- Rider verification (live API) -----------------------------------
+  /**
+   * Re-fetch the signed-in rider's verification application (lazy-creates
+   * a draft PENDING row on first call) and store it under
+   * `riderPermits[me.id]`.
+   */
+  fetchMyRiderApplication: () => Promise<RiderPermitSummary | null>;
+  /**
+   * Upload one PDF or image for one of the rider verification slots
+   * (`rider_application_form | rider_national_id | rider_driving_licence
+   * | rider_passport_photo | rider_vehicle_registration`). Replaces any
+   * prior row for the slot on the server side.
+   */
+  uploadRiderApplicationDocument: (
+    type: Exclude<
+      RiderPermitSummary["documents"][number]["documentType"],
+      "rider_permit"
+    >,
+    file: Blob | { uri: string; name: string; type?: string },
+    filename: string,
+  ) => Promise<RiderPermitSummary["documents"][number]>;
+  /** Remove a previously-uploaded rider document (only before submission). */
+  deleteRiderApplicationDocument: (documentId: string) => Promise<void>;
+  /** Finalise the rider application — requires all 5 required documents. */
+  submitRiderApplication: () => Promise<RiderPermitSummary>;
+  /** Fetch the admin queue of rider applications. */
+  fetchAdminRiderApplications: (
+    status?: PermitStatus,
+  ) => Promise<RiderPermitSummary[]>;
+  /** Approve a rider application (JSON; no file body). */
+  approveAdminRiderApplication: (
+    applicationId: string,
+  ) => Promise<RiderPermitSummary>;
+  /** Reject a rider application with a rider-facing reason. */
+  rejectAdminRiderApplication: (
+    applicationId: string,
+    reason: string,
+  ) => Promise<RiderPermitSummary>;
+
+  // ---- Supplier verification (live API) --------------------------------
+  /**
+   * Re-fetch the signed-in supplier's verification application
+   * (lazy-creates a draft PENDING row on first call) and store it under
+   * `supplierApplications[me.id]`.
+   */
+  fetchMySupplierApplication: () => Promise<SupplierApplication | null>;
+  /**
+   * Upload one PDF or image for one of the supplier verification slots
+   * (`supplier_application_form | supplier_national_id |
+   * supplier_business_registration | supplier_tin_certificate |
+   * supplier_business_licence | supplier_passport_photo`). Replaces any
+   * prior row for the slot on the server side.
+   */
+  uploadSupplierApplicationDocument: (
+    type: Exclude<SupplierApplicationDocumentType, "supplier_certificate">,
+    file: Blob | { uri: string; name: string; type?: string },
+    filename: string,
+  ) => Promise<void>;
+  /** Remove a previously-uploaded supplier document (only before submission). */
+  deleteSupplierApplicationDocument: (documentId: string) => Promise<void>;
+  /** Finalise the supplier application — requires all 6 required documents. */
+  submitSupplierApplication: () => Promise<SupplierApplication>;
+  /** Fetch the admin queue of supplier applications. */
+  fetchAdminSupplierApplications: (
+    status?: PermitStatus,
+  ) => Promise<SupplierApplication[]>;
+  /** Approve a supplier application (JSON; no file body). */
+  approveAdminSupplierApplication: (
+    applicationId: string,
+  ) => Promise<SupplierApplication>;
+  /** Reject a supplier application with a supplier-facing reason. */
+  rejectAdminSupplierApplication: (
+    applicationId: string,
+    reason: string,
+  ) => Promise<SupplierApplication>;
   markNotificationRead: (id: string) => Promise<void>;
+  /**
+   * Bulk-mark every notification for the supplied user id (defaults
+   * to the signed-in user) as read. Used by the Seller Notifications
+   * screen on mount to clear the dashboard badge.
+   */
+  markAllNotificationsRead: (userId?: string) => Promise<void>;
   addComplaint: (
     c: Omit<Complaint, "id" | "createdAt" | "status">,
   ) => Promise<void>;
@@ -238,10 +331,55 @@ interface StoreShape {
    * Update the signed-in user's profile (name, phone, email, and the
    * full location tuple). When the location fields change, the home
    * screen's "Nearby Sellers" pipeline re-derives its list automatically
-   * because `useNearbySellers` reads them off the same store. Backend
-   * wiring lives in `UsersApi.updateProfile`.
+   * because `useNearbySellers` reads them off the same store. The
+   * personal fields (fullName / username / email / phone) ride along on
+   * `PATCH /api/customers/me`; the location tuple rides along on
+   * `PUT /api/customers/me` via the dedicated `saveCustomerLocation`
+   * action. Both sit behind the same customer-role guard on the
+   * backend.
    */
   updateProfile: (patch: Partial<Omit<User, "id" | "role" | "createdAt">>) => Promise<void>;
+
+  /**
+   * Persist the signed-in customer's location to `customer_profiles`
+   * via `PUT /api/customers/me`, then merge the server's response onto
+   * `session.user`.
+   *
+   * The response — not the patch — is what gets merged, because the
+   * backend derives `lat` / `lng` by geocoding the address. Those
+   * coordinates are what `useNearbySellers` needs in order to query
+   * `GET /api/sellers?lat&lng&radiusKm`, so the nearby list refreshes
+   * as soon as this resolves.
+   *
+   * This is the only thing that invalidates the session-cached
+   * location; it is otherwise loaded once, after login.
+   */
+  saveCustomerLocation: (patch: CustomerLocation) => Promise<void>;
+
+  /**
+   * Persist the signed-in seller's business address to
+   * `seller_profiles` via `POST /api/sellers/me`. Mirrors the customer
+   * `saveCustomerLocation` action so the seller Profile screen has a
+   * parallel "edit business address" flow. SELLER-role only.
+   *
+   * The seller is NEVER exposed to latitude / longitude — the action
+   * simply forwards the typed address; the backend's `GeocodingService`
+   * supplies the coordinates and the response carries them back, which
+   * the implementation merges onto `session.user`. Editing the address
+   * automatically recalculates coordinates on every save.
+   *
+   * `deviceCoords`, when provided, overrides the server-side geocode
+   * with the device's GPS fix — the seller never sees the value but it
+   * gives the saved row exact coordinates when permission is granted.
+   */
+  saveSellerLocation: (patch: {
+    businessName?: string;
+    location: string;
+    phone?: string;
+    region?: string | null;
+    district?: string | null;
+    deviceCoords?: { lat: number; lng: number } | null;
+  }) => Promise<void>;
 }
 
 export interface RegisterInput {
@@ -251,6 +389,31 @@ export interface RegisterInput {
   phone: string;
   password: string;
   role: UserRole;
+  /**
+   * Optional seller business address captured during registration.
+   * When the new account is a SELLER and any of these fields are
+   * supplied, the store follows the successful registration with a
+   * `POST /api/sellers/me` upsert so the business address is persisted
+   * alongside the user record. Latitude / longitude are NEVER accepted
+   * here — the device-GPS / backend-geocode layer fills them in so the
+   * seller never has to know a coordinate. For non-seller roles these
+   * fields are silently ignored.
+   */
+  businessName?: string;
+  businessRegion?: string;
+  businessDistrict?: string;
+  businessWard?: string;
+  businessStreet?: string;
+  businessAddress?: string;
+  /**
+   * Optional device-derived coordinates captured at registration time.
+   * When non-null the store forwards them to the backend so the
+   * address is persisted with the GPS fix; when null the backend
+   * geocodes the typed address. Either way the seller never sees or
+   * types a coordinate.
+   */
+  businessLat?: number | null;
+  businessLng?: number | null;
 }
 
 export interface PlaceOrderInput {
@@ -280,13 +443,41 @@ export const NEAR_RADIUS_METERS = 500;
 
 const StoreContext = createContext<StoreShape | undefined>(undefined);
 
-// Demo-only mock credentials. Legacy accounts were created with "1234";
-// the seeded backend users (V3 migration) use "Password1!" as their
-// BCrypt plaintext. The mock login accepts either so old users can still
-// sign in regardless of which password they originally registered with.
-const MOCK_PASSWORD = "1234";
-const SEED_PASSWORD = "Password1!";
+// Auth runs through the live Spring Boot backend. USE_MOCK is `false` in
+// src/api/config.ts; the constants below are kept only so the existing
+// `login` / `register` guards (which short-circuit when USE_MOCK is
+// flipped on for offline development) don't reference missing symbols.
 const USE_MOCK = API_CONFIG.USE_MOCK;
+
+/**
+ * Merge a `CustomerLocation` payload from `/api/customers/me` onto a
+ * `User`, normalising the wire's `null`s into `undefined`.
+ *
+ * The distinction matters: the backend returns explicit `null` for a
+ * field the customer has never filled in, but `User` declares those
+ * fields as optional (`string | undefined`). Passing the raw `null`
+ * through would make `typeof user.lat === "number"` false in a way
+ * that's correct, yet leave `user.region` rendering as the string
+ * "null" in an input. Normalising once, here, keeps every consumer
+ * simple.
+ */
+function mergeCustomerLocation(user: User, location: CustomerLocation): User {
+  const text = (v: string | null | undefined): string | undefined =>
+    v === null || v === undefined || v === "" ? undefined : v;
+  const num = (v: number | null | undefined): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? v : undefined;
+
+  return {
+    ...user,
+    region: text(location.region),
+    district: text(location.district),
+    ward: text(location.ward),
+    street: text(location.street),
+    address: text(location.address),
+    lat: num(location.lat),
+    lng: num(location.lng),
+  };
+}
 
 /**
  * Wraps a Promise-returning action with loading + error bookkeeping
@@ -340,36 +531,32 @@ function useAsync(
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  // Seed data is the fallback whenever the live API hasn't responded yet
-  // (or a request failed). Keeping it as the initial state means a fresh
-  // login or page reload shows the historical / seeded list immediately,
-  // and `refresh()` (run on session change) replaces it with whatever
-  // the backend returns. This preserves "no historical orders should
-  // disappear" semantics from the original mock-only behaviour.
-  const [users, setUsers] = useState<User[]>(seedUsers);
-  const [products, setProducts] = useState<GasProduct[]>(seedProducts);
-  const [orders, setOrders] = useState<Order[]>(seedOrders);
-  const [restockRequests, setRestockRequests] = useState<RestockRequest[]>(
-    seedRestockRequests,
-  );
-  const [permits, setPermits] = useState<PermitApplication[]>(seedPermits);
+  // The store starts empty — `refresh()` (run once on session change
+  // and re-run on login) loads every list from the backend. There is
+  // no in-memory seed fallback: only data created through the
+  // application should ever appear in the UI.
+  const [users, setUsers] = useState<User[]>([]);
+  const [products, setProducts] = useState<GasProduct[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [restockRequests, setRestockRequests] = useState<RestockRequest[]>([]);
+  const [permits, setPermits] = useState<PermitApplication[]>([]);
   /**
    * Live-API permits keyed by seller id. Empty in mock mode — the mock
    * branch keeps using `permits` for backwards compatibility.
    */
   const [sellerPermits, setSellerPermits] = useState<Record<string, SellerPermit>>({});
-  const [notifications, setNotifications] = useState<NotificationItem[]>(
-    seedNotifications,
-  );
-  const [complaints, setComplaints] = useState<Complaint[]>(seedComplaints);
-  const [sellers, setSellers] = useState<SellerProfile[]>(seedSellers);
-  const [emergencyContacts] = useState<EmergencyContact[]>(
-    seedEmergencyContacts,
-  );
-  const [routes, setRoutes] = useState<DeliveryRoute[]>(seedRoutes);
-  const [vehicles, setVehicles] = useState<Vehicle[]>(seedVehicles);
-  const [riders, setRiders] = useState<Rider[]>(seedRiders);
-  const [trips, setTrips] = useState<DeliveryTrip[]>(seedTrips);
+  const [riderPermits, setRiderPermits] = useState<Record<string, RiderPermitSummary>>({});
+  const [supplierApplications, setSupplierApplications] = useState<
+    Record<string, SupplierApplication>
+  >({});
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [sellers, setSellers] = useState<SellerProfile[]>([]);
+  const [emergencyContacts] = useState<EmergencyContact[]>([]);
+  const [routes, setRoutes] = useState<DeliveryRoute[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [riders, setRiders] = useState<Rider[]>([]);
+  const [trips, setTrips] = useState<DeliveryTrip[]>([]);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -380,13 +567,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
-
-  // Demo-only credential memory. Each seeded user knows both the legacy
-  // mock password ("1234") and the BCrypt plaintext that the live
-  // backend stores ("Password1!") so login succeeds in either branch.
-  const [credentials, setCredentials] = useState<Record<string, string>>(() =>
-    Object.fromEntries(seedUsers.map((u) => [u.username, SEED_PASSWORD])),
-  );
 
   // Bind the API token provider to the current session.
   useEffect(() => {
@@ -411,13 +591,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    * store instead of an empty one.
    */
   const refresh = useCallback(async () => {
-    if (USE_MOCK) return;
+    if (USE_MOCK) {
+      // The store starts empty; mock mode is not configured here. The
+      // auth flow doesn't need any slice to render.
+      setError(null);
+      return;
+    }
 
     const currentSession = sessionRef.current;
     if (!currentSession?.token?.trim()) {
-      // Logged out — keep the seed data visible so the user doesn't see
-      // an empty screen if they re-open the app while signed out. The
-      // auth flow itself doesn't depend on these slices.
+      // Logged out — clear any stale data and exit. The auth flow
+      // itself doesn't depend on these slices.
       setError(null);
       return;
     }
@@ -451,6 +635,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       r.status === "fulfilled" ? r.value : fallback;
     setUsers(value(results[0], []));
     setProducts(value(results[1], []));
+
+    // Supplier logistics: routes and vehicles are scoped server-side to
+    // the signed-in supplier. Only fetch them when the actor is a
+    // supplier so other roles don't see 403 noise from the new module.
+    if (actorAtStart?.role === "supplier") {
+      const [routesResult, vehiclesResult] = await Promise.allSettled([
+        RoutesApi.list(),
+        VehiclesApi.list(),
+      ]);
+      setRoutes(
+        routesResult.status === "fulfilled" ? routesResult.value : [],
+      );
+      setVehicles(
+        vehiclesResult.status === "fulfilled" ? vehiclesResult.value : [],
+      );
+    } else {
+      setRoutes([]);
+      setVehicles([]);
+    }
 
     const orderResult = results[2];
     const nextOrders = value(orderResult, []);
@@ -545,6 +748,87 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           );
         }
       }
+
+      // Seller business address bootstrap. The row lives on
+      // `seller_profiles` (the table `GET /api/sellers?lat&lng` reads
+      // to populate the customer "Nearby Sellers" list). A seller who
+      // hasn't completed the business-address step yet throws 404 — we
+      // swallow that branch and let the Profile screen surface the
+      // empty state. Successfully fetched rows are mirrored onto
+      // `session.user` so the Profile "Business Address" field shows
+      // the persisted value right after login / app restart.
+      try {
+        const sellerProfile = await SellersApi.me();
+        if (sellerProfile) {
+          setSession((prev) =>
+            prev && prev.user.id === String(sellerProfile.sellerId)
+              ? {
+                  ...prev,
+                  user: {
+                    ...prev.user,
+                    address: sellerProfile.location || prev.user.address,
+                    district:
+                      sellerProfile.district ?? prev.user.district,
+                    region: sellerProfile.region ?? prev.user.region,
+                    lat: typeof sellerProfile.lat === "number"
+                      ? sellerProfile.lat
+                      : prev.user.lat,
+                    lng: typeof sellerProfile.lng === "number"
+                      ? sellerProfile.lng
+                      : prev.user.lng,
+                  },
+                }
+              : prev,
+          );
+        }
+      } catch (err) {
+        // 404 here == seller has not created a profile yet. Anything
+        // else is unexpected but non-fatal: the Profile screen
+        // still renders; the seller can re-save the address from
+        // there.
+        if (__DEV__) {
+          console.warn(
+            "[SELLERS][REFRESH_MY_PROFILE_FAILED]",
+            (err as Error)?.message,
+          );
+        }
+      }
+    }
+
+    // Customer location bootstrapping (live API only).
+    //
+    // The customer's saved location lives in `customer_profiles`, not on
+    // the `users` row, so it does not ride along on the login response.
+    // Fetch it once here and merge it onto `session.user` — that single
+    // read is what makes the Profile screen show the saved address after
+    // a fresh login / app restart, and what gives `useNearbySellers` the
+    // coordinates it needs to query the nearby endpoint.
+    //
+    // Kept out of the parallel `Promise.allSettled` above for the same
+    // reason as the seller branch: the right call depends on the actor's
+    // role, and a failure here must not taint the main refresh set.
+    if (actorAtStart?.role === "customer") {
+      try {
+        const location = await CustomersApi.myLocation();
+        if (location) {
+          setSession((prev) =>
+            prev && prev.user.id === actorAtStart.id
+              ? { ...prev, user: mergeCustomerLocation(prev.user, location) }
+              : prev,
+          );
+        }
+      } catch (err) {
+        // A customer who has never saved a location still gets a 200
+        // with null fields, so this only fires on a real network /
+        // server failure. Non-fatal: the Profile screen renders empty
+        // inputs and the home screen falls back to its default list.
+        if (__DEV__) {
+          console.warn(
+            "[CUSTOMER_LOCATION][REFRESH_FAILED]",
+            (err as Error)?.message,
+          );
+        }
+      }
     }
 
     // Surface partial failures so the UI can show a retry banner. We
@@ -598,16 +882,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     async (username: string, password: string): Promise<User | null> => {
       const { data } = await run(async () => {
         if (USE_MOCK) {
-          const user = users.find(
-            (u) =>
-              (u.username === username || u.email === username) &&
-              (credentials[username] === password ||
-                MOCK_PASSWORD === password ||
-                SEED_PASSWORD === password),
+          throw new Error(
+            "Mock authentication is disabled. Sign in through the live API.",
           );
-          if (!user) throw new Error("Invalid username or password.");
-          setSession({ user, token: `mock-token-${user.id}-${Date.now()}` });
-          return user;
         }
         const { user, token } = await AuthApi.login({ identifier: username, password });
         setSession({ user, token });
@@ -615,40 +892,87 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       });
       return data;
     },
-    [run, users, credentials],
+    [run],
   );
 
   const register = useCallback(
     async (input: RegisterInput): Promise<User | null> => {
       const { data } = await run(async () => {
         if (USE_MOCK) {
-          if (users.some((u) => u.username === input.username)) {
-            throw new Error("Username already taken.");
-          }
-          const newUser: User = {
-            id: `u-${Date.now()}`,
-            fullName: input.fullName,
-            username: input.username,
-            email: input.email,
-            phone: input.phone,
-            role: input.role,
-            createdAt: new Date().toISOString(),
-          };
-          setUsers((prev) => [...prev, newUser]);
-          setCredentials((prev) => ({ ...prev, [input.username]: input.password }));
-          setSession({
-            user: newUser,
-            token: `mock-token-${newUser.id}-${Date.now()}`,
-          });
-          return newUser;
+          throw new Error(
+            "Mock registration is disabled. Register through the live API.",
+          );
         }
-        const { user, token } = await AuthApi.register(input);
+        // Strip the optional seller business address out of the
+        // auth/register payload — the auth endpoint only accepts the
+        // base identity fields per the backend's RegisterRequest.
+        const { user, token } = await AuthApi.register({
+          fullName: input.fullName,
+          username: input.username,
+          email: input.email,
+          phone: input.phone,
+          password: input.password,
+          role: input.role,
+        });
         setSession({ user, token });
+        // For SELLER registrations with a captured business address,
+        // follow up with the seller-profile upsert so the address
+        // lives on `seller_profiles` (the table the customer "Nearby
+        // Sellers" pipeline filters against). The profile upsert is a
+        // best-effort follow-on: a geocoding failure here must not
+        // un-create the account we just made.
+        if (input.role === "seller") {
+          const hasAnyAddressField =
+            input.businessName ||
+            input.businessAddress ||
+            input.businessRegion ||
+            input.businessDistrict ||
+            input.businessWard ||
+            input.businessStreet;
+          if (hasAnyAddressField) {
+            try {
+              await SellersApi.updateMe({
+                businessName: input.businessName ?? input.fullName,
+                location:
+                  input.businessAddress ??
+                  [
+                    input.businessStreet,
+                    input.businessWard,
+                    input.businessDistrict,
+                    input.businessRegion,
+                  ]
+                    .filter(Boolean)
+                    .join(", "),
+                phone: input.phone,
+                region: input.businessRegion ?? undefined,
+                district: input.businessDistrict ?? undefined,
+                lat:
+                  typeof input.businessLat === "number"
+                    ? input.businessLat
+                    : undefined,
+                lng:
+                  typeof input.businessLng === "number"
+                    ? input.businessLng
+                    : undefined,
+              });
+            } catch (err) {
+              // Persist the registration regardless — the seller can
+              // complete the business address from their Profile
+              // screen once logged in. Logging only keeps the
+              // registration alert clean while still surfacing the
+              // issue for development.
+              console.warn(
+                "[register] seller-profile upsert failed:",
+                (err as Error)?.message,
+              );
+            }
+          }
+        }
         return user;
       });
       return data;
     },
-    [run, users],
+    [run],
   );
 
   const logout = useCallback(() => setSession(null), []);
@@ -695,27 +1019,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         case "seller":
           return orders.filter((o) => String(o.sellerId) === uid);
         case "rider": {
-          // A rider must see every order from any seller they're
-          // assigned to via `seller_riders` — both ACTIVE (PENDING,
-          // ACCEPTED, ASSIGNED, PICKED_UP, IN_TRANSIT) AND terminal
-          // (DELIVERED, CANCELLED, REJECTED). The selector returns
-          // everything; callers compose the active-only / completed
-          // slices via `.filter(status)` for screens like
-          // `dashboard`, `earnings`, and `delivery-history`.
-          //
-          // IMPORTANT: do NOT filter by terminal status here — doing
-          // so makes `completed` always empty on those screens, and
-          // older active orders "disappear" the moment a new order is
-          // created (history callers see nothing past the new one).
-          //
-          // Sorted by `updatedAt DESC` so the array is in a stable
-          // order regardless of which slice the caller takes.
-          const allowedSellerIds = new Set(
-            sellersForRider(userId).map((id) => String(id)),
-          );
-          if (allowedSellerIds.size === 0) return [];
-          const filtered = orders.filter((o) =>
-            allowedSellerIds.has(String(o.sellerId)),
+          // A rider sees every order where they are the assigned rider
+          // (or, when the backend hasn't assigned yet, every order on
+          // the dispatch queue). The seller-rider scoping that used to
+          // live in a local mock map is now enforced server-side via
+          // `GET /api/orders/dispatch/available`.
+          const filtered = orders.filter(
+            (o) =>
+              o.riderId === uid ||
+              // Fall back: if `riderId` isn't set yet (dispatch queue),
+              // show rows whose status implies "available to claim".
+              (!o.riderId && o.status === "accepted"),
           );
           return filtered.slice().sort(sortByUpdatedDesc);
         }
@@ -965,18 +1279,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const availableOrdersForUser = useCallback((): Order[] => {
     if (!session) return [];
     if (session.user.role !== "rider") return [];
-    const allowedSellerIds = new Set(
-      sellersForRider(session.user.id).map((id) => String(id)),
-    );
-    if (allowedSellerIds.size === 0) {
-      // Rider not assigned to any seller — empty queue is correct.
-      return [];
-    }
+    // Backend's `GET /api/orders/dispatch/available` is authoritative —
+    // sellers allowed per rider is enforced through the `seller_riders`
+    // join table. Locally we mirror the safe shape: ACCEPTED, no
+    // assigned rider, not terminal.
     const filtered = orders.filter(
       (o) =>
         o.status === "accepted" &&
         !o.riderId &&
-        allowedSellerIds.has(String(o.sellerId)) &&
         !RIDER_TERMINAL_STATUSES.has(o.status),
     );
     return filtered.slice().sort(sortByUpdatedDesc);
@@ -1013,73 +1323,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   /**
-   * Legacy verb — kept so existing screens that hand-pick a rider
-   * still work in the mock branch. Production callers should use
-   * `claimOrder` instead.
+   * Legacy verb — kept for backwards compatibility with older screens
+   * that hand-pick a rider. Production callers should use `claimOrder`
+   * (which hits `POST /api/orders/{id}/claim` and lets the backend
+   * enforce the seller↔rider scoping via `seller_riders`).
    *
-   * Honors the seller↔rider scoping rule: assigning a rider who isn't
-   * in `seededSellerRiders[order.sellerId]` is rejected with
-   * `NOT_AUTHORIZED` so the mock can't accidentally leak across
-   * sellers in either branch.
+   * The previous in-memory scoping check against
+   * `seededSellerRiders[order.sellerId]` has been removed — there is
+   * no local rider pool to filter against, and the backend is the
+   * authoritative source. Without an explicit seller↔rider assignment
+   * rule, this verb simply forwards to the API, which will reject
+   * mismatched pairs with `RIDER_NOT_ASSIGNED` when applicable.
    */
   const assignRider = useCallback(
     async (orderId: string, riderId: string, riderName: string) => {
       const order = orders.find((o) => o.id === orderId);
       if (!order) {
         throw new OrderServiceError("NOT_FOUND", `Order ${orderId} not found.`);
-      }
-      const team = seededSellerRiders[order.sellerId] ?? [];
-      if (!team.includes(riderId)) {
-        throw new OrderServiceError(
-          "NOT_AUTHORIZED",
-          `Rider ${riderId} is not assigned to ${order.sellerName}.`,
-        );
-      }
-      if (USE_MOCK) {
-        const now = new Date().toISOString();
-        setOrders((prev) => {
-          const nextOrders: Order[] = prev.map((o) =>
-            o.id === orderId
-              ? { ...o, riderId, riderName, status: "assigned", updatedAt: now }
-              : o,
-          );
-          if (__DEV__) {
-            console.info(
-              "[RIDER_ORDERS][ASSIGN_RIDER]",
-              JSON.stringify({
-                source: "mock",
-                orderId,
-                previousStateCount: prev.length,
-                previousStateIds: prev.map((o) => o.id),
-                nextStateCount: nextOrders.length,
-                nextStateIds: nextOrders.map((o) => o.id),
-              }),
-            );
-          }
-          return nextOrders;
-        });
-        setNotifications((prev) => [
-          {
-            id: `n-${Date.now()}-r`,
-            userId: riderId,
-            title: "New delivery assigned",
-            message: `Order #${orderId.slice(-4)} from ${order.sellerName}`,
-            type: "delivery",
-            read: false,
-            createdAt: now,
-          },
-          {
-            id: `n-${Date.now()}-c`,
-            userId: order.customerId,
-            title: "Rider assigned",
-            message: `${riderName} will deliver your order #${orderId.slice(-4)}.`,
-            type: "delivery",
-            read: false,
-            createdAt: now,
-          },
-          ...prev,
-        ]);
-        return;
       }
       const updated = await OrdersApi.assignRider(orderId, riderId, riderName);
       setOrders((prev) => {
@@ -1265,7 +1525,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       filename: string,
     ): Promise<PermitDocument> => {
       const form = new FormData();
-      form.append("type", type);
       // React Native's `FormData` polyfill inspects the second argument and
       // expects a `{ uri, name, type }` triple for a file part. When the
       // caller already has a `Blob` (an Expo `File` subclass), append it
@@ -1296,7 +1555,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       );
       form.append("file", filePart as Blob, fallbackName);
       try {
-        const document = await PermitsApi.uploadDocument(form);
+        // The document `type` is sent as a query parameter so the backend's
+        // `@RequestParam("type")` receives it cleanly. Keeping it out of
+        // the multipart body avoids any ambiguity in Spring's parameter
+        // resolution across multipart endpoints.
+        const document = await PermitsApi.uploadDocument(type, form);
         console.info(
           "[uploadPermitDocument] success",
           JSON.stringify({
@@ -1351,11 +1614,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       permitId: string,
       license?: { blob: Blob; filename: string },
     ): Promise<SellerPermit> => {
-      const form = new FormData();
-      if (license) {
-        form.append("license", license.blob, license.filename);
-      }
-      const updated = await PermitsApi.approve(permitId, form);
+      // The admin UI today never supplies a license file at approval
+      // time — the issued PDF is regenerated on demand by the server.
+      // Sending an empty `multipart/form-data` envelope from React
+      // Native's fetch (the only shape `api.upload()` supports) is the
+      // documented source of "Network request failed" on Hermes / RN.
+      // We branch here: JSON when no file is being uploaded, multipart
+      // when one is. The backend's controller accepts both — see
+      // AdminPermitController.approve.
+      const updated = license
+        ? await (async () => {
+            const form = new FormData();
+            form.append("license", license.blob, license.filename);
+            return PermitsApi.approve(permitId, form);
+          })()
+        : await PermitsApi.approveJson(permitId);
       setSellerPermits((prev) => ({ ...prev, [updated.sellerId]: updated }));
       return updated;
     },
@@ -1366,6 +1639,238 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     async (permitId: string, reason: string): Promise<SellerPermit> => {
       const updated = await PermitsApi.reject(permitId, reason);
       setSellerPermits((prev) => ({ ...prev, [updated.sellerId]: updated }));
+      return updated;
+    },
+    [],
+  );
+
+  // ---- Rider verification (live API) -----------------------------------
+
+  /**
+   * Helper that mirrors the seller `applySellerPermit` pattern: store
+   * the application under `riderPermits[riderId]` so any screen can
+   * read it without another network call. Falls back to the signed-in
+   * user id when the DTO has none.
+   */
+  const applyRiderApplication = useCallback(
+    (application: RiderPermitSummary, fallbackRiderId?: string) => {
+      const key = application.riderId || fallbackRiderId;
+      if (!key) return;
+      setRiderPermits((prev) => ({ ...prev, [key]: application }));
+    },
+    [],
+  );
+
+  const fetchMyRiderApplication = useCallback(
+    async (): Promise<RiderPermitSummary | null> => {
+      if (USE_MOCK) return null;
+      const application = await RiderPermitsApi.myApplicationOrNull();
+      if (application) applyRiderApplication(application);
+      return application;
+    },
+    [applyRiderApplication],
+  );
+
+  /**
+   * Upload one PDF or image for a rider slot. The `file` argument may be
+   * either a real `Blob` (Expo `File` subclass) or a
+   * `{ uri, name, type }` triple — React Native accepts both as the
+   * second argument of `FormData.append`. Mirrors the seller
+   * `uploadPermitDocument` helper.
+   */
+  const uploadRiderApplicationDocument = useCallback(
+    async (
+      type: Exclude<
+        RiderPermitSummary["documents"][number]["documentType"],
+        "rider_permit"
+      >,
+      file: Blob | { uri: string; name: string; type?: string },
+      filename: string,
+    ) => {
+      const form = new FormData();
+      if (file instanceof Blob) {
+        form.append("file", file, filename);
+      } else {
+        // RN multipart encoder accepts a { uri, name, type } triple as
+        // a stand-in for Blob. The shape survives every RN release.
+        form.append("file", {
+          uri: file.uri,
+          name: file.name ?? filename,
+          type: file.type ?? "application/octet-stream",
+        } as unknown as Blob);
+      }
+      await RiderPermitsApi.uploadDocument(type, form);
+      const refreshed = await RiderPermitsApi.myApplicationOrNull();
+      if (refreshed) applyRiderApplication(refreshed);
+      // Component reads the refreshed application to find the new doc,
+      // so the caller doesn't need a precise return value.
+      return null as unknown as RiderPermitSummary["documents"][number];
+    },
+    [applyRiderApplication],
+  );
+
+  const deleteRiderApplicationDocument = useCallback(
+    async (documentId: string): Promise<void> => {
+      await RiderPermitsApi.deleteDocument(documentId);
+      const refreshed = await RiderPermitsApi.myApplicationOrNull();
+      if (refreshed) applyRiderApplication(refreshed);
+    },
+    [applyRiderApplication],
+  );
+
+  const submitRiderApplication = useCallback(
+    async (): Promise<RiderPermitSummary> => {
+      const submitted = await RiderPermitsApi.submitApplication();
+      applyRiderApplication(submitted);
+      return submitted;
+    },
+    [applyRiderApplication],
+  );
+
+  const fetchAdminRiderApplications = useCallback(
+    async (status?: PermitStatus): Promise<RiderPermitSummary[]> => {
+      if (USE_MOCK) return [];
+      return AdminRiderPermitsApi.listForAdmin(status);
+    },
+    [],
+  );
+
+  const approveAdminRiderApplication = useCallback(
+    async (applicationId: string): Promise<RiderPermitSummary> => {
+      const updated = await AdminRiderPermitsApi.approveJson(applicationId);
+      setRiderPermits((prev) => ({
+        ...prev,
+        [updated.riderId]: updated,
+      }));
+      return updated;
+    },
+    [],
+  );
+
+  const rejectAdminRiderApplication = useCallback(
+    async (
+      applicationId: string,
+      reason: string,
+    ): Promise<RiderPermitSummary> => {
+      const updated = await AdminRiderPermitsApi.reject(applicationId, reason);
+      setRiderPermits((prev) => ({
+        ...prev,
+        [updated.riderId]: updated,
+      }));
+      return updated;
+    },
+    [],
+  );
+
+  // ---- Supplier verification (live API) --------------------------------
+
+  /**
+   * Helper mirroring `applyRiderApplication`: cache the application
+   * under `supplierApplications[supplierId]` so any screen can read it
+   * without another network call.
+   */
+  const applySupplierApplication = useCallback(
+    (application: SupplierApplication, fallbackSupplierId?: string) => {
+      const key = application.supplierId || fallbackSupplierId;
+      if (!key) return;
+      setSupplierApplications((prev) => ({ ...prev, [key]: application }));
+    },
+    [],
+  );
+
+  const fetchMySupplierApplication = useCallback(
+    async (): Promise<SupplierApplication | null> => {
+      if (USE_MOCK) return null;
+      const application = await SupplierApplicationsApi.myApplicationOrNull();
+      if (application) applySupplierApplication(application);
+      return application;
+    },
+    [applySupplierApplication],
+  );
+
+  /**
+   * Upload one PDF or image for a supplier slot. The `file` argument may
+   * be either a real `Blob` (Expo `File` subclass) or a
+   * `{ uri, name, type }` triple — React Native accepts both as the
+   * second argument of `FormData.append`. Mirrors
+   * `uploadRiderApplicationDocument`.
+   */
+  const uploadSupplierApplicationDocument = useCallback(
+    async (
+      type: Exclude<SupplierApplicationDocumentType, "supplier_certificate">,
+      file: Blob | { uri: string; name: string; type?: string },
+      filename: string,
+    ): Promise<void> => {
+      const form = new FormData();
+      if (file instanceof Blob) {
+        form.append("file", file, filename);
+      } else {
+        // RN multipart encoder accepts a { uri, name, type } triple as
+        // a stand-in for Blob. The shape survives every RN release.
+        form.append("file", {
+          uri: file.uri,
+          name: file.name ?? filename,
+          type: file.type ?? "application/octet-stream",
+        } as unknown as Blob);
+      }
+      await SupplierApplicationsApi.uploadDocument(type, form);
+      const refreshed = await SupplierApplicationsApi.myApplicationOrNull();
+      if (refreshed) applySupplierApplication(refreshed);
+    },
+    [applySupplierApplication],
+  );
+
+  const deleteSupplierApplicationDocument = useCallback(
+    async (documentId: string): Promise<void> => {
+      await SupplierApplicationsApi.deleteDocument(documentId);
+      const refreshed = await SupplierApplicationsApi.myApplicationOrNull();
+      if (refreshed) applySupplierApplication(refreshed);
+    },
+    [applySupplierApplication],
+  );
+
+  const submitSupplierApplication = useCallback(
+    async (): Promise<SupplierApplication> => {
+      const submitted = await SupplierApplicationsApi.submitApplication();
+      applySupplierApplication(submitted);
+      return submitted;
+    },
+    [applySupplierApplication],
+  );
+
+  const fetchAdminSupplierApplications = useCallback(
+    async (status?: PermitStatus): Promise<SupplierApplication[]> => {
+      if (USE_MOCK) return [];
+      return AdminSupplierApplicationsApi.listForAdmin(status);
+    },
+    [],
+  );
+
+  const approveAdminSupplierApplication = useCallback(
+    async (applicationId: string): Promise<SupplierApplication> => {
+      const updated = await AdminSupplierApplicationsApi.approve(applicationId);
+      setSupplierApplications((prev) => ({
+        ...prev,
+        [updated.supplierId]: updated,
+      }));
+      return updated;
+    },
+    [],
+  );
+
+  const rejectAdminSupplierApplication = useCallback(
+    async (
+      applicationId: string,
+      reason: string,
+    ): Promise<SupplierApplication> => {
+      const updated = await AdminSupplierApplicationsApi.reject(
+        applicationId,
+        reason,
+      );
+      setSupplierApplications((prev) => ({
+        ...prev,
+        [updated.supplierId]: updated,
+      }));
       return updated;
     },
     [],
@@ -1383,6 +1888,51 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       prev.map((n) => (n.id === id ? updated : n)),
     );
   }, []);
+
+  /**
+   * Bulk-mark every notification that belongs to the supplied user id
+   * as read in a single round-trip. Used by the Seller Notifications
+   * screen on mount so the unread badge on the dashboard / chrome
+   * clears immediately, without waiting for a refresh.
+   *
+   * <p>The local-state flip is applied <em>before</em> the API call so
+   * the badge vanishes synchronously; if the network request fails the
+   * backend will re-emit unread rows on the next refresh and the user
+   * will see them again — the local flip is therefore the optimistic
+   * path, not a destructive overwrite.</p>
+   *
+   * <p>If {@code userId} is omitted the helper falls back to the
+   * currently signed-in session user, which is the common case when
+   * a Seller screen calls it.</p>
+   */
+  const markAllNotificationsRead = useCallback(
+    async (userId?: string) => {
+      const targetId = userId ?? session?.user?.id;
+      if (!targetId) return;
+      // Optimistic local flip — covers both the seller dashboard
+      // badge and the inline counts in the notifications screen
+      // without waiting for the network.
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n.userId === targetId ? { ...n, read: true } : n,
+        ),
+      );
+      if (USE_MOCK) return;
+      try {
+        await NotificationsApi.markAllRead();
+      } catch (err) {
+        // Network failure — leave the local flip in place (the badge
+        // stays cleared, which is the better UX) but surface the
+        // failure in the console so it's visible in `adb logcat` /
+        // Metro.
+        console.warn(
+          "[StoreContext] markAllNotificationsRead backend call failed",
+          (err as Error)?.message,
+        );
+      }
+    },
+    [session?.user?.id],
+  );
 
   const addComplaint = useCallback(
     async (c: Omit<Complaint, "id" | "createdAt" | "status">) => {
@@ -1431,6 +1981,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    * from `session.user` so any change here will be picked up by
    * `useNearbySellers` on the next render — no extra plumbing needed.
    */
+  /**
+   * Patch the signed-in user. Personal fields (full name / username /
+   * email / phone) ride along on `PATCH /api/customers/me`; the
+   * location tuple is persisted separately via `saveCustomerLocation`
+   * (the Profile screen calls both in sequence on save).
+   *
+   * The previous implementation called a non-existent
+   * `PATCH /api/users/{id}` route and surfaced "No endpoint mapped
+   * to api/users/{id}" to the user. Routing personal fields through
+   * the customer-scoped endpoint keeps the actor id on the auth
+   * filter (no id-in-path to tamper with) and matches the existing
+   * `customers` controller architecture.
+   */
   const updateProfile = useCallback(
     async (patch: Partial<Omit<User, "id" | "role" | "createdAt">>) => {
       if (!session) return;
@@ -1442,11 +2005,137 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setSession((prev) => (prev ? { ...prev, user: next } : prev));
         return;
       }
-      const updated = await UsersApi.updateProfile(session.user.id, patch);
+      // Forward only the personal fields the backend accepts. The
+      // location tuple is persisted separately by saveCustomerLocation,
+      // so the PATCH stays narrowly scoped.
+      const personalFields: {
+        fullName?: string;
+        username?: string;
+        email?: string;
+        phone?: string;
+      } = {};
+      if (patch.fullName !== undefined) personalFields.fullName = patch.fullName;
+      if (patch.username !== undefined) personalFields.username = patch.username;
+      if (patch.email !== undefined) personalFields.email = patch.email;
+      if (patch.phone !== undefined) personalFields.phone = patch.phone;
+
+      if (Object.keys(personalFields).length === 0) {
+        // Nothing to send for the personal side — keep the existing
+        // session/user list intact so the surrounding save flow can
+        // still call saveCustomerLocation without merging stale data.
+        return;
+      }
+
+      const saved = await CustomersApi.patchMyProfile(personalFields);
+      const merged: User = { ...session.user, ...saved };
       setUsers((prev) =>
-        prev.map((u) => (u.id === updated.id ? updated : u)),
+        prev.map((u) => (u.id === merged.id ? merged : u)),
       );
-      setSession((prev) => (prev ? { ...prev, user: updated } : prev));
+      setSession((prev) => (prev ? { ...prev, user: merged } : prev));
+    },
+    [session],
+  );
+
+  /**
+   * Persist the signed-in customer's location and refresh the
+   * session-cached copy.
+   *
+   * The server response is merged rather than the outgoing patch: the
+   * backend geocodes the address and returns the resolved `lat`/`lng`,
+   * and those coordinates are exactly what `useNearbySellers` watches to
+   * re-query `GET /api/sellers?lat&lng&radiusKm`. Merging the patch
+   * would leave the session without coordinates and the nearby list
+   * stale until the next login.
+   *
+   * Errors propagate to the caller so the Profile screen can surface its
+   * existing "Save failed" alert with the server's validation message.
+   */
+  const saveCustomerLocation = useCallback(
+    async (patch: CustomerLocation) => {
+      if (!session) return;
+      const saved = await CustomersApi.updateMyLocation(patch);
+      setSession((prev) =>
+        prev ? { ...prev, user: mergeCustomerLocation(prev.user, saved) } : prev,
+      );
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === session.user.id ? mergeCustomerLocation(u, saved) : u,
+        ),
+      );
+    },
+    [session],
+  );
+
+  /**
+   * Persist the signed-in seller's Business Address on `seller_profiles`.
+   *
+   * Backend geocodes `location` and returns the resolved coordinates in
+   * the response, so we merge the *response* onto `session.user` (and
+   * the equivalent row in `users[]`) just like `saveCustomerLocation`
+   * does for the customer flow. That merge is what invalidates the
+   * session-cached business coordinates so the customer "Nearby
+   * Sellers" pipeline picks them up on its next query.
+   *
+   * When the call site supplies `deviceCoords` (the device-GPS fix
+   * captured just before this call), the action forwards them as
+   * `lat` / `lng` on the patch so the saved row has the exact GPS fix.
+   * When `deviceCoords` is null/undefined the backend geocodes the typed
+   * address — either way the seller never sees the value.
+   */
+  const saveSellerLocation = useCallback(
+    async (patch: {
+      businessName?: string;
+      location: string;
+      phone?: string;
+      region?: string | null;
+      district?: string | null;
+      deviceCoords?: { lat: number; lng: number } | null;
+    }) => {
+      if (!session) return;
+      const saved = await SellersApi.updateMe({
+        businessName: patch.businessName ?? session.user.fullName,
+        location: patch.location,
+        phone: patch.phone ?? session.user.phone,
+        region: patch.region ?? undefined,
+        district: patch.district ?? undefined,
+        lat: patch.deviceCoords ? patch.deviceCoords.lat : undefined,
+        lng: patch.deviceCoords ? patch.deviceCoords.lng : undefined,
+      });
+      const num = (v: number | null | undefined): number | undefined =>
+        typeof v === "number" && Number.isFinite(v) ? v : undefined;
+      const text = (
+        v: string | null | undefined,
+      ): string | undefined =>
+        v === null || v === undefined || v === "" ? undefined : v;
+      setSession((prev) =>
+        prev
+          ? {
+              ...prev,
+              user: {
+                ...prev.user,
+                address: text(saved.location) ?? prev.user.address,
+                district: text(saved.district) ?? prev.user.district,
+                region: text(saved.region) ?? prev.user.region,
+                lat: num(saved.lat) ?? prev.user.lat,
+                lng: num(saved.lng) ?? prev.user.lng,
+              },
+            }
+          : prev,
+      );
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === session.user.id
+            ? {
+                ...u,
+                address: text(saved.location) ?? u.address,
+                district: text(saved.district) ?? u.district,
+                region: text(saved.region) ?? u.region,
+                lat: num(saved.lat) ?? u.lat,
+                lng: num(saved.lng) ?? u.lng,
+              }
+            : u,
+        ),
+      );
     },
     [session],
   );
@@ -1785,18 +2474,59 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
-  /** Add a new vehicle to the fleet. */
+  /** Add a new vehicle to the fleet. Persists to the backend so the
+   * vehicle survives a refresh and is selectable on the Live Delivery
+   * form. Falls back to a local-only insertion when the API rejects
+   * (e.g. offline) so the UI never blocks on the network. */
   const addVehicle = useCallback(async (input: Omit<Vehicle, "id">) => {
-    const vehicle: Vehicle = { ...input, id: `v-${Date.now()}` };
-    setVehicles((prev) => [...prev, vehicle]);
-    return vehicle;
+    if (USE_MOCK) {
+      const vehicle: Vehicle = { ...input, id: `v-${Date.now()}` };
+      setVehicles((prev) => [...prev, vehicle]);
+      return vehicle;
+    }
+    try {
+      const vehicle = await VehiclesApi.create({
+        plate: input.plate,
+        model: input.model,
+        capacityKg: input.capacityKg,
+      });
+      setVehicles((prev) => [...prev, vehicle]);
+      return vehicle;
+    } catch (err) {
+      if (__DEV__) {
+        console.warn(
+          "[VEHICLES][CREATE_FAILED]",
+          (err as Error)?.message ?? String(err),
+        );
+      }
+      // Local-only fallback so the UI can still render the row in the
+      // current session; the next refresh() will reconcile against the
+      // backend (the row will simply be absent).
+      const vehicle: Vehicle = { ...input, id: `v-local-${Date.now()}` };
+      setVehicles((prev) => [...prev, vehicle]);
+      return vehicle;
+    }
   }, []);
 
-  const toggleVehicleActive = useCallback((id: string, active: boolean) => {
-    setVehicles((prev) =>
-      prev.map((v) => (v.id === id ? { ...v, active } : v)),
-    );
-  }, []);
+  const toggleVehicleActive = useCallback(
+    (id: string, active: boolean) => {
+      setVehicles((prev) =>
+        prev.map((v) => (v.id === id ? { ...v, active } : v)),
+      );
+      if (USE_MOCK) return;
+      // Fire-and-forget — backend persistence is best-effort so the UI
+      // stays responsive while the network request is in flight.
+      VehiclesApi.setActive(id, active).catch((err) => {
+        if (__DEV__) {
+          console.warn(
+            "[VEHICLES][SET_ACTIVE_FAILED]",
+            (err as Error)?.message ?? String(err),
+          );
+        }
+      });
+    },
+    [],
+  );
 
   /** Add a new rider to the team. */
   const addRider = useCallback(async (input: Omit<Rider, "id">) => {
@@ -1829,6 +2559,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       restockRequests,
       permits,
       sellerPermits,
+      riderPermits,
+      supplierApplications,
       notifications,
       complaints,
       sellers,
@@ -1870,11 +2602,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       fetchAdminPermits,
       approveAdminPermit,
       rejectAdminPermit,
+      fetchMyRiderApplication,
+      uploadRiderApplicationDocument,
+      deleteRiderApplicationDocument,
+      submitRiderApplication,
+      fetchAdminRiderApplications,
+      approveAdminRiderApplication,
+      rejectAdminRiderApplication,
+      fetchMySupplierApplication,
+      uploadSupplierApplicationDocument,
+      deleteSupplierApplicationDocument,
+      submitSupplierApplication,
+      fetchAdminSupplierApplications,
+      approveAdminSupplierApplication,
+      rejectAdminSupplierApplication,
       markNotificationRead,
+      markAllNotificationsRead,
       addComplaint,
       resolveComplaint,
       updateUserStatus,
       updateProfile,
+      saveCustomerLocation,
+      saveSellerLocation,
       startTrip,
       tickTrip,
       markStopDelivered,
@@ -1900,6 +2649,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       restockRequests,
       permits,
       sellerPermits,
+      riderPermits,
+      supplierApplications,
       notifications,
       complaints,
       sellers,
@@ -1941,11 +2692,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       fetchAdminPermits,
       approveAdminPermit,
       rejectAdminPermit,
+      fetchMyRiderApplication,
+      uploadRiderApplicationDocument,
+      deleteRiderApplicationDocument,
+      submitRiderApplication,
+      fetchAdminRiderApplications,
+      approveAdminRiderApplication,
+      rejectAdminRiderApplication,
+      fetchMySupplierApplication,
+      uploadSupplierApplicationDocument,
+      deleteSupplierApplicationDocument,
+      submitSupplierApplication,
+      fetchAdminSupplierApplications,
+      approveAdminSupplierApplication,
+      rejectAdminSupplierApplication,
       markNotificationRead,
+      markAllNotificationsRead,
       addComplaint,
       resolveComplaint,
       updateUserStatus,
       updateProfile,
+      saveCustomerLocation,
+      saveSellerLocation,
       startTrip,
       tickTrip,
       markStopDelivered,

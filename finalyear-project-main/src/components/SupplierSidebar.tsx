@@ -14,6 +14,7 @@ import {
   Spacing,
 } from "../../constants/colors";
 import { useStore } from "../store/StoreContext";
+import { useSupplierVerificationStatus } from "../hooks/useSupplierVerificationStatus";
 import { Avatar } from "./Avatar";
 
 export type SupplierSidebarRoute = {
@@ -24,34 +25,41 @@ export type SupplierSidebarRoute = {
   /** "primary" routes the new logistics dashboard; "legacy" routes are
    * the original restock-requests dashboard kept for compatibility. */
   section: "primary" | "legacy";
+  /**
+   * When true, the route is a supplier *business* feature and stays
+   * locked until an administrator approves the supplier's verification
+   * application. Account-level routes (Dashboard, Verification,
+   * Notifications, Profile) are always reachable so a newly-registered
+   * supplier can log in and complete their application.
+   */
+  requiresApproval?: boolean;
 };
 
 /**
  * The supplier dashboard is split into two sections:
  *
- *   • primary — the route-based logistics dashboard (Dashboard, Routes,
- *     Schedule, Start Delivery, Live Map, Sellers, Riders, Vehicles,
- *     Notifications, Reports, Profile).
- *   • legacy   — the original restock-requests dashboard preserved from
- *     the previous build.
+ *   • primary — the consolidated logistics dashboard (Dashboard,
+ *     Operations, Live Delivery, Fleet, Reports, Profile,
+ *     Notifications).
+ *   • legacy   — the original restock-requests dashboard, now folded
+ *                into a single tabbed "Restock" page (Home, Requests,
+ *                Deliveries) and the standalone Guide.
+ *
+ * Routes flagged `requiresApproval` render with a lock affordance until
+ * the supplier's application is APPROVED.
  */
 export const SUPPLIER_SIDEBAR_ROUTES: SupplierSidebarRoute[] = [
   { key: "dashboard", label: "Dashboard", icon: "🏭", path: "/(supplier)/dashboard", section: "primary" },
-  { key: "routes", label: "Delivery Routes", icon: "🗺️", path: "/(supplier)/routes", section: "primary" },
-  { key: "schedule", label: "Delivery Schedule", icon: "📅", path: "/(supplier)/schedule", section: "primary" },
-  { key: "start-delivery", label: "Start Delivery", icon: "▶️", path: "/(supplier)/start-delivery", section: "primary" },
-  { key: "live-map", label: "Live Map Tracking", icon: "📍", path: "/(supplier)/live-map", section: "primary" },
-  { key: "sellers", label: "Sellers on Route", icon: "🧑‍🤝‍🧑", path: "/(supplier)/sellers", section: "primary" },
-  { key: "riders", label: "Riders", icon: "🪪", path: "/(supplier)/riders", section: "primary" },
-  { key: "vehicles", label: "Vehicles", icon: "🚚", path: "/(supplier)/vehicles", section: "primary" },
+  { key: "operations", label: "Delivery Operations", icon: "🗺️", path: "/(supplier)/operations", section: "primary", requiresApproval: true },
+  { key: "live", label: "Live Delivery", icon: "📍", path: "/(supplier)/live", section: "primary", requiresApproval: true },
+  { key: "fleet", label: "Fleet", icon: "🚚", path: "/(supplier)/fleet", section: "primary", requiresApproval: true },
+  { key: "reports", label: "Reports", icon: "📊", path: "/(supplier)/reports", section: "primary", requiresApproval: true },
   { key: "notifications", label: "Notifications", icon: "🔔", path: "/(supplier)/notifications", section: "primary" },
-  { key: "reports", label: "Reports", icon: "📊", path: "/(supplier)/reports", section: "primary" },
   { key: "profile", label: "Profile", icon: "👤", path: "/(supplier)/profile", section: "primary" },
 
-  // Legacy — kept from the original restock-requests dashboard.
-  { key: "home", label: "Restock Home", icon: "🏠", path: "/(supplier)", section: "legacy" },
-  { key: "requests", label: "Restock Requests", icon: "📥", path: "/(supplier)/requests", section: "legacy" },
-  { key: "deliveries", label: "Restock Deliveries", icon: "🚚", path: "/(supplier)/deliveries", section: "legacy" },
+  // Legacy — kept from the original restock-requests dashboard, now a
+  // single tabbed page that surfaces Home / Requests / Deliveries.
+  { key: "restock", label: "Restock", icon: "📥", path: "/(supplier)/restock", section: "legacy", requiresApproval: true },
   { key: "guide", label: "Guide", icon: "📘", path: "/(supplier)/guide", section: "legacy" },
 ];
 
@@ -79,6 +87,10 @@ export function SupplierSidebar({ asPanel, onNavigate }: Props) {
   const pathname = usePathname();
   const { session } = useStore();
   const user = session?.user;
+  // Business routes stay visible but locked until an administrator
+  // approves the supplier's verification application.
+  const verification = useSupplierVerificationStatus();
+  const isApproved = verification.isApproved;
 
   const isActive = (target: string) => {
     // Strip group prefixes for comparison.
@@ -104,12 +116,22 @@ export function SupplierSidebar({ asPanel, onNavigate }: Props) {
 
   const renderRow = (r: SupplierSidebarRoute) => {
     const active = isActive(r.path);
+    const locked = !!r.requiresApproval && !isApproved;
     return (
       <TouchableOpacity
         key={r.key}
         activeOpacity={0.85}
-        onPress={() => handlePress(r.path)}
-        style={[styles.menuRow, active && styles.menuRowActive]}
+        // Locked rows route to the Profile screen (where the
+        // verification section lives) instead of the gated destination,
+        // so the tap always leads somewhere useful.
+        onPress={() =>
+          handlePress(locked ? "/(supplier)/profile" : r.path)
+        }
+        style={[
+          styles.menuRow,
+          active && styles.menuRowActive,
+          locked && styles.menuRowLocked,
+        ]}
       >
         <View
           style={[
@@ -127,6 +149,7 @@ export function SupplierSidebar({ asPanel, onNavigate }: Props) {
         >
           {r.label}
         </Text>
+        {locked ? <Text style={styles.lockIcon}>🔒</Text> : null}
       </TouchableOpacity>
     );
   };
@@ -202,6 +225,13 @@ const styles = StyleSheet.create({
   },
   menuRowActive: {
     backgroundColor: "#E0E7FF",
+  },
+  menuRowLocked: {
+    opacity: 0.5,
+  },
+  lockIcon: {
+    fontSize: 13,
+    marginLeft: "auto",
   },
   menuLabel: {
     fontSize: FontSize.md,

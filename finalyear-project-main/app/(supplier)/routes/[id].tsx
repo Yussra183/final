@@ -65,7 +65,7 @@ export default function SupplierRouteDetail() {
             fullWidth
             onPress={() =>
               router.push({
-                pathname: "/(supplier)/start-delivery" as any,
+                pathname: "/(supplier)/live" as any,
                 params: { routeId: route.id },
               })
             }

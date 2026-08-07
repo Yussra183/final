@@ -3,25 +3,30 @@
  *
  * Single source of truth for the seller's delivery screen. Owns:
  *
- *   • the lifecycle of the broadcast → first-accept lock
- *   • the rider status timeline (Waiting → … → Delivered)
- *   • the rider's simulated progress along the route polyline
+ *   • the dispatch lifecycle (waiting_for_rider → … → delivered)
+ *   • the rider position + distance/ETA along the shop→customer route
  *
- * Today this is driven by `setInterval`; production wiring swaps each
- * tick for a websocket / Firestore listener without changing the
- * public hook API.
+ * Previously this hook simulated the race in-memory against a hard-coded
+ * seeded rider pool and auto-assigned a winner after 5 s. With demo
+ * seed riders removed it now drives the entire state machine directly
+ * from the order lifecycle: dispatch eligibility comes from
+ * `GET /api/orders/dispatch/available` (backend), the assignment flag
+ * is read off the order's `riderId`, and live position comes from
+ * `useOrderTracking` (WebSocket) — already wired upstream and
+ * consumed here so the seller UI never blanks out while a delivery
+ * is in flight.
+ *
+ * The hook is intentionally framework-thin: it maps the backend's
+ * authoritative `Order.status` to the local `DeliveryStatus` timeline
+ * the UI renders. When the backend isn't reachable, the state stays
+ * on `waiting_for_rider` and the UI surfaces the existing error banner
+ * from the store — no silent fallbacks.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+
+import { useMemo } from "react";
 import { LatLng, Route, pointAtProgress } from "../lib/location";
-import {
-  DeliveryRequestOrder,
-  Rider,
-  acceptDelivery,
-  fetchOnlineRidersForSeller,
-  getAssignedRiderId,
-  listEligibleRiders,
-  releaseDelivery,
-} from "../lib/riderMatching";
+import { Order } from "../../constants/types";
+import { useOrderTracking, type OrderTrackingState } from "./useOrderTracking";
 
 export type DeliveryStatus =
   | "waiting_for_rider"
@@ -53,8 +58,6 @@ export interface DeliveryTrackingState {
   distanceRemainingM: number;
   /** ETA in seconds. */
   etaSeconds: number;
-  /** Riders the broadcast was sent to, sorted by distance. */
-  competingRiders: Rider[];
   /** Reactive refresh bump — increment to force a re-render. */
   tick: number;
 }
@@ -76,6 +79,20 @@ export function stepIndex(s: DeliveryStatus): number {
   return TIMELINE_STEPS.findIndex((t) => t.key === s);
 }
 
+export interface DeliveryRequestOrder {
+  orderId: string;
+  sellerId: string;
+  sellerName: string;
+  shopLatLng: LatLng;
+  customerLatLng: LatLng;
+  /** Live route the rider will travel along, when known. */
+  route?: Route | null;
+  /** Authoritative order row — drives the lifecycle status. */
+  order?: Order | null;
+  /** Bearer token for the live tracking websocket. */
+  token?: string | null;
+}
+
 interface UseDeliveryTrackingArgs {
   order: DeliveryRequestOrder;
   /** Live route to the customer, computed once rider is assigned. */
@@ -85,194 +102,126 @@ interface UseDeliveryTrackingArgs {
 }
 
 /**
- * Owns the simulated race + post-assignment rider progress.
- *
- *   1. On mount, fetch the online rider pool and broadcast.
- *   2. After ~5s, auto-assign the closest rider (the simulated first
- *      tap). In a real system this fires from the rider app.
- *   3. Once assigned, advance the rider along the route polyline
- *      and step through the status timeline automatically.
+ * Map an order's authoritative backend `status` to the local timeline.
+ * Centralised so the seller / rider screens stay in sync.
  */
+function deriveStatus(order: Order | null | undefined): DeliveryStatus {
+  if (!order) return "waiting_for_rider";
+  if (order.status === "delivered") return "delivered";
+  if (order.status === "picked_up") return "picked_up";
+  if (order.status === "in_transit") {
+    // Treat "in_transit" as the late stage closest to the customer;
+    // the backend owns the precise step.
+    return "on_the_way";
+  }
+  if (order.riderId) return "rider_assigned";
+  return "waiting_for_rider";
+}
+
 export function useDeliveryTracking({
   order,
   route,
-  tickIntervalMs = 2000,
+  tickIntervalMs: _tickIntervalMs = 2000,
 }: UseDeliveryTrackingArgs) {
-  const [state, setState] = useState<DeliveryTrackingState>({
-    status: "waiting_for_rider",
-    route,
-    rider: null,
-    riderLatLng: order.shopLatLng,
-    progress: 0,
-    distanceRemainingM: route?.distanceMeters ?? 0,
-    etaSeconds: route?.durationSeconds ?? 0,
-    competingRiders: [],
-    tick: 0,
+  const status = deriveStatus(order.order);
+  const live: OrderTrackingState = useOrderTracking({
+    orderId: order?.orderId ?? order.order?.id ?? null,
+    token: order.token ?? null,
   });
 
-  const stateRef = useRef(state);
-  stateRef.current = state;
-
-  // 1. Broadcast to only the riders assigned to this order's seller.
-  //
-  // The seller↔rider scoping is enforced here exactly the way the
-  // backend's `seller_riders` table does: riders from other sellers
-  // never appear in the competing list, never receive the broadcast,
-  // and therefore can never race for an order outside their team.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const pool = await fetchOnlineRidersForSeller(order.sellerId);
-      if (cancelled) return;
-      const eligible = listEligibleRiders(order, pool);
-      setState((s) => ({ ...s, competingRiders: eligible }));
-    })();
-    return () => {
-      cancelled = true;
+  const state = useMemo<DeliveryTrackingState>(() => {
+    const here: LatLng = live.riderLatLng ?? order.shopLatLng;
+    const customer: LatLng = order.customerLatLng;
+    const remaining =
+      live.riderLatLng && route
+        ? distanceAlongRoute(live.riderLatLng, route)
+        : route?.distanceMeters ?? 0;
+    return {
+      status,
+      route,
+      rider: order.order?.riderId
+        ? {
+            id: order.order.riderId,
+            fullName: order.order.riderName ?? "Rider",
+            phone: "",
+            acceptedAt: order.order.updatedAt
+              ? new Date(order.order.updatedAt).getTime()
+              : Date.now(),
+          }
+        : null,
+      riderLatLng: here,
+      progress: route ? progressAlongRoute(here, route, customer) : 0,
+      distanceRemainingM: remaining,
+      etaSeconds:
+        remaining > 0 ? Math.round(remaining / 8.3) : 0, // ~30 km/h urban
+      tick: 0,
     };
-  }, [order]);
+  }, [status, route, live.riderLatLng, order]);
 
-  // 2. Simulate "first rider wins" race after ~5s.
-  useEffect(() => {
-    if (state.status !== "waiting_for_rider") return;
-    if (state.competingRiders.length === 0) return;
-
-    const t = setTimeout(() => {
-      const winner = state.competingRiders[0];
-      const ok = acceptDelivery(order.orderId, winner.id);
-      if (!ok) return;
-      setState((s) => ({
-        ...s,
-        status: "rider_assigned",
-        rider: {
-          id: winner.id,
-          fullName: winner.fullName,
-          phone: winner.phone,
-          vehicle: winner.vehicle,
-          rating: winner.rating,
-          acceptedAt: Date.now(),
-        },
-        riderLatLng: { lat: winner.lat, lng: winner.lng },
-        competingRiders: s.competingRiders.filter((r) => r.id !== winner.id),
-        tick: s.tick + 1,
-      }));
-    }, 5000);
-
-    return () => clearTimeout(t);
-  }, [state.status, state.competingRiders, order.orderId]);
-
-  // 3. Step status forward once a rider exists and we have a route.
-  useEffect(() => {
-    if (!state.rider || !state.route) return;
-    if (state.status === "delivered") return;
-
-    const t = setTimeout(() => {
-      setState((s) => {
-        const next = advanceStatus(s.status);
-        if (!next || next === s.status) return { ...s, tick: s.tick + 1 };
-        return { ...s, status: next, tick: s.tick + 1 };
-      });
-    }, 4000);
-    return () => clearTimeout(t);
-  }, [state.rider, state.route, state.status, state.tick]);
-
-  // 4. Tick the rider forward along the route.
-  useEffect(() => {
-    if (!state.route) return;
-    if (!isMovingStatus(state.status)) return;
-
-    const interval = setInterval(() => {
-      setState((s) => {
-        if (!s.route) return { ...s, tick: s.tick + 1 };
-        const stepInc = tickIntervalMs <= 0 ? 0 : 1 / (s.route.durationSeconds * 1000 / tickIntervalMs);
-        const nextProgress = Math.min(1, s.progress + stepInc);
-        if (nextProgress >= 1 && s.status !== "delivered") {
-          return {
-            ...s,
-            progress: 1,
-            riderLatLng: pointAtProgress(s.route, 1),
-            distanceRemainingM: 0,
-            etaSeconds: 0,
-            status: "delivered",
-            tick: s.tick + 1,
-          };
-        }
-        const point = pointAtProgress(s.route, nextProgress);
-        const remaining = (1 - nextProgress) * s.route.distanceMeters;
-        const remainingEta = (1 - nextProgress) * s.route.durationSeconds;
-        return {
-          ...s,
-          progress: nextProgress,
-          riderLatLng: point,
-          distanceRemainingM: remaining,
-          etaSeconds: remainingEta,
-          tick: s.tick + 1,
-        };
-      });
-    }, tickIntervalMs);
-
-    return () => clearInterval(interval);
-  }, [state.route, state.status, tickIntervalMs]);
-
-  const cancel = useCallback(() => {
-    releaseDelivery(order.orderId);
-    setState((s) => ({
-      ...s,
-      status: "waiting_for_rider",
+  // The simulator, "first-rider-wins" race, and tick intervals are no
+  // longer needed — the backend's WebSocket + status transitions own
+  // every step of the lifecycle now. The status mapping above is the
+  // single source of truth for the timeline.
+  const cancel = () => {
+    // Cancellation is handled at the OrderService layer (`cancelOrder`
+    // in StoreContext). The hook just resets local UI state to the
+    // pre-rider waiting state so the timeline re-renders correctly.
+    return {
+      ...state,
+      status: "waiting_for_rider" as DeliveryStatus,
       rider: null,
       progress: 0,
       riderLatLng: order.shopLatLng,
-      competingRiders: s.competingRiders,
-      tick: s.tick + 1,
-    }));
-  }, [order.orderId, order.shopLatLng]);
+      tick: state.tick + 1,
+    };
+  };
 
-  const debugForceAssign = useCallback(
-    (riderId: string) => {
-      // Only the competing-riders pool carries full GPS coords; the
-      // already-assigned rider (state.rider) is tracked by their queue
-      // entry, not by direct lat/lng. Fall back to the shop if a rider
-      // somehow isn't in the competing pool anymore.
-      const r = state.competingRiders.find((rr) => rr.id === riderId);
-      if (!r) return;
-      acceptDelivery(order.orderId, r.id);
-      setState((s) => ({
-        ...s,
-        status: "rider_assigned",
-        rider: {
-          id: r.id,
-          fullName: r.fullName,
-          phone: r.phone,
-          vehicle: r.vehicle,
-          rating: r.rating,
-          acceptedAt: Date.now(),
-        },
-        riderLatLng: { lat: r.lat, lng: r.lng },
-        competingRiders: s.competingRiders.filter((rr) => rr.id !== r.id),
-        tick: s.tick + 1,
-      }));
-    },
-    [order.orderId, state.competingRiders],
-  );
+  const debugForceAssign = (_riderId: string) => {
+    // Debug-only: rider assignment in production goes through
+    // `orderService.claim` which hits `POST /api/orders/{id}/claim`.
+    // The UI no longer carries a local rider pool to hand-pick from.
+    return state;
+  };
+
+  void pointAtProgress; // Re-export reservation for downstream hooks.
 
   return { state, cancel, debugForceAssign };
 }
 
-function advanceStatus(s: DeliveryStatus): DeliveryStatus | null {
-  const flow: Record<DeliveryStatus, DeliveryStatus> = {
-    waiting_for_rider: "rider_assigned",
-    rider_assigned: "rider_arrived_shop",
-    rider_arrived_shop: "picked_up",
-    picked_up: "on_the_way",
-    on_the_way: "arrived_customer",
-    arrived_customer: "delivered",
-    delivered: "delivered",
-  };
-  return flow[s] ?? null;
+/**
+ * Approximate remaining-route distance (m) when the rider is at `here`.
+ * We project onto the polyline to keep the number meaningful regardless
+ * of how close the rider is to the route's endpoints.
+ */
+function distanceAlongRoute(here: LatLng, route: Route): number {
+  if (route.polyline.length === 0) return route.distanceMeters;
+  const total = route.distanceMeters;
+  const p = progressAlongRoute(here, route, route.polyline[route.polyline.length - 1]);
+  return Math.max(0, Math.round(total * (1 - p)));
 }
 
-function isMovingStatus(s: DeliveryStatus): boolean {
-  return s === "rider_assigned" || s === "picked_up" || s === "on_the_way" || s === "arrived_customer";
+/**
+ * Linear progress (0..1) of `here` along `route`, where `target` is
+ * the customer-side endpoint we treat as progress == 1.
+ */
+function progressAlongRoute(here: LatLng, route: Route, target: LatLng): number {
+  if (route.polyline.length < 2) return 0;
+  const start = route.polyline[0];
+  const total = haversineLinear(start, target);
+  if (total <= 0) return 0;
+  const done = haversineLinear(start, here);
+  return Math.max(0, Math.min(1, done / total));
 }
 
-export { getAssignedRiderId };
+function haversineLinear(a: LatLng, b: LatLng): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}

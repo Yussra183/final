@@ -32,9 +32,27 @@ export function SellerHeader({ title }: SellerHeaderProps) {
   // `useNavigation()` returns the drawer navigator's nav object inside a drawer
   // screen, which exposes openDrawer() / closeDrawer().
   const navigation = useNavigation();
-  const { session, logout } = useStore();
+  // `getNotificationsForUser` is a memoised selector over the shared
+  // notifications list in the store — it returns the same reference
+  // until a notification is added / removed / read, so subscribing to
+  // it here means the badge re-renders the instant the Seller
+  // Notifications screen flips the rows to `read: true`, without the
+  // header needing its own state or polling.
+  const { session, logout, getNotificationsForUser } = useStore();
 
-  const userFullName = session?.user?.fullName ?? "Seller";
+  const user = session?.user;
+  const userFullName = user?.fullName ?? "Seller";
+
+  /**
+   * Unread count for the *current* seller. Filtering by `userId` is
+   * important because the same in-memory notifications list is shared
+   * across every signed-in role; if the store ever carried rows for
+   * other users (it currently doesn't, but the helper is the safe
+   * one) the badge would otherwise flash false positives for them.
+   */
+  const unreadCount = user
+    ? getNotificationsForUser(user.id).filter((n) => !n.read).length
+    : 0;
 
   const confirmLogout = () => {
     Alert.alert(
@@ -101,7 +119,11 @@ export function SellerHeader({ title }: SellerHeaderProps) {
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={openNotifications}
-          accessibilityLabel="Notifications"
+          accessibilityLabel={
+            unreadCount > 0
+              ? `Notifications (${unreadCount} unread)`
+              : "Notifications"
+          }
           accessibilityRole="button"
         >
           <Ionicons
@@ -109,7 +131,16 @@ export function SellerHeader({ title }: SellerHeaderProps) {
             size={22}
             color={Colors.text}
           />
-          <View style={styles.notifBadge} />
+          {/*
+            Red unread-count dot. Rendered only when the seller has at
+            least one unread row. When the Seller Notifications screen
+            flips every row to read=true on mount, the store list
+            updates and this component re-renders with unreadCount=0,
+            so the badge disappears instantly — no manual refresh,
+            no app restart. If a new notification arrives later the
+            badge reappears because the count ticks back above 0.
+          */}
+          {unreadCount > 0 ? <View style={styles.notifBadge} /> : null}
         </TouchableOpacity>
 
         <TouchableOpacity
