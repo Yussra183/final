@@ -42,23 +42,23 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
-import { Asset } from "expo-asset";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { AppButton } from "./AppButton";
 import { AppInput } from "./AppInput";
 import { Card } from "./Card";
 import { resolveCurrentDeviceCoords } from "../lib/deviceLocation";
+import { getMaterialisedPicker } from "./mapPickerHtml";
 
-/**
- * Path to the bundled HTML page. Metro bundles every file under
- * `assets/` as a project asset reference at build time, so we use
- * `Asset.fromModule(require(...))` to resolve the file to a real
- * `file://` URI on the device. The WebView then resolves sibling
- * `map-picker/leaflet.js` etc. relative to that URI.
- */
-const HTML_ASSET = require("../../assets/map-picker.html");
-const MAP_HTML_URI = Asset.fromModule(HTML_ASSET).uri;
+// `getMaterialisedPicker()` copies the bundled Leaflet picker assets
+// (HTML, CSS, JS) from the bundle into `Paths.cache + 'map-picker/'`
+// and returns a `file://` URI to the HTML. The WebView loads that URI
+// with `baseUrl` set to the same directory so the HTML's relative
+// references to `map-picker/leaflet.css` and `map-picker/leaflet.js`
+// resolve correctly. We previously tried `Asset.fromModule(...).uri`
+// directly, but the URI it returns in dev is a Metro dev-server URL
+// with no sibling directory, so Leaflet never loaded and the picker
+// hung on its skeleton. See `mapPickerHtml.ts` for the full rationale.
 
 export interface PickedCoords {
   lat: number;
@@ -105,8 +105,26 @@ export function MapPickerSheet({
       ? { lat: initialLat, lng: initialLng }
       : null,
   );
+  // True once the user has explicitly chosen a pin (tap, drag, GPS,
+  // typed), or once the parent supplied an `initialLat`/`initialLng`
+  // that they're editing. The picker must NOT auto-enable Confirm on
+  // the Leaflet boot-seed postReady: that would let a seller "save"
+  // Dar es Salaam by tapping Confirm without ever touching the map.
+  const [userInteracted, setUserInteracted] = useState(
+    isFiniteNumber(initialLat) && isFiniteNumber(initialLng),
+  );
   // True once the page emitted READY. Until then we queue setView calls.
   const [ready, setReady] = useState(false);
+  // Mirror of `ready` for use inside deferred callbacks (e.g. the
+  // loadEnd grace-period timer below) so the closures don't capture
+  // a stale `false` if READY fires while the timer is pending.
+  // We keep the ref in lockstep with the state via a single setter
+  // helper so callers cannot drift the two apart.
+  const readyRef = useRef(false);
+  const setReadyState = useCallback((v: boolean) => {
+    readyRef.current = v;
+    setReady(v);
+  }, []);
   // Active mode for the three chips.
   const [mode, setMode] = useState<Mode>("pick");
   // Typed-coordinate inputs (mode === "type").
@@ -119,6 +137,14 @@ export function MapPickerSheet({
   // Inline feedback for the "Use my location" chip.
   const [locationHint, setLocationHint] = useState<string | null>(null);
   const [locationBusy, setLocationBusy] = useState(false);
+  // Materialised Leaflet HTML. `null` until the in-memory build
+  // resolves; the WebView is only mounted once this is populated so
+  // we never render an empty WebView.
+  const [picker, setPicker] = useState<{
+    html: string;
+    baseUrl: string;
+  } | null>(null);
+  const [pickerError, setPickerError] = useState<string | null>(null);
 
   // Re-seed local state when the modal opens with new initial coords.
   // We deliberately drop any pending edits — the parent re-opens the
@@ -129,30 +155,92 @@ export function MapPickerSheet({
       setPin({ lat: initialLat, lng: initialLng });
       setLatText(String(initialLat));
       setLngText(String(initialLng));
+      // An existing pin means the seller is editing a saved shop
+      // location — that's already an intentional choice, so they
+      // shouldn't need to tap the map again before Confirm enables.
+      setUserInteracted(true);
     } else {
       setPin(null);
       setLatText("");
       setLngText("");
+      // No initial pin — the seller must explicitly pick before
+      // Confirm enables. Auto-seed from the Leaflet boot message
+      // is intentionally ignored — see `userInteracted` above.
+      setUserInteracted(false);
     }
-    setReady(false);
+    setReadyState(false);
     setLocationHint(null);
     setMode("pick");
-  }, [visible, initialLat, initialLng]);
+  }, [visible, initialLat, initialLng, setReadyState]);
+
+  // Build the picker HTML in memory and store it for the WebView.
+  // The build is synchronous (CSS + JS are already in the JS bundle
+  // as string constants inside `mapPickerInline.ts`) so this is
+  // effectively a `useState` reset — there is no async I/O on a
+  // happy path. We keep the useEffect shape so the picker mounts
+  // the same way every open regardless of the source.html switch.
+  useEffect(() => {
+    if (!visible) return;
+    setPicker(null);
+    setPickerError(null);
+    try {
+      const result = getMaterialisedPicker();
+      if (result) {
+        setPicker(result);
+      } else {
+        setPickerError(
+          "Could not prepare the map. Please try again in a moment.",
+        );
+      }
+    } catch (err: unknown) {
+      console.warn("[MapPickerSheet] materialise failed:", err);
+      setPickerError(
+        "Could not prepare the map. Please try again in a moment.",
+      );
+    }
+  }, [visible]);
 
   /**
    * Fire-and-forget helper to push a (lat, lng) pair into Leaflet. Safe
    * to call before READY — the call is queued and replayed on the
    * READY message so the pin lands on the map even if the seller
    * dispatches something during the first paint.
+   *
+   * Implementation note: the queue lives in component state (a ref)
+   * so that subsequent `setPin` calls during the boot window are
+   * captured, not silently dropped. The most recent queued call
+   * wins on replay — older intermediate coords are not useful to
+   * the user, only the latest "where should the pin be" matters.
+   * Once the WebView is READY, queued calls drain in a single
+   * `injectJavaScript` so the map sees them in order.
    */
+  const pendingSetViewRef = useRef<{ lat: number; lng: number; zoom: number } | null>(
+    null,
+  );
   const sendSetView = useCallback(
     (lat: number, lng: number, zoom: number) => {
-      const js = `window.__setView && window.__setView(${lat}, ${lng}, ${zoom}); true;`;
-      if (!webViewRef.current) return;
+      pendingSetViewRef.current = { lat, lng, zoom };
+      if (!ready || !webViewRef.current) return;
+      const pending = pendingSetViewRef.current;
+      pendingSetViewRef.current = null;
+      const js = `window.__setView && window.__setView(${pending.lat}, ${pending.lng}, ${pending.zoom}); true;`;
       webViewRef.current.injectJavaScript(js);
     },
-    [],
+    [ready],
   );
+
+  // Drain the queued setView call as soon as the WebView signals READY.
+  // Runs after `ready` flips to true and after the HTML's READY message
+  // picks up the initial seed, so the most recent user intent wins.
+  useEffect(() => {
+    if (!ready) return;
+    const pending = pendingSetViewRef.current;
+    if (!pending) return;
+    if (!webViewRef.current) return;
+    pendingSetViewRef.current = null;
+    const js = `window.__setView && window.__setView(${pending.lat}, ${pending.lng}, ${pending.zoom}); true;`;
+    webViewRef.current.injectJavaScript(js);
+  }, [ready, pin]);
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -165,13 +253,15 @@ export function MapPickerSheet({
       if (!parsed || typeof parsed !== "object") return;
       switch (parsed.type) {
         case "READY":
-          setReady(true);
-          // If we already have a pin (e.g. from initialLat/Lng), replay
-          // it. If not, default to a stable city-centre seed so the map
-          // has something to centre on.
-          if (isFiniteNumber(parsed.lat) && isFiniteNumber(parsed.lng)) {
-            setPin({ lat: parsed.lat!, lng: parsed.lng! });
-          }
+          setReadyState(true);
+          // The web page's READY message carries the post-boot pin
+          // coordinates (the seed or the initialLat/Lng). We ignore
+          // them here because the RN-side `sendSetView` queue already
+          // replays the latest user intent — emitting the seed
+          // through the state would clobber a "Use my location" result
+          // that landed between WebView mount and READY, and it would
+          // also let a seller "save" by tapping Confirm without ever
+          // touching the map.
           break;
         case "PIN":
           if (isFiniteNumber(parsed.lat) && isFiniteNumber(parsed.lng)) {
@@ -180,10 +270,20 @@ export function MapPickerSheet({
             // with the map in either direction.
             setLatText(String(parsed.lat));
             setLngText(String(parsed.lng));
+            // The HTML only emits PIN from user gestures (tap / drag)
+            // now that the boot seed no longer auto-posts. Mark the
+            // pin as user-intended so Confirm can enable.
+            setUserInteracted(true);
           }
           break;
         case "ERROR":
+          // Surface Leaflet load failures to the picker UI rather than
+          // silently logging — the previous setup had the picker
+          // hanging on its skeleton whenever Leaflet 404'd.
           console.warn("[MapPickerSheet] bridge error:", parsed.message);
+          if (parsed.message) {
+            setPickerError(parsed.message);
+          }
           break;
       }
     },
@@ -214,6 +314,7 @@ export function MapPickerSheet({
       setPin(fix);
       setLatText(String(fix.lat));
       setLngText(String(fix.lng));
+      setUserInteracted(true);
       setMode("pick");
       setLocationHint(null);
     } finally {
@@ -227,6 +328,7 @@ export function MapPickerSheet({
     const lat = Number(text);
     if (Number.isFinite(lat) && lat >= -90 && lat <= 90) {
       setPin((prev) => (prev ? { ...prev, lat } : { lat, lng: 0 }));
+      setUserInteracted(true);
     }
   }, []);
 
@@ -235,6 +337,7 @@ export function MapPickerSheet({
     const lng = Number(text);
     if (Number.isFinite(lng) && lng >= -180 && lng <= 180) {
       setPin((prev) => (prev ? { ...prev, lng } : { lat: 0, lng }));
+      setUserInteracted(true);
     }
   }, []);
 
@@ -251,8 +354,11 @@ export function MapPickerSheet({
 
   const confirmEnabled = useMemo(() => {
     if (mode === "type") return typedValid;
-    return !!pin;
-  }, [mode, pin, typedValid]);
+    // Pick mode: Confirm is enabled only when the user has moved the
+    // pin through a real gesture (tap / drag / GPS / typed). The
+    // boot seed is intentionally ignored — see `userInteracted`.
+    return !!pin && userInteracted;
+  }, [mode, pin, typedValid, userInteracted]);
 
   const handleConfirm = useCallback(() => {
     let finalPin: PickedCoords | null = null;
@@ -369,34 +475,97 @@ export function MapPickerSheet({
           </View>
         ) : (
           <View style={styles.mapContainer}>
-            {!ready ? (
+            {pickerError ? (
+              <View style={styles.loadingOverlay}>
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={32}
+                  color={Colors.danger}
+                />
+                <Text style={styles.loadingText}>{pickerError}</Text>
+              </View>
+            ) : !ready ? (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator size="large" color={Colors.primary} />
                 <Text style={styles.loadingText}>Loading map…</Text>
               </View>
             ) : null}
-            <WebView
-              ref={webViewRef}
-              source={{ uri: MAP_HTML_URI }}
-              style={styles.webview}
-              originWhitelist={["*"]}
-              javaScriptEnabled
-              domStorageEnabled
-              // Mapbox / Leaflet doesn't need third-party cookies or
-              // media playback. Mixed-content is allowed because OSM
-              // tiles are HTTPS but the WebView may inherit an http
-              // origin from the dev server.
-              mixedContentMode="always"
-              allowFileAccess
-              allowFileAccessFromFileURLs
-              allowUniversalAccessFromFileURLs
-              onMessage={handleMessage}
-              onError={(e: unknown) =>
-                console.warn(
-                  "[MapPickerSheet] WebView error:",
-                  (e as { nativeEvent?: unknown })?.nativeEvent,
-                )
-              }
+            {picker ? (
+              <WebView
+                ref={webViewRef}
+                // `picker.htmlUri` is a `file://` URL pointing at
+                // `map-picker.html` inside `Paths.cache`. `baseUri` is
+                // The picker HTML is built in-memory and handed to
+                // `source.html` so the WebView renders it directly.
+                // `baseUrl` is `https://localhost/` so the inline
+                // script block runs in a real same-origin context
+                // and OSM tile fetches are not blocked as
+                // mixed-content. See `mapPickerHtml.ts` for the
+                // full rationale.
+                source={{
+                  html: picker.html,
+                  baseUrl: picker.baseUrl,
+                }}
+                style={styles.webview}
+                originWhitelist={["*"]}
+                javaScriptEnabled
+                domStorageEnabled
+                // The HTML is in-memory (no file:// origin), so the
+                // `allowFileAccess*` flags are unnecessary. The
+                // OSM tile layer is HTTPS, matching the
+                // `https://localhost/` baseUrl — no mixed-content
+                // concerns. `mixedContentMode="always"` is kept so
+                // the picker still works if a future baseUrl is
+                // switched to `http://`.
+                mixedContentMode="always"
+                onMessage={handleMessage}
+                onError={(e: unknown) => {
+                  const ne = (e as { nativeEvent?: unknown })?.nativeEvent;
+                  console.warn("[MapPickerSheet] WebView error:", ne);
+                  const message =
+                    (ne as { description?: string })?.description ??
+                    "WebView failed to load the map. Please try again.";
+                  setPickerError(message);
+                }}
+              // Diagnostic handlers — these surface failures that the
+              // previous setup silently swallowed (the Leaflet 404 on
+              // the dev server only surfaced as a single `console.warn`
+              // buried in Metro logs). They stay on in production so
+              // any regression is visible in the dev console at the
+              // point of failure.
+              onHttpError={(e) => {
+                console.warn("[MapPickerSheet] HTTP error:", e.nativeEvent);
+                const status = e.nativeEvent?.statusCode;
+                const url = e.nativeEvent?.url;
+                if (typeof status === "number" && status >= 400) {
+                  setPickerError(
+                    `Map resource failed (HTTP ${status}${url ? `): ${url}` : ")"}`,
+                  );
+                }
+              }}
+              onLoadEnd={(e) => {
+                console.log(
+                  "[MapPickerSheet] loadEnd:",
+                  e.nativeEvent.url,
+                );
+                // If `loadEnd` fires with the very same URL we
+                // requested but the page never emits READY (or the
+                // WebView flags an error), the modal appears to
+                // "close itself" — the user is staring at a blank
+                // surface and taps the system back gesture to get
+                // out. Surface that as a clear error after a
+                // short grace period so the picker never appears
+                // to vanish silently.
+                if (!ready) {
+                  setTimeout(() => {
+                    if (!readyRef.current) {
+                      setPickerError(
+                        "The map could not start. Please close and try again.",
+                      );
+                    }
+                  }, 3500);
+                }
+              }}
               // Suppress the Android system text-selection magnifier on
               // long-press of the map so the gesture doesn't interfere
               // with marker drag.
@@ -404,7 +573,8 @@ export function MapPickerSheet({
               // Pinch-zoom is fine; we just don't want the OS to
               // bounce-zoom past our bounds.
               scalesPageToFit={Platform.OS === "ios" ? false : undefined}
-            />
+              />
+            ) : null}
           </View>
         )}
 

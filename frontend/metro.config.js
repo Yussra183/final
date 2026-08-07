@@ -29,6 +29,17 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   return context.resolveRequest(context, moduleName, platform);
 };
 
+// Register `leaflet.script` as an asset (not a JS source). This is no
+// longer required for runtime because `src/components/mapPickerHtml.ts`
+// now inlines the picker source as a string constant (see
+// `scripts/build-map-picker-inline.js`), but we keep the extension
+// registered so the source file under `assets/map-picker/` can still
+// be inspected / lint-staged as a raw text asset if needed.
+config.resolver.assetExts = [
+  ...(config.resolver.assetExts ?? []),
+  "script",
+];
+
 // Use a stable, project-relative source map URL so Metro can cache
 // the source map across rebuilds.
 config.symbolicator = {

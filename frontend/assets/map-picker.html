@@ -1,5 +1,6 @@
 <!--
-  Map picker — inline OpenStreetMap page used by `MapPickerSheet.tsx`.
+  Map picker — source for the inline OpenStreetMap page used by
+  `MapPickerSheet.tsx` and `ShopMapPreview.tsx`.
 
   Loaded inside a `WebView` (via `react-native-webview`) — no remote
   scripts, no API key, no native module registration. The bridge is:
@@ -15,9 +16,19 @@
       The RN side de-duplicates by lat/lng and re-renders the chip +
       the bottom-bar Confirm button.
 
-  The Leaflet bundle and CSS are loaded from the `assets/map-picker/`
-  directory by Metro as project assets, so they ship inside the app
-  binary and work fully offline. No CDN dependency.
+  How this file is shipped
+  ------------------------
+  This HTML is NOT shipped as-is to the WebView. At build time,
+  `scripts/build-map-picker-inline.js` reads this file along with the
+  sibling `leaflet.css` and `leaflet.script`, then emits
+  `src/components/mapPickerInline.ts` with the three files as string
+  constants and the CSS / JS substituted into the placeholders below
+  (`{{PICKER_CSS}}`, `{{PICKER_JS}}`). At runtime, the picker writes
+  the self-contained HTML to `Paths.cache/map-picker/` and the WebView
+  loads it via `file://` — no Metro / asset-registry involvement.
+
+  Why the {{...}} placeholders? They mark where the generator should
+  paste the inlined CSS and JS. Don't remove them.
 
   Tile layer is OSM (`tile.openstreetmap.org`). Free for dev and very
   low-volume demos — see the project plan for the production migration
@@ -32,8 +43,9 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"
     />
     <title>Map picker</title>
-    <link rel="stylesheet" href="map-picker/leaflet.css" />
     <style>
+      /* {{PICKER_CSS}} */
+
       html,
       body,
       #map {
@@ -82,8 +94,9 @@
     <div id="skeleton" class="skeleton">Loading map…</div>
     <div id="map" class="hidden"></div>
 
-    <script src="map-picker/leaflet.js"></script>
     <script>
+      // {{PICKER_JS}}
+
       "use strict";
 
       // ---- Bridge helpers ---------------------------------------------
@@ -255,10 +268,12 @@
           window.__setReadOnly(true);
         }
 
-        // Signal ready and emit the initial pin (if any).
+        // Signal ready. Do NOT auto-emit a PIN postReady — the RN side
+        // uses the absence of a user-driven PIN to detect "seller
+        // hasn't picked yet, keep Confirm disabled". The boot seed is
+        // only visible as a marker on the map; it doesn't get saved
+        // until the user taps or drags.
         postReady();
-        var ll = pin.getLatLng();
-        postPin(ll.lat, ll.lng);
       }
 
       if (document.readyState === "complete") {
