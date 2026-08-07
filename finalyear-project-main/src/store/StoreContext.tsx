@@ -2089,17 +2089,42 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       phone?: string;
       region?: string | null;
       district?: string | null;
+      ward?: string | null;
+      street?: string | null;
       deviceCoords?: { lat: number; lng: number } | null;
+      /**
+       * Coordinates the seller explicitly picked / typed in the map
+       * picker. Wins over `deviceCoords` when both are present; when
+       * neither is set the backend geocodes the typed address (existing
+       * behaviour, preserved for the registration flow).
+       */
+      pinCoords?: { lat: number; lng: number } | null;
     }) => {
       if (!session) return;
+      // Pin precedence: pinCoords (manual) > deviceCoords (GPS) > none.
+      // Both being set is unexpected but should never silently drop the
+      // seller's intent, so the manual pin wins.
+      const coords =
+        patch.pinCoords && Number.isFinite(patch.pinCoords.lat) && Number.isFinite(patch.pinCoords.lng)
+          ? patch.pinCoords
+          : patch.deviceCoords &&
+              Number.isFinite(patch.deviceCoords.lat) &&
+              Number.isFinite(patch.deviceCoords.lng)
+            ? patch.deviceCoords
+            : null;
+      // Stop sending `phone` on every location save — it was coupling
+      // contact data to location writes. Callers that want to update
+      // the phone should go through the dedicated contact endpoint.
       const saved = await SellersApi.updateMe({
         businessName: patch.businessName ?? session.user.fullName,
         location: patch.location,
-        phone: patch.phone ?? session.user.phone,
+        ...(patch.phone !== undefined ? { phone: patch.phone } : {}),
         region: patch.region ?? undefined,
         district: patch.district ?? undefined,
-        lat: patch.deviceCoords ? patch.deviceCoords.lat : undefined,
-        lng: patch.deviceCoords ? patch.deviceCoords.lng : undefined,
+        ...(patch.ward !== undefined ? { ward: patch.ward } : {}),
+        ...(patch.street !== undefined ? { street: patch.street } : {}),
+        lat: coords ? coords.lat : undefined,
+        lng: coords ? coords.lng : undefined,
       });
       const num = (v: number | null | undefined): number | undefined =>
         typeof v === "number" && Number.isFinite(v) ? v : undefined;
@@ -2116,6 +2141,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 address: text(saved.location) ?? prev.user.address,
                 district: text(saved.district) ?? prev.user.district,
                 region: text(saved.region) ?? prev.user.region,
+                ward: text(saved.ward) ?? prev.user.ward,
+                street: text(saved.street) ?? prev.user.street,
                 lat: num(saved.lat) ?? prev.user.lat,
                 lng: num(saved.lng) ?? prev.user.lng,
               },
@@ -2130,6 +2157,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 address: text(saved.location) ?? u.address,
                 district: text(saved.district) ?? u.district,
                 region: text(saved.region) ?? u.region,
+                ward: text(saved.ward) ?? u.ward,
+                street: text(saved.street) ?? u.street,
                 lat: num(saved.lat) ?? u.lat,
                 lng: num(saved.lng) ?? u.lng,
               }

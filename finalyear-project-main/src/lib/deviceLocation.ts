@@ -20,6 +20,13 @@
  * The helper never throws and never throws a permission prompt at the
  * user — the surrounding code gates the prompt behind a clear "save"
  * action so we only ask when it's actually needed.
+ *
+ * Timeout notes: a cold-start GPS fix on a fresh app launch under
+ * `Accuracy.Balanced` frequently exceeds 4 seconds. We default to 8s
+ * so the helper is actually useful on first-run; callers can override
+ * with `resolveCurrentDeviceCoords({ timeoutMs })` if they need a
+ * tighter bound (e.g. a "Use my location" chip that the seller is
+ * actively waiting on).
  */
 import * as Location from "expo-location";
 
@@ -28,9 +35,13 @@ export interface ResolvedDeviceCoords {
   lng: number;
 }
 
-/** Timeout for the single foreground fix — kept short so the
- *  registration / save flow doesn't visibly hang. */
-const FIX_TIMEOUT_MS = 4_000;
+/** Default timeout for the single foreground fix. */
+const DEFAULT_FIX_TIMEOUT_MS = 8_000;
+
+export interface ResolveDeviceCoordsOptions {
+  /** Override the GPS-fix timeout. Defaults to 8s. */
+  timeoutMs?: number;
+}
 
 /**
  * Request foreground permission and read one GPS fix. Resolves to
@@ -38,18 +49,30 @@ const FIX_TIMEOUT_MS = 4_000;
  * unsupported platform) so the caller can use `??` to fall back to a
  * server-side geocode of the typed address.
  */
-export async function resolveCurrentDeviceCoords(): Promise<ResolvedDeviceCoords | null> {
+export async function resolveCurrentDeviceCoords(
+  options: ResolveDeviceCoordsOptions = {},
+): Promise<ResolvedDeviceCoords | null> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FIX_TIMEOUT_MS;
   try {
     const status = await Location.requestForegroundPermissionsAsync();
     if (status.status !== "granted") {
       return null;
     }
-    const fix = await Promise.race<Promise<Location.LocationObject | null>>([
+    // Wrap the GPS promise so the two branches share an explicit
+    // `Location.LocationObject | null` element type — without this,
+    // TS widens the array to `Promise<LocationObject | Promise<...> | null>`
+    // which breaks the explicit generic below.
+    const fixPromise: Promise<Location.LocationObject | null> =
       Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
-      }),
-      new Promise((resolve) => setTimeout(() => resolve(null), FIX_TIMEOUT_MS)),
-    ]);
+      }).then(
+        (fix) => fix,
+        () => null,
+      );
+    const timeoutPromise = new Promise<Location.LocationObject | null>(
+      (resolve) => setTimeout(() => resolve(null), timeoutMs),
+    );
+    const fix = await Promise.race([fixPromise, timeoutPromise]);
     if (!fix) return null;
     const { latitude, longitude } = fix.coords;
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {

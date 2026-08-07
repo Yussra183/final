@@ -295,6 +295,13 @@ export interface SellerProfile {
    */
   region?: string | null;
   district?: string | null;
+  /**
+   * Granular address fields mirroring the customer profile's
+   * `ward` / `street`. Added in V12 so the Edit Business Address modal
+   * can re-seed what the seller typed without losing granularity.
+   */
+  ward?: string | null;
+  street?: string | null;
 }
 
 /**

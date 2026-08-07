@@ -33,12 +33,11 @@ import { Card } from "../../src/components/Card";
 import { StatusPill } from "../../src/components/StatusPill";
 import { AppInput } from "../../src/components/AppInput";
 import { AppButton } from "../../src/components/AppButton";
-import {
-  LicenseApplicationSection,
-} from "../../src/components/LicenseApplicationSection";
 import { useStore } from "../../src/store/StoreContext";
 import { permitTone } from "../../src/utils/format";
 import { resolveCurrentDeviceCoords } from "../../src/lib/deviceLocation";
+import { MapPickerSheet } from "../../src/components/MapPickerSheet";
+import { ShopMapPreview } from "../../src/components/ShopMapPreview";
 import type { User } from "../../constants/types";
 
 /** Field row used inside the profile. */
@@ -83,7 +82,6 @@ export default function SellerProfile() {
     fetchMyPermit,
     updateProfile,
     saveSellerLocation,
-    submitPermit,
   } = useStore();
 
   const [editOpen, setEditOpen] = useState(false);
@@ -191,6 +189,17 @@ export default function SellerProfile() {
             value={business.address}
             tint={Colors.accent}
           />
+          {typeof user?.lat === "number" &&
+          Number.isFinite(user.lat) &&
+          typeof user?.lng === "number" &&
+          Number.isFinite(user.lng) ? (
+            <ShopMapPreview lat={user.lat} lng={user.lng} />
+          ) : (
+            <Text style={styles.mapPlaceholder}>
+              📍 Tap &quot;Edit Business Address&quot; to set your shop
+              location on the map.
+            </Text>
+          )}
           <Divider />
           <Field
             icon="time-outline"
@@ -295,13 +304,64 @@ export default function SellerProfile() {
           </View>
         </View>
 
-        {/* Seller License Application — lets the seller download the
-            official form, upload required documents, submit for
-            verification, and download the issued license once approved.
-            The component talks directly to the live API through the
-            store, so no parent wiring is required here. */}
-        <Text style={styles.sectionTitle}>Seller License Application</Text>
-        <LicenseApplicationSection user={user!} />
+        {/* Seller Licence — summary card pointing at the dedicated
+            Licences drawer entry. The full 4-step workflow (download
+            form → upload documents → submit → download certificate)
+            lives at `app/seller/licences.tsx`; we keep just the status
+            pill here so the profile still surfaces permit health, with
+            a single tap to drill into the workflow. */}
+        <Text style={styles.sectionTitle}>Seller Licence</Text>
+        <Card>
+          <View style={styles.licenceRow}>
+            <View
+              style={[
+                styles.licenceIcon,
+                {
+                  backgroundColor:
+                    permit && permit.status === "approved"
+                      ? Colors.success + "22"
+                      : permit && permit.status === "rejected"
+                        ? Colors.danger + "22"
+                        : Colors.warning + "22",
+                },
+              ]}
+            >
+              <Ionicons
+                name="document-text-outline"
+                size={22}
+                color={
+                  permit && permit.status === "approved"
+                    ? Colors.success
+                    : permit && permit.status === "rejected"
+                      ? Colors.danger
+                      : Colors.warning
+                }
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.licenceTitle}>Gas Selling Permit</Text>
+              <Text style={styles.licenceSub}>
+                {permit
+                  ? `Application ${permitLabel(permit.status)}`
+                  : "Application not yet submitted"}
+              </Text>
+            </View>
+            {permit ? (
+              <StatusPill
+                label={permitLabel(permit.status)}
+                tone={
+                  permit.status === "approved"
+                    ? "success"
+                    : permit.status === "rejected"
+                      ? "danger"
+                      : permit.status === "under_review"
+                        ? "info"
+                        : "warning"
+                }
+              />
+            ) : null}
+          </View>
+        </Card>
 
         {/* Action buttons */}
         <View style={styles.actionRow}>
@@ -609,7 +669,10 @@ function EditBusinessAddressModal({
     location: string;
     region?: string | null;
     district?: string | null;
+    ward?: string | null;
+    street?: string | null;
     deviceCoords?: { lat: number; lng: number } | null;
+    pinCoords?: { lat: number; lng: number } | null;
   }) => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -620,12 +683,24 @@ function EditBusinessAddressModal({
   const [fullAddress, setFullAddress] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // Map-pin state. `null` means "no pin set yet"; the picker seeds
+  // this from `user.lat/lng` on open. `chosen` distinguishes
+  // "persisted pin" from "user just dropped a new one in this session"
+  // so the store knows when to send it as `pinCoords`.
+  const [pin, setPin] = useState<{ lat: number; lng: number } | null>(
+    typeof user?.lat === "number" && Number.isFinite(user.lat) &&
+    typeof user?.lng === "number" && Number.isFinite(user.lng)
+      ? { lat: user.lat, lng: user.lng }
+      : null,
+  );
+  const [pinChosen, setPinChosen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Re-seed the form whenever the modal opens — handles the case
   // where a successful save just before updated `user` and the modal
-  // is reopened on the next tap. Latitude / longitude are intentionally
-  // NOT re-seeded: the seller never sees them, and the value to save
-  // is captured from the device at submit time below.
+  // is reopened on the next tap. Pin state is also re-seeded from the
+  // (possibly updated) `user.lat` / `user.lng`, and `pinChosen` resets
+  // because nothing has been chosen in the new session yet.
   React.useEffect(() => {
     if (!visible) return;
     setName(user?.fullName ?? "");
@@ -635,6 +710,18 @@ function EditBusinessAddressModal({
     setStreet(user?.street ?? "");
     setFullAddress(user?.address ?? "");
     setErrors({});
+    if (
+      typeof user?.lat === "number" &&
+      Number.isFinite(user.lat) &&
+      typeof user?.lng === "number" &&
+      Number.isFinite(user.lng)
+    ) {
+      setPin({ lat: user.lat, lng: user.lng });
+    } else {
+      setPin(null);
+    }
+    setPinChosen(false);
+    setPickerOpen(false);
   }, [visible, user]);
 
   const composed = useMemo(
@@ -663,16 +750,21 @@ function EditBusinessAddressModal({
     try {
       // Capture the device GPS fix once, at the moment of save. The
       // helper is silent on every failure (denied permission, timeout,
-      // unsupported platform) and resolves to null — the backend then
-      // falls back to its existing geocoder so the saved row always
-      // has valid coordinates regardless of the device outcome.
-      const deviceCoords = await resolveCurrentDeviceCoords();
+      // unsupported platform) and resolves to null. The map-picker's
+      // `pinCoords` (when set) wins over `deviceCoords` in the store,
+      // so the seller's intentional choice always beats the GPS fix.
+      const deviceCoords = pinChosen
+        ? null
+        : await resolveCurrentDeviceCoords();
       await onSave({
         businessName: name.trim() || undefined,
         location: effectiveAddress,
         region: region.trim() || null,
         district: district.trim() || null,
+        ward: ward.trim() || null,
+        street: street.trim() || null,
         deviceCoords,
+        pinCoords: pinChosen && pin ? pin : null,
       });
     } catch (err) {
       Alert.alert(
@@ -685,82 +777,123 @@ function EditBusinessAddressModal({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.modalSheet} onPress={() => {}}>
-          <View style={styles.modalHandle} />
-          <Text style={styles.modalTitle}>Edit Business Address</Text>
-          <Text style={styles.modalSub}>{businessName}</Text>
+    <>
+      <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+        <Pressable style={styles.modalBackdrop} onPress={onClose}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Edit Business Address</Text>
+            <Text style={styles.modalSub}>{businessName}</Text>
 
-          <ScrollView keyboardShouldPersistTaps="handled">
-            <AppInput
-              label="Business Name"
-              value={name}
-              onChangeText={setName}
-              autoCapitalize="words"
-            />
-            <AppInput
-              label="Region"
-              value={region}
-              onChangeText={setRegion}
-            />
-            <AppInput
-              label="District"
-              value={district}
-              onChangeText={setDistrict}
-            />
-            <AppInput
-              label="Ward"
-              value={ward}
-              onChangeText={setWard}
-            />
-            <AppInput
-              label="Street / Area"
-              value={street}
-              onChangeText={setStreet}
-            />
-            <AppInput
-              label="Full Business Address"
-              value={fullAddress}
-              onChangeText={setFullAddress}
-              multiline
-              numberOfLines={2}
-              error={errors.fullAddress}
-              helperText={
-                composed
-                  ? `Will be saved as: ${composed}`
-                  : undefined
-              }
-            />
-            {/* The seller never types a coordinate here either. The
-                helper-text style mirrors the customer Profile's
-                "Location Information" card so the modal reads as a
-                single, consistent flow on both sides. Coordinates are
-                resolved automatically when Save is tapped. */}
-            <Text style={styles.businessHelp}>
-              Your shop's map pin updates automatically from your
-              address — no need to type coordinates.
-            </Text>
-          </ScrollView>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <AppInput
+                label="Business Name"
+                value={name}
+                onChangeText={setName}
+                autoCapitalize="words"
+              />
+              <AppInput
+                label="Region"
+                value={region}
+                onChangeText={setRegion}
+              />
+              <AppInput
+                label="District"
+                value={district}
+                onChangeText={setDistrict}
+              />
+              <AppInput
+                label="Ward"
+                value={ward}
+                onChangeText={setWard}
+              />
+              <AppInput
+                label="Street / Area"
+                value={street}
+                onChangeText={setStreet}
+              />
+              <AppInput
+                label="Full Business Address"
+                value={fullAddress}
+                onChangeText={setFullAddress}
+                multiline
+                numberOfLines={2}
+                error={errors.fullAddress}
+                helperText={
+                  composed
+                    ? `Will be saved as: ${composed}`
+                    : undefined
+                }
+              />
 
-          <View style={styles.modalActions}>
-            <AppButton
-              title="Cancel"
-              variant="outline"
-              style={{ flex: 1 }}
-              onPress={onClose}
-            />
-            <AppButton
-              title="Save"
-              variant="primary"
-              style={{ flex: 1 }}
-              loading={saving}
-              onPress={submit}
-            />
-          </View>
+              {/* Shop Location — uses the OpenStreetMap picker. The
+                  seller can drop a pin three ways (current location /
+                  pick on map / type coordinates) and the chosen pin
+                  flows back to the parent as `pinCoords` on Save. */}
+              <View style={styles.pinSection}>
+                <Text style={styles.pinSectionLabel}>Shop Location</Text>
+                {pin ? (
+                  <Text style={styles.pinSummary}>
+                    📍 {pin.lat.toFixed(6)}, {pin.lng.toFixed(6)}
+                    {pinChosen ? " (new)" : ""}
+                  </Text>
+                ) : (
+                  <Text style={styles.pinEmpty}>
+                    📍 Not set yet — tap to choose
+                  </Text>
+                )}
+                <AppButton
+                  title={pin ? "Change pin" : "Set on map"}
+                  variant="outline"
+                  leftIcon={
+                    <Ionicons
+                      name="map-outline"
+                      size={18}
+                      color={Colors.primary}
+                    />
+                  }
+                  onPress={() => setPickerOpen(true)}
+                  style={styles.pinBtn}
+                />
+                <Text style={styles.businessHelp}>
+                  Your pin location is set separately from the address
+                  text. You can drop a pin on the map, use your current
+                  location, or type coordinates directly.
+                </Text>
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalActions}>
+              <AppButton
+                title="Cancel"
+                variant="outline"
+                style={{ flex: 1 }}
+                onPress={onClose}
+              />
+              <AppButton
+                title="Save"
+                variant="primary"
+                style={{ flex: 1 }}
+                loading={saving}
+                onPress={submit}
+              />
+            </View>
+          </Pressable>
         </Pressable>
-      </Pressable>
-    </Modal>
+      </Modal>
+
+      <MapPickerSheet
+        visible={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        initialLat={pin?.lat}
+        initialLng={pin?.lng}
+        onConfirm={(coords) => {
+          setPin(coords);
+          setPinChosen(true);
+          setPickerOpen(false);
+        }}
+      />
+    </>
   );
 }
 
@@ -890,6 +1023,72 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: "row",
     gap: Spacing.sm,
+  },
+
+  // Licence summary card — surfaces permit health on the profile and
+  // hands the seller off to the dedicated Licences drawer entry.
+  licenceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+  licenceIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  licenceTitle: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+  },
+  licenceSub: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    fontWeight: "600",
+  },
+
+  // Inline preview placeholder shown under the Business Address field
+  // when the shop has no coordinates yet. Same muted text style as the
+  // licenceSub helper above.
+  mapPlaceholder: {
+    marginTop: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    fontStyle: "italic",
+  },
+
+  // Shop Location section inside the Edit Business Address modal.
+  pinSection: {
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  pinSectionLabel: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+    marginBottom: Spacing.sm,
+  },
+  pinSummary: {
+    fontSize: FontSize.sm,
+    color: Colors.primary,
+    fontWeight: "800",
+    marginBottom: Spacing.sm,
+  },
+  pinEmpty: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+    fontStyle: "italic",
+  },
+  pinBtn: {
+    marginBottom: Spacing.sm,
   },
 
   // Modal

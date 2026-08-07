@@ -181,6 +181,10 @@ export default function SellerLayout() {
         }}
       />
       <TypedDrawer.Screen
+        name="licences"
+        options={businessOptions("Licences", "Licences", "document-text-outline")}
+      />
+      <TypedDrawer.Screen
         name="notifications"
         options={{
           drawerLabel: "Notifications",
