@@ -108,8 +108,39 @@ export function regionLabel(regionValue: string): string {
 
 /** Returns the human-readable label for a district value in a given region. */
 export function districtLabel(regionValue: string, districtValue: string): string {
+  const normRegion = matchRegionValue(regionValue);
+  const normDistrict = matchDistrictValue(normRegion, districtValue);
   return (
-    getDistricts(regionValue).find((d) => d.value === districtValue)?.label ??
+    getDistricts(normRegion).find((d) => d.value === normDistrict)?.label ??
     districtValue
   );
+}
+
+/** Matches a string (key or label) to a valid region value key, or returns the string if unmatched. */
+export function matchRegionValue(str?: string | null): string {
+  if (!str) return "";
+  const s = str.trim().toLowerCase();
+  const found = ZANZIBAR_REGIONS.find(
+    (r) => r.value.toLowerCase() === s || r.label.toLowerCase().includes(s) || s.includes(r.value.toLowerCase())
+  );
+  if (found) return found.value;
+  if (s.includes("mjini") || s.includes("urban") || s.includes("west") || s.includes("magharibi")) return "mjini_magharibi";
+  if (s.includes("kaskazini") && s.includes("unguja")) return "unguja_kaskazini";
+  if (s.includes("kusini") && s.includes("unguja")) return "unguja_kusini";
+  if (s.includes("kaskazini") && s.includes("pemba")) return "pemba_kaskazini";
+  if (s.includes("kusini") && s.includes("pemba")) return "pemba_kusini";
+  return str;
+}
+
+/** Matches a string (key or label) within a region to a valid district value key. */
+export function matchDistrictValue(regionVal?: string | null, str?: string | null): string {
+  if (!str) return "";
+  const rVal = matchRegionValue(regionVal);
+  const s = str.trim().toLowerCase();
+  const districts = getDistricts(rVal);
+  const found = districts.find(
+    (d) => d.value.toLowerCase() === s || d.label.toLowerCase().includes(s) || s.includes(d.value.toLowerCase())
+  );
+  if (found) return found.value;
+  return str;
 }

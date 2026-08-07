@@ -40,7 +40,7 @@ import { MapPickerSheet } from "../../src/components/MapPickerSheet";
 import { ShopMapPreview } from "../../src/components/ShopMapPreview";
 import { Picker } from "@react-native-picker/picker";
 import type { User } from "../../constants/types";
-import { ZANZIBAR_REGIONS, getDistricts, regionLabel, districtLabel } from "../../constants/zanzibar";
+import { ZANZIBAR_REGIONS, getDistricts, regionLabel, districtLabel, matchRegionValue, matchDistrictValue } from "../../constants/zanzibar";
 
 /** Field row used inside the profile. */
 function Field(props: {
@@ -89,6 +89,8 @@ export default function SellerProfile() {
   const [editOpen, setEditOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
   const [pwdOpen, setPwdOpen] = useState(false);
+  const [mapPickerOpen, setMapPickerOpen] = useState(false);
+  const [selectedPin, setSelectedPin] = useState<{ lat: number; lng: number } | null>(null);
 
   const user = session?.user;
   // Read the live permit from the sellerPermits slice — the same slice
@@ -267,13 +269,19 @@ export default function SellerProfile() {
           </View>
         </Card>
 
-        {/* Owner section */}
-        <Text style={styles.sectionTitle}>Owner Details</Text>
+        {/* Personal section */}
+        <Text style={styles.sectionTitle}>Personal Details</Text>
         <Card>
           <Field
             icon="person-outline"
-            label="Owner Name"
+            label="Full Name"
             value={user?.fullName ?? "—"}
+          />
+          <Divider />
+          <Field
+            icon="at-outline"
+            label="Username"
+            value={user?.username ?? "—"}
           />
           <Divider />
           <Field
@@ -281,13 +289,6 @@ export default function SellerProfile() {
             label="Phone Number"
             value={user?.phone ?? "—"}
             tint={Colors.secondary}
-          />
-          <Divider />
-          <Field
-            icon="mail-outline"
-            label="Email Address"
-            value={user?.email ?? "—"}
-            tint={Colors.accent}
           />
         </Card>
 
@@ -346,27 +347,19 @@ export default function SellerProfile() {
               />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.licenceTitle}>Gas Selling Permit</Text>
+              <Text style={styles.licenceTitle}>
+                {permit
+                  ? `Permit ${permitLabel(permit.status)}`
+                  : "Gas Selling Permit"}
+              </Text>
               <Text style={styles.licenceSub}>
                 {permit
-                  ? `Application ${permitLabel(permit.status)}`
-                  : "Application not yet submitted"}
+                  ? permit.status === "approved"
+                    ? "Your permit is active. Tap to view or re-download certificate."
+                    : "Application in progress. Tap to check status or upload documents."
+                  : "Submit your documents to get your permit approved."}
               </Text>
             </View>
-            {permit ? (
-              <StatusPill
-                label={permitLabel(permit.status)}
-                tone={
-                  permit.status === "approved"
-                    ? "success"
-                    : permit.status === "rejected"
-                      ? "danger"
-                      : permit.status === "under_review"
-                        ? "info"
-                        : "warning"
-                }
-              />
-            ) : null}
           </View>
         </Card>
 
@@ -374,8 +367,8 @@ export default function SellerProfile() {
         <View style={styles.actionRow}>
           <AppButton
             title="Edit Profile"
-            variant="primary"
-            leftIcon={<Ionicons name="create-outline" size={18} color="#FFF" />}
+            variant="outline"
+            leftIcon={<Ionicons name="create-outline" size={18} color={Colors.primary} />}
             style={{ flex: 1 }}
             onPress={() => setEditOpen(true)}
           />
@@ -421,6 +414,11 @@ export default function SellerProfile() {
       <EditBusinessAddressModal
         visible={addressOpen}
         onClose={() => setAddressOpen(false)}
+        onRequestOpenMap={() => {
+          setAddressOpen(false);
+          setMapPickerOpen(true);
+        }}
+        externalPin={selectedPin}
         user={user ?? null}
         businessName={business.name}
         onSave={async (patch) => {
@@ -663,12 +661,16 @@ function ChangePasswordModal({
 function EditBusinessAddressModal({
   visible,
   onClose,
+  onRequestOpenMap,
+  externalPin,
   user,
   businessName,
   onSave,
 }: {
   visible: boolean;
   onClose: () => void;
+  onRequestOpenMap: () => void;
+  externalPin?: { lat: number; lng: number } | null;
   user: User | null;
   businessName: string;
   onSave: (patch: {
@@ -690,46 +692,29 @@ function EditBusinessAddressModal({
   const [fullAddress, setFullAddress] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  // Map-pin state. `null` means "no pin set yet"; the picker seeds
-  // this from `user.lat/lng` on open. `chosen` distinguishes
-  // "persisted pin" from "user just dropped a new one in this session"
-  // so the store knows when to send it as `pinCoords`.
-  const [pin, setPin] = useState<{ lat: number; lng: number } | null>(
-    typeof user?.lat === "number" && Number.isFinite(user.lat) &&
-    typeof user?.lng === "number" && Number.isFinite(user.lng)
-      ? { lat: user.lat, lng: user.lng }
-      : null,
-  );
+  const [pin, setPin] = useState<{ lat: number; lng: number } | null>(null);
   const [pinChosen, setPinChosen] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
 
-  // Re-seed the form whenever the modal opens — handles the case
-  // where a successful save just before updated `user` and the modal
-  // is reopened on the next tap. Pin state is also re-seeded from the
-  // (possibly updated) `user.lat` / `user.lng`, and `pinChosen` resets
-  // because nothing has been chosen in the new session yet.
   React.useEffect(() => {
     if (!visible) return;
     setName(businessName || user?.fullName || "");
-    setRegion(user?.region ?? "");
-    setDistrict(user?.district ?? "");
+    const rKey = matchRegionValue(user?.region);
+    setRegion(rKey);
+    setDistrict(matchDistrictValue(rKey, user?.district));
     setWard(user?.ward ?? "");
     setStreet(user?.street ?? "");
     setFullAddress(user?.address ?? "");
     setErrors({});
-    if (
-      typeof user?.lat === "number" &&
-      Number.isFinite(user.lat) &&
-      typeof user?.lng === "number" &&
-      Number.isFinite(user.lng)
-    ) {
-      setPin({ lat: user.lat, lng: user.lng });
-    } else {
-      setPin(null);
-    }
-    setPinChosen(false);
-    setPickerOpen(false);
-  }, [visible, user, businessName]);
+
+    const effectivePin = externalPin ?? (
+      typeof user?.lat === "number" && Number.isFinite(user.lat) &&
+      typeof user?.lng === "number" && Number.isFinite(user.lng)
+        ? { lat: user.lat, lng: user.lng }
+        : null
+    );
+    setPin(effectivePin);
+    if (externalPin) setPinChosen(true);
+  }, [visible, user, businessName, externalPin]);
 
   const composed = useMemo(
     () =>
@@ -755,11 +740,6 @@ function EditBusinessAddressModal({
 
     setSaving(true);
     try {
-      // Capture the device GPS fix once, at the moment of save. The
-      // helper is silent on every failure (denied permission, timeout,
-      // unsupported platform) and resolves to null. The map-picker's
-      // `pinCoords` (when set) wins over `deviceCoords` in the store,
-      // so the seller's intentional choice always beats the GPS fix.
       const deviceCoords = pinChosen
         ? null
         : await resolveCurrentDeviceCoords();
@@ -784,154 +764,137 @@ function EditBusinessAddressModal({
   };
 
   return (
-    <>
-      <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-        <Pressable style={styles.modalBackdrop} onPress={onClose}>
-          <Pressable style={styles.modalSheet} onPress={() => {}}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Edit Business Address</Text>
-            <Text style={styles.modalSub}>{businessName}</Text>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Edit Business Address</Text>
+          <Text style={styles.modalSub}>{businessName}</Text>
 
-            <ScrollView keyboardShouldPersistTaps="handled">
-              <AppInput
-                label="Business Name"
-                value={name}
-                onChangeText={setName}
-                autoCapitalize="words"
-              />
-
-              {/* Region Picker */}
-              <View style={{ marginBottom: Spacing.md }}>
-                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: "700", marginBottom: 6 }}>
-                  Region
-                </Text>
-                <View style={{ borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.surfaceMuted, overflow: "hidden" }}>
-                  <Picker
-                    selectedValue={region}
-                    onValueChange={(v) => {
-                      setRegion(v);
-                      setDistrict("");
-                    }}
-                    style={{ height: 50, color: Colors.text }}
-                  >
-                    <Picker.Item label="Select region..." value="" color={Colors.textMuted} />
-                    {ZANZIBAR_REGIONS.map((r) => (
-                      <Picker.Item key={r.value} label={r.label} value={r.value} />
-                    ))}
-                  </Picker>
-                </View>
-              </View>
-
-              {/* District Picker */}
-              <View style={{ marginBottom: Spacing.md }}>
-                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: "700", marginBottom: 6 }}>
-                  District
-                </Text>
-                <View style={{ borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.surfaceMuted, overflow: "hidden" }}>
-                  <Picker
-                    selectedValue={district}
-                    onValueChange={(v) => setDistrict(v)}
-                    style={{ height: 50, color: Colors.text }}
-                  >
-                    <Picker.Item label={region ? "Select district..." : "Select region first"} value="" color={Colors.textMuted} />
-                    {getDistricts(region).map((d) => (
-                      <Picker.Item key={d.value} label={d.label} value={d.value} />
-                    ))}
-                  </Picker>
-                </View>
-              </View>
-
-              <AppInput
-                label="Ward"
-                value={ward}
-                onChangeText={setWard}
-              />
-              <AppInput
-                label="Street / Area"
-                value={street}
-                onChangeText={setStreet}
-              />
-              <AppInput
-                label="Full Business Address"
-                value={fullAddress}
-                onChangeText={setFullAddress}
-                multiline
-                numberOfLines={2}
-                error={errors.fullAddress}
-                helperText={
-                  composed
-                    ? `Will be saved as: ${composed}`
-                    : undefined
-                }
-              />
-
-              {/* Shop Location — uses the OpenStreetMap picker. The
-                  seller can drop a pin three ways (current location /
-                  pick on map / type coordinates) and the chosen pin
-                  flows back to the parent as `pinCoords` on Save. */}
-              <View style={styles.pinSection}>
-                <Text style={styles.pinSectionLabel}>Shop Location</Text>
-                {pin ? (
-                  <Text style={styles.pinSummary}>
-                    📍 {pin.lat.toFixed(6)}, {pin.lng.toFixed(6)}
-                    {pinChosen ? " (new)" : ""}
-                  </Text>
-                ) : (
-                  <Text style={styles.pinEmpty}>
-                    📍 Not set yet — tap to choose
-                  </Text>
-                )}
-                <AppButton
-                  title={pin ? "Change pin" : "Set on map"}
-                  variant="outline"
-                  leftIcon={
-                    <Ionicons
-                      name="map-outline"
-                      size={18}
-                      color={Colors.primary}
-                    />
-                  }
-                  onPress={() => setPickerOpen(true)}
-                  style={styles.pinBtn}
-                />
-                <Text style={styles.businessHelp}>
-                  Your pin location is set separately from the address
-                  text. You can drop a pin on the map, use your current
-                  location, or type coordinates directly.
-                </Text>
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalActions}>
-              <AppButton
-                title="Cancel"
-                variant="outline"
-                style={{ flex: 1 }}
-                onPress={onClose}
-              />
-              <AppButton
-                title="Save"
-                variant="primary"
-                style={{ flex: 1 }}
-                loading={saving}
-                onPress={submit}
-              />
-            </View>
-            <MapPickerSheet
-              visible={pickerOpen}
-              onClose={() => setPickerOpen(false)}
-              initialLat={pin?.lat}
-              initialLng={pin?.lng}
-              onConfirm={(coords) => {
-                setPin(coords);
-                setPinChosen(true);
-                setPickerOpen(false);
-              }}
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <AppInput
+              label="Business Name"
+              value={name}
+              onChangeText={setName}
+              autoCapitalize="words"
             />
-          </Pressable>
+
+            {/* Region Picker */}
+            <View style={{ marginBottom: Spacing.md }}>
+              <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: "700", marginBottom: 6 }}>
+                Region
+              </Text>
+              <View style={{ borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.surfaceMuted, overflow: "hidden" }}>
+                <Picker
+                  selectedValue={region}
+                  onValueChange={(v) => {
+                    setRegion(v);
+                    setDistrict("");
+                  }}
+                  style={{ height: 50, color: Colors.text }}
+                >
+                  <Picker.Item label="Select region..." value="" color={Colors.textMuted} />
+                  {ZANZIBAR_REGIONS.map((r) => (
+                    <Picker.Item key={r.value} label={r.label} value={r.value} />
+                  ))}
+                </Picker>
+              </View>
+            </View>
+
+            {/* District Picker */}
+            <View style={{ marginBottom: Spacing.md }}>
+              <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: "700", marginBottom: 6 }}>
+                District
+              </Text>
+              <View style={{ borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.surfaceMuted, overflow: "hidden" }}>
+                <Picker
+                  selectedValue={district}
+                  onValueChange={(v) => setDistrict(v)}
+                  style={{ height: 50, color: Colors.text }}
+                >
+                  <Picker.Item label={region ? "Select district..." : "Select region first"} value="" color={Colors.textMuted} />
+                  {getDistricts(region).map((d) => (
+                    <Picker.Item key={d.value} label={d.label} value={d.value} />
+                  ))}
+                </Picker>
+              </View>
+            </View>
+
+            <AppInput
+              label="Ward"
+              value={ward}
+              onChangeText={setWard}
+            />
+            <AppInput
+              label="Street / Area"
+              value={street}
+              onChangeText={setStreet}
+            />
+            <AppInput
+              label="Full Business Address"
+              value={fullAddress}
+              onChangeText={setFullAddress}
+              multiline
+              numberOfLines={2}
+              error={errors.fullAddress}
+              helperText={
+                composed
+                  ? `Will be saved as: ${composed}`
+                  : undefined
+              }
+            />
+
+            <View style={styles.pinSection}>
+              <Text style={styles.pinSectionLabel}>Shop Location</Text>
+              {pin ? (
+                <Text style={styles.pinSummary}>
+                  📍 {pin.lat.toFixed(6)}, {pin.lng.toFixed(6)}
+                  {pinChosen ? " (new)" : ""}
+                </Text>
+              ) : (
+                <Text style={styles.pinEmpty}>
+                  📍 Not set yet — tap to choose
+                </Text>
+              )}
+              <AppButton
+                title={pin ? "Change pin" : "Set on map"}
+                variant="outline"
+                leftIcon={
+                  <Ionicons
+                    name="map-outline"
+                    size={18}
+                    color={Colors.primary}
+                  />
+                }
+                onPress={onRequestOpenMap}
+                style={styles.pinBtn}
+              />
+              <Text style={styles.businessHelp}>
+                Your pin location is set separately from the address
+                text. You can drop a pin on the map, use your current
+                location, or type coordinates directly.
+              </Text>
+            </View>
+          </ScrollView>
+
+          <View style={styles.modalActions}>
+            <AppButton
+              title="Cancel"
+              variant="outline"
+              style={{ flex: 1 }}
+              onPress={onClose}
+            />
+            <AppButton
+              title="Save"
+              variant="primary"
+              style={{ flex: 1 }}
+              loading={saving}
+              onPress={submit}
+            />
+          </View>
         </Pressable>
-      </Modal>
-    </>
+      </Pressable>
+    </Modal>
   );
 }
 
