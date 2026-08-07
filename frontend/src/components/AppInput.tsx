@@ -5,7 +5,6 @@ import {
   TextInput,
   TextInputProps,
   View,
-  TouchableOpacity,
 } from "react-native";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 
@@ -49,7 +48,7 @@ export function AppInput({
           {...rest}
         />
         {rightAdornment ? (
-          <TouchableOpacity disabled>{rightAdornment}</TouchableOpacity>
+          <View style={styles.adornment}>{rightAdornment}</View>
         ) : null}
       </View>
       {error ? (
@@ -83,6 +82,14 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: FontSize.md,
     color: Colors.text,
+  },
+  /**
+   * Holds a trailing control (e.g. the password eye-toggle). It is a plain
+   * View so the adornment's own Touchable keeps its press feedback — wrapping
+   * it in a disabled TouchableOpacity used to swallow that.
+   */
+  adornment: {
+    paddingLeft: Spacing.sm,
   },
   error: {
     color: Colors.danger,

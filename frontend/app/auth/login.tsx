@@ -25,9 +25,15 @@ import {
 } from "react-native";
 import { Link, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppInput } from "../../src/components/AppInput";
 import { AppButton } from "../../src/components/AppButton";
-import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import { Colors, FontSize, Spacing } from "../../constants/colors";
+import {
+  AUTH_ACTIVE_OPACITY,
+  authStyles,
+  heroPaddingTop,
+} from "../../src/styles/authStyles";
 import { useStore } from "../../src/store/StoreContext";
 import { roleHome } from "../../src/utils/format";
 
@@ -35,6 +41,7 @@ const LOGO = require("../../assets/images/icon.png");
 
 export default function LoginScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const {
     login,
     error: storeError,
@@ -87,19 +94,22 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.root}
+      style={authStyles.root}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={authStyles.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {/* Keeps the iOS over-scroll area above the hero teal, not white */}
+        <View style={authStyles.heroOverscroll} />
+
         {/* ── Hero band ────────────────────────────────────────── */}
-        <View style={styles.hero}>
+        <View style={[authStyles.hero, { paddingTop: heroPaddingTop(insets.top) }]}>
           {/* Decorative circles */}
-          <View style={styles.circle1} />
-          <View style={styles.circle2} />
+          <View style={authStyles.circle1} />
+          <View style={authStyles.circle2} />
 
           <Animated.View
             style={[
@@ -107,12 +117,12 @@ export default function LoginScreen() {
               { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
             ]}
           >
-            <View style={styles.logoRing}>
-              <Image source={LOGO} style={styles.logo} resizeMode="contain" />
+            <View style={authStyles.ring}>
+              <Image source={LOGO} style={authStyles.logo} resizeMode="contain" />
             </View>
-            <Text style={styles.heroTitle}>Gas Delivery & Supplying</Text>
-            <Text style={styles.heroSub}>
-              Zanzibar's fastest gas delivery platform
+            <Text style={authStyles.heroTitle}>Gas Delivery & Supplying</Text>
+            <Text style={authStyles.heroSub}>
+              Zanzibar&apos;s fastest gas delivery platform
             </Text>
           </Animated.View>
         </View>
@@ -120,19 +130,19 @@ export default function LoginScreen() {
         {/* ── Floating card ─────────────────────────────────────── */}
         <Animated.View
           style={[
-            styles.card,
+            authStyles.card,
             { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
           ]}
         >
-          <Text style={styles.cardTitle}>Welcome back</Text>
-          <Text style={styles.cardSub}>Sign in to continue</Text>
+          <Text style={authStyles.cardTitle}>Welcome back</Text>
+          <Text style={authStyles.cardSub}>Sign in to continue</Text>
 
           {/* Username / Email */}
-          <View style={styles.inputWrap}>
-            <View style={styles.inputIcon}>
+          <View style={authStyles.inputWrap}>
+            <View style={authStyles.inputIcon}>
               <Ionicons name="person-outline" size={18} color={Colors.textMuted} />
             </View>
-            <View style={styles.inputInner}>
+            <View style={authStyles.inputInner}>
               <AppInput
                 label="Username or Email"
                 placeholder="e.g. asha"
@@ -145,11 +155,11 @@ export default function LoginScreen() {
           </View>
 
           {/* Password */}
-          <View style={styles.inputWrap}>
-            <View style={styles.inputIcon}>
+          <View style={authStyles.inputWrap}>
+            <View style={authStyles.inputIcon}>
               <Ionicons name="lock-closed-outline" size={18} color={Colors.textMuted} />
             </View>
-            <View style={styles.inputInner}>
+            <View style={authStyles.inputInner}>
               <AppInput
                 label="Password"
                 placeholder="Enter your password"
@@ -158,7 +168,10 @@ export default function LoginScreen() {
                 onChangeText={setPassword}
                 error={errors.password}
                 rightAdornment={
-                  <TouchableOpacity onPress={() => setShowPwd((s) => !s)}>
+                  <TouchableOpacity
+                    onPress={() => setShowPwd((s) => !s)}
+                    activeOpacity={AUTH_ACTIVE_OPACITY}
+                  >
                     <Ionicons
                       name={showPwd ? "eye-off-outline" : "eye-outline"}
                       size={20}
@@ -184,128 +197,28 @@ export default function LoginScreen() {
           />
 
           {/* Divider */}
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>Don't have an account?</Text>
-            <View style={styles.dividerLine} />
+          <View style={authStyles.divider}>
+            <View style={authStyles.dividerLine} />
+            <Text style={authStyles.dividerText}>Don&apos;t have an account?</Text>
+            <View style={authStyles.dividerLine} />
           </View>
 
           {/* Register link */}
           <TouchableOpacity
-            style={styles.registerBtn}
+            style={authStyles.outlineBtn}
             onPress={() => router.push("/auth/register")}
-            activeOpacity={0.85}
+            activeOpacity={AUTH_ACTIVE_OPACITY}
           >
-            <Text style={styles.registerBtnText}>Create Account</Text>
+            <Text style={authStyles.outlineBtnText}>Create Account</Text>
           </TouchableOpacity>
         </Animated.View>
-
-        <View style={{ height: Spacing.xxl }} />
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.primaryDark },
-  scroll: { flexGrow: 1 },
-
-  // Hero band
-  hero: {
-    backgroundColor: Colors.primaryDark,
-    paddingTop: 64,
-    paddingBottom: 60,
-    alignItems: "center",
-    overflow: "hidden",
-  },
-  circle1: {
-    position: "absolute",
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    top: -60,
-    right: -60,
-  },
-  circle2: {
-    position: "absolute",
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    bottom: -20,
-    left: -40,
-  },
   logoWrap: { alignItems: "center", zIndex: 1 },
-  logoRing: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: Spacing.md,
-    overflow: "hidden",
-  },
-  logo: { width: 96, height: 96 },
-  heroTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: "800",
-    color: "#FFF",
-    textAlign: "center",
-  },
-  heroSub: {
-    fontSize: FontSize.sm,
-    color: "rgba(255,255,255,0.7)",
-    textAlign: "center",
-    marginTop: 4,
-  },
-
-  // Card
-  card: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    marginTop: -24,
-    padding: Spacing.xl,
-    paddingTop: 28,
-    minHeight: 480,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 16,
-  },
-  cardTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: "800",
-    color: Colors.text,
-    marginBottom: 4,
-  },
-  cardSub: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.lg,
-  },
-
-  // Input rows with icon
-  inputWrap: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: Spacing.sm,
-  },
-  inputIcon: {
-    marginTop: 32, // aligns with the input field (accounts for the label)
-    width: 36,
-    height: 36,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.surfaceMuted,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  inputInner: { flex: 1 },
 
   // Forgot link
   forgotLink: {
@@ -315,33 +228,5 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginTop: -Spacing.sm,
     marginBottom: Spacing.md,
-  },
-
-  // Divider
-  divider: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    marginVertical: Spacing.lg,
-  },
-  dividerLine: { flex: 1, height: 1, backgroundColor: Colors.border },
-  dividerText: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
-    fontWeight: "600",
-  },
-
-  // Register button (outline style)
-  registerBtn: {
-    borderWidth: 1.5,
-    borderColor: Colors.primary,
-    borderRadius: Radius.md,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  registerBtnText: {
-    color: Colors.primary,
-    fontSize: FontSize.md,
-    fontWeight: "700",
   },
 });

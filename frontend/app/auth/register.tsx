@@ -32,9 +32,15 @@ import {
 import { useRouter } from "expo-router";
 import { Picker } from "@react-native-picker/picker";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppInput } from "../../src/components/AppInput";
 import { AppButton } from "../../src/components/AppButton";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import {
+  AUTH_ACTIVE_OPACITY,
+  authStyles,
+  heroPaddingTop,
+} from "../../src/styles/authStyles";
 import { useStore } from "../../src/store/StoreContext";
 import { UserRole } from "../../constants/types";
 import { isEmail, isPhone } from "../../src/utils/validators";
@@ -234,6 +240,7 @@ const pickerStyles = StyleSheet.create({
 
 export default function RegisterScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { register, error: storeError, loading: storeLoading } = useStore();
 
   const [step, setStep] = useState(0);
@@ -423,18 +430,21 @@ export default function RegisterScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.root}
+      style={authStyles.root}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={authStyles.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {/* Keeps the iOS over-scroll area above the hero teal, not white */}
+        <View style={authStyles.heroOverscroll} />
+
         {/* ── Hero ──────────────────────────────────────────────── */}
-        <View style={styles.hero}>
-          <View style={styles.circle1} />
-          <View style={styles.circle2} />
+        <View style={[authStyles.hero, { paddingTop: heroPaddingTop(insets.top) }]}>
+          <View style={authStyles.circle1} />
+          <View style={authStyles.circle2} />
           <Animated.View
             style={{
               alignItems: "center",
@@ -442,20 +452,25 @@ export default function RegisterScreen() {
               transform: [{ translateY: heroSlide }],
             }}
           >
-            <View style={styles.logoRing}>
-              <Image source={LOGO} style={styles.logo} resizeMode="contain" />
+            <View style={authStyles.ring}>
+              <Image source={LOGO} style={authStyles.logo} resizeMode="contain" />
             </View>
-            <Text style={styles.heroTitle}>Create Account</Text>
-            <Text style={styles.heroSub}>Gas Delivery & Supplying System</Text>
+            <Text style={authStyles.heroTitle}>Create Account</Text>
+            <Text style={authStyles.heroSub}>Gas Delivery & Supplying System</Text>
           </Animated.View>
         </View>
 
         {/* ── Card ──────────────────────────────────────────────── */}
-        <View style={styles.card}>
+        <Animated.View
+          style={[
+            authStyles.card,
+            { opacity: heroFade, transform: [{ translateY: heroSlide }] },
+          ]}
+        >
           {/* Step bar */}
           <StepBar step={step} />
-          <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
-          <Text style={styles.stepSub}>{STEP_SUBS[step]}</Text>
+          <Text style={authStyles.cardTitle}>{STEP_TITLES[step]}</Text>
+          <Text style={authStyles.cardSub}>{STEP_SUBS[step]}</Text>
 
           {/* ── Step content ────────────────────────────────────── */}
           <Animated.View style={{ opacity: fadeAnim }}>
@@ -653,7 +668,10 @@ export default function RegisterScreen() {
                   onChangeText={setPassword}
                   error={errors.password}
                   rightAdornment={
-                    <TouchableOpacity onPress={() => setShowPwd((s) => !s)}>
+                    <TouchableOpacity
+                      onPress={() => setShowPwd((s) => !s)}
+                      activeOpacity={AUTH_ACTIVE_OPACITY}
+                    >
                       <Ionicons
                         name={showPwd ? "eye-off-outline" : "eye-outline"}
                         size={20}
@@ -672,6 +690,7 @@ export default function RegisterScreen() {
                   rightAdornment={
                     <TouchableOpacity
                       onPress={() => setShowConfirmPwd((s) => !s)}
+                      activeOpacity={AUTH_ACTIVE_OPACITY}
                     >
                       <Ionicons
                         name={showConfirmPwd ? "eye-off-outline" : "eye-outline"}
@@ -708,7 +727,11 @@ export default function RegisterScreen() {
           {/* ── Navigation buttons ─────────────────────────────────── */}
           <View style={styles.navRow}>
             {step > 0 ? (
-              <TouchableOpacity style={styles.backBtn} onPress={goBack}>
+              <TouchableOpacity
+                style={styles.backBtn}
+                onPress={goBack}
+                activeOpacity={AUTH_ACTIVE_OPACITY}
+              >
                 <Ionicons name="chevron-back" size={18} color={Colors.textSecondary} />
                 <Text style={styles.backBtnText}>Back</Text>
               </TouchableOpacity>
@@ -717,9 +740,13 @@ export default function RegisterScreen() {
             )}
 
             {step < TOTAL_STEPS - 1 ? (
-              <TouchableOpacity style={styles.nextBtn} onPress={goNext}>
+              <TouchableOpacity
+                style={styles.nextBtn}
+                onPress={goNext}
+                activeOpacity={AUTH_ACTIVE_OPACITY}
+              >
                 <Text style={styles.nextBtnText}>Next</Text>
-                <Ionicons name="chevron-forward" size={18} color="#FFF" />
+                <Ionicons name="chevron-forward" size={18} color={Colors.textInverse} />
               </TouchableOpacity>
             ) : (
               <AppButton
@@ -735,6 +762,7 @@ export default function RegisterScreen() {
           <TouchableOpacity
             style={styles.loginLink}
             onPress={() => router.replace("/auth/login")}
+            activeOpacity={AUTH_ACTIVE_OPACITY}
           >
             <Text style={styles.loginLinkText}>
               Already have an account?{" "}
@@ -743,9 +771,7 @@ export default function RegisterScreen() {
               </Text>
             </Text>
           </TouchableOpacity>
-        </View>
-
-        <View style={{ height: Spacing.xxl }} />
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -754,87 +780,6 @@ export default function RegisterScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.primaryDark },
-  scroll: { flexGrow: 1 },
-
-  // Hero
-  hero: {
-    backgroundColor: Colors.primaryDark,
-    paddingTop: 52,
-    paddingBottom: 52,
-    alignItems: "center",
-    overflow: "hidden",
-  },
-  circle1: {
-    position: "absolute",
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    top: -60,
-    right: -50,
-  },
-  circle2: {
-    position: "absolute",
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    bottom: -20,
-    left: -30,
-  },
-  logoRing: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: Spacing.sm,
-    overflow: "hidden",
-  },
-  logo: { width: 80, height: 80 },
-  heroTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: "800",
-    color: "#FFF",
-    textAlign: "center",
-  },
-  heroSub: {
-    fontSize: FontSize.sm,
-    color: "rgba(255,255,255,0.65)",
-    textAlign: "center",
-    marginTop: 4,
-  },
-
-  // Card
-  card: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    marginTop: -24,
-    padding: Spacing.xl,
-    paddingTop: 28,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 16,
-  },
-  stepTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: "800",
-    color: Colors.text,
-    marginBottom: 4,
-  },
-  stepSub: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.lg,
-  },
-
   // Role cards
   roleGrid: {
     flexDirection: "row",
