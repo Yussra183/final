@@ -13,6 +13,15 @@ import jakarta.validation.constraints.Size;
  * Shape mirrors {@code RegisterPayload} in the frontend's
  * {@code src/api/endpoints.ts}.
  * </p>
+ *
+ * <p><strong>Seller fields (added in V12):</strong> {@code
+ * businessName}, {@code businessRegion}, {@code businessDistrict},
+ * {@code businessWard}, {@code businessStreet}, {@code businessAddress},
+ * {@code businessLat}, {@code businessLng} are optional and only used
+ * when {@code role == SELLER}. When present, the registration writes
+ * both the user row and the {@code seller_profiles} row inside the
+ * same transaction — the seller no longer logs in to find an
+ * "Address not set" placeholder.</p>
  */
 public record RegisterRequest(
 
@@ -40,6 +49,29 @@ public record RegisterRequest(
         String password,
 
         @NotNull(message = "Role is required")
-        Role role
+        Role role,
+
+        // ---- Seller-only business fields (all optional) ----
+
+        @Size(max = 160, message = "Business name must be 160 characters or fewer")
+        String businessName,
+
+        @Size(max = 120, message = "Region must be 120 characters or fewer")
+        String businessRegion,
+
+        @Size(max = 120, message = "District must be 120 characters or fewer")
+        String businessDistrict,
+
+        @Size(max = 120, message = "Ward must be 120 characters or fewer")
+        String businessWard,
+
+        @Size(max = 160, message = "Street must be 160 characters or fewer")
+        String businessStreet,
+
+        @Size(max = 500, message = "Business address must be 500 characters or fewer")
+        String businessAddress,
+
+        Double businessLat,
+        Double businessLng
 ) {
 }

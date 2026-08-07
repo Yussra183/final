@@ -144,3 +144,61 @@ export function matchDistrictValue(regionVal?: string | null, str?: string | nul
   if (found) return found.value;
   return str;
 }
+
+// ─── Address composition (added V12) ─────────────────────────────────────────
+
+/**
+ * Build a single human-readable address string from the administrative
+ * parts. Single source of truth for "how do we render a Zanzibar
+ * address" — used by the registration form, the seller profile
+ * header, and the seller profile Edit modal. Three separate compose
+ * sites existed previously and disagreed on order and on whether
+ * "Zanzibar" was appended; centralising removes the drift.
+ *
+ * Region and District are passed as **value keys** (the form stores
+ * {@code mjini_magharibi}, not the label); labels are resolved
+ * through {@link regionLabel} / {@link districtLabel} so the wire
+ * format stays canonical and the render layer handles translation.
+ *
+ * Empty parts are dropped so a half-filled address renders as the
+ * filled half without stray commas. The country suffix is appended
+ * whenever any part was rendered — a blank input does not become
+ * "Zanzibar".
+ */
+export interface AddressParts {
+  street?: string | null;
+  ward?: string | null;
+  districtKey?: string | null;
+  regionKey?: string | null;
+  regionForDistrict?: string | null;
+}
+
+export function composeZanzibarAddress(parts: AddressParts): string {
+  const out: string[] = [];
+
+  const street = parts.street?.trim();
+  if (street) out.push(street);
+
+  const ward = parts.ward?.trim();
+  if (ward) out.push(ward);
+
+  const regionForDistrict =
+    parts.regionForDistrict ?? parts.regionKey ?? null;
+  const districtLabelStr = parts.districtKey
+    ? districtLabel(regionForDistrict ?? "", parts.districtKey)
+    : null;
+  if (districtLabelStr && districtLabelStr.trim()) {
+    out.push(districtLabelStr.trim());
+  }
+
+  const regionLabelStr = parts.regionKey
+    ? regionLabel(parts.regionKey)
+    : null;
+  if (regionLabelStr && regionLabelStr.trim()) {
+    out.push(regionLabelStr.trim());
+  }
+
+  if (out.length === 0) return "";
+  out.push("Zanzibar");
+  return out.join(", ");
+}

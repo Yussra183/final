@@ -105,6 +105,14 @@ export interface User {
    * anything other than "approved". Populated by `GET /api/permits/me`.
    */
   permitStatus?: PermitStatus | null;
+  /**
+   * Seller rating (0..5). Sourced from
+   * {@link SellerProfile.rating} via {@code GET /api/sellers/me} on
+   * the seller branch of {@code StoreContext.refresh()}. Undefined for
+   * non-seller roles; the seller Profile screen renders it through
+   * the shared Stars component rather than a hardcoded value.
+   */
+  rating?: number;
 }
 
 /**
@@ -708,6 +716,10 @@ export interface AdminSeller {
   address: string | null;
   district: string | null;
   region: string | null;
+  /** Ward / street — added on the backend in V12 so the admin directory
+   *  reflects what the seller typed, not just Region + District. */
+  ward: string | null;
+  street: string | null;
   rating: number | null;
   openNow: boolean | null;
   lat: number | null;

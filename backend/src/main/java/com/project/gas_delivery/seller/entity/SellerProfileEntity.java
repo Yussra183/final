@@ -40,6 +40,14 @@ public class SellerProfileEntity {
     @Column(name = "region", length = 120)
     private String region;
 
+    // Added in V12 to persist the Ward / Street that the seller types at
+    // registration. Mirrors `customer_profiles.ward` / `.street` (V11).
+    @Column(name = "ward", length = 120)
+    private String ward;
+
+    @Column(name = "street", length = 160)
+    private String street;
+
     @Column(name = "lat")
     private Double lat;
 
@@ -66,6 +74,7 @@ public class SellerProfileEntity {
 
     public SellerProfileEntity(Long userId, String businessName, String address,
                                String district, String region,
+                               String ward, String street,
                                Double lat, Double lng,
                                String phone, BigDecimal rating, boolean openNow) {
         this.userId = userId;
@@ -73,6 +82,8 @@ public class SellerProfileEntity {
         this.address = address;
         this.district = district;
         this.region = region;
+        this.ward = ward;
+        this.street = street;
         this.lat = lat;
         this.lng = lng;
         this.phone = phone;
@@ -132,6 +143,22 @@ public class SellerProfileEntity {
 
     public void setRegion(String region) {
         this.region = region;
+    }
+
+    public String getWard() {
+        return ward;
+    }
+
+    public void setWard(String ward) {
+        this.ward = ward;
+    }
+
+    public String getStreet() {
+        return street;
+    }
+
+    public void setStreet(String street) {
+        this.street = street;
     }
 
     public Double getLat() {

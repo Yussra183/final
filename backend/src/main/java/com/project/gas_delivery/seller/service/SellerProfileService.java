@@ -75,6 +75,42 @@ public class SellerProfileService {
         this.defaultNearbyRadiusKm = defaultNearbyRadiusKm;
     }
 
+    /**
+     * Treat blank strings as "no change" for optional text fields. The
+     * patch DTO carries a separate {@code null} vs {@code ""} signal:
+     * a missing field stays {@code null} (so we know not to touch the
+     * stored value), but a field the seller explicitly cleared comes
+     * through as {@code ""}. Previously the service interpreted
+     * {@code ""} as "set to blank", which silently blanked stored
+     * Ward / Street / Region values on every save. Returns
+     * {@code null} for blank, the trimmed value otherwise.
+     */
+    private static String blankToNull(String v) {
+        if (v == null) return null;
+        String trimmed = v.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * Validate a lat/lng pair from the patch. Reject anything outside
+     * the WGS-84 range or the suspicious {@code (0, 0)} "null island"
+     * — a seller can never pin themselves to the Gulf of Guinea, and
+     * a never-configured row should stay {@code null}, not
+     * auto-default to {@code (0, 0)}. Throws {@link BadRequestException}
+     * with a message safe to surface to the seller.
+     */
+    private static void validateLatLng(Double lat, Double lng) {
+        if (lat == null || lng == null) return;
+        if (lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0) {
+            throw new com.project.gas_delivery.auth.exception.BadRequestException(
+                    "Coordinates are out of range. Latitude must be between -90 and 90; longitude between -180 and 180.");
+        }
+        if (lat == 0.0 && lng == 0.0) {
+            throw new com.project.gas_delivery.auth.exception.BadRequestException(
+                    "(0, 0) is not a valid shop location. Please pick a point on land.");
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<SellerProfileDto> listAll() {
         // No customer coordinates → no radius / sort, but the wire shape
@@ -129,7 +165,9 @@ public class SellerProfileService {
                             dto.lat(),
                             dto.lng(),
                             dto.region(),
-                            dto.district()
+                            dto.district(),
+                            dto.ward(),
+                            dto.street()
                     );
                 })
                 .filter(dto -> dto.distanceKm() <= radius)
@@ -221,14 +259,25 @@ public class SellerProfileService {
                 .orElseThrow(() -> new ResourceNotFoundException("Seller " + actorId + " not found."));
         SellerProfileEntity entity = sellerProfileRepository.findById(actorId)
                 .orElseGet(() -> {
+                    // Lazily-created rows carry null lat/lng on purpose. A
+                    // never-configured seller must NOT appear at the
+                    // hardcoded Stone Town coordinates — the customer
+                    // "Nearby Sellers" pipeline (and the admin directory
+                    // distance column) would otherwise rank them as
+                    // "right next to every customer", which is a real
+                    // compliance / trust issue for a permit-gated market.
+                    // `listAllNear` already filters null coordinates; the
+                    // seller can populate them by saving their address.
                     SellerProfileEntity created = new SellerProfileEntity(
                             actorId,
                             user.getFullName() + "'s Shop",
                             "Address not set",
                             null,
                             null,
-                            -6.1659,
-                            39.1994,
+                            null,
+                            null,
+                            null,
+                            null,
                             user.getPhone(),
                             java.math.BigDecimal.ZERO,
                             true
@@ -249,9 +298,25 @@ public class SellerProfileService {
      * every saved profile carries real, non-null coordinates. When the
      * patch supplies explicit coordinates we trust them — the seller is
      * the authority on their own location.</p>
+     *
+     * <p><strong>Optional fields:</strong> Region / District / Ward / Street
+     * use {@code null} as "no change" and {@code ""} as "clear". A save
+     * that only updates the full address therefore leaves the previously
+     * typed Ward and Street alone, which is what the seller expects from
+     * the Edit modal.</p>
+     *
+     * <p><strong>Phone:</strong> the seller doesn't always pass it (the
+     * "Save location" path strips it from the payload). When the patch
+     * omits the phone we MUST NOT blank the stored value — we only
+     * overwrite when the patch supplied a non-null one.</p>
      */
     @Transactional
     public SellerProfileDto upsertMe(Long actorId, SellerProfileDto patch) {
+        // Resolve the actor once at the top — the create-branch lambda
+        // below needs the user's phone for the initial seed, and the
+        // return path needs their full name.
+        User user = userRepository.findById(actorId)
+                .orElseThrow(() -> new NotAuthorizedException("Seller " + actorId + " not found."));
         if (patch.businessName() == null || patch.businessName().isBlank()
                 || patch.location() == null || patch.location().isBlank()) {
             throw new com.project.gas_delivery.auth.exception.BadRequestException(
@@ -265,6 +330,7 @@ public class SellerProfileService {
         Double newLat;
         Double newLng;
         if (patch.lat() != null && patch.lng() != null) {
+            validateLatLng(patch.lat(), patch.lng());
             newLat = patch.lat();
             newLng = patch.lng();
         } else {
@@ -275,23 +341,36 @@ public class SellerProfileService {
             newLng = c.lng();
         }
 
-        // Optional admin-level fields — trimmed like the rest. Stored on
-        // the existing columns; null in → null out, so a partial save
-        // never silently overwrites a previously-set value.
-        String newRegion = patch.region() == null ? null : patch.region().trim();
-        String newDistrict = patch.district() == null ? null : patch.district().trim();
+        // Optional admin-level fields. `blankToNull` distinguishes
+        // "field not in patch" (leave stored value alone) from "field
+        // explicitly cleared" (write null). The previous code only
+        // skipped null inputs, so a save that included the field as
+        // `""` would silently blank the stored Ward / Street / Region.
+        String newRegion = blankToNull(patch.region());
+        String newDistrict = blankToNull(patch.district());
+        String newWard = blankToNull(patch.ward());
+        String newStreet = blankToNull(patch.street());
 
         SellerProfileEntity entity = sellerProfileRepository.findById(actorId)
                 .orElseGet(() -> {
+                    // First-time create. Carry the user's phone
+                    // (already on `User`) — the patch payload
+                    // typically strips it on the Save-location path,
+                    // so we have to seed it from the user record,
+                    // otherwise the seller profile is born without a
+                    // phone and the previous unconditional
+                    // `setPhone(patch.phone())` below would null it.
                     SellerProfileEntity created = new SellerProfileEntity(
                             actorId,
                             patch.businessName().trim(),
                             newAddress,
                             newDistrict,
                             newRegion,
+                            newWard,
+                            newStreet,
                             newLat,
                             newLng,
-                            patch.phone(),
+                            user.getPhone(),
                             java.math.BigDecimal.ZERO,
                             true
                     );
@@ -299,18 +378,20 @@ public class SellerProfileService {
                 });
         entity.setBusinessName(patch.businessName().trim());
         entity.setAddress(newAddress);
-        entity.setPhone(patch.phone());
+        // Only overwrite the stored phone when the patch supplied one.
+        // The patch is null on the Save-location path; an unconditional
+        // set would clear the stored phone on every address save.
+        if (patch.phone() != null) entity.setPhone(patch.phone());
         entity.setLat(newLat);
         entity.setLng(newLng);
-        // Region / district are optional inputs; only apply when the
-        // patch supplied a value (otherwise leave the stored value
-        // untouched — saves that only updated the full address should
-        // not blank the seller's region/district).
+        // Apply the optional admin fields only when the patch carried a
+        // value (null = "don't touch"). See the blankToNull helper
+        // above for the distinction between missing and cleared.
         if (newRegion != null) entity.setRegion(newRegion);
         if (newDistrict != null) entity.setDistrict(newDistrict);
+        if (newWard != null) entity.setWard(newWard);
+        if (newStreet != null) entity.setStreet(newStreet);
         SellerProfileEntity saved = sellerProfileRepository.save(entity);
-        User user = userRepository.findById(actorId)
-                .orElseThrow(() -> new NotAuthorizedException("Seller " + actorId + " not found."));
         return SellerProfileDto.from(saved, user.getFullName(), 0.0, new String[0]);
     }
 }

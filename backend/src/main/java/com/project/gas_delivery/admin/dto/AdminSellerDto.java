@@ -28,6 +28,8 @@ public record AdminSellerDto(
         String address,
         String district,
         String region,
+        String ward,
+        String street,
         BigDecimal rating,
         Boolean openNow,
         Double lat,

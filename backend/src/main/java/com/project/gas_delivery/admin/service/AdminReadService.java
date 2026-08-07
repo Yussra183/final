@@ -279,6 +279,8 @@ public class AdminReadService {
                     profile == null ? null : profile.getAddress(),
                     profile == null ? null : profile.getDistrict(),
                     profile == null ? null : profile.getRegion(),
+                    profile == null ? null : profile.getWard(),
+                    profile == null ? null : profile.getStreet(),
                     profile == null ? null : profile.getRating(),
                     profile == null ? null : profile.isOpenNow(),
                     profile == null ? null : profile.getLat(),

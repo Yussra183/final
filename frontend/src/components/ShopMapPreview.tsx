@@ -22,21 +22,17 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { getMaterialisedPicker } from "./mapPickerHtml";
-
-interface BridgeMessage {
-  type: "READY" | "PIN" | "ERROR";
-  lat?: number;
-  lng?: number;
-}
+import {
+  ERROR_MESSAGES,
+  isFiniteNumber,
+  parseBridgeMessage,
+  type ErrorCode,
+} from "./mapPickerBridge";
 
 interface ShopMapPreviewProps {
   lat: number;
   lng: number;
   height?: number;
-}
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === "number" && Number.isFinite(v);
 }
 
 export function ShopMapPreview({
@@ -60,11 +56,22 @@ export function ShopMapPreview({
   const [loadToken, setLoadToken] = useState(0);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
-    try {
-      const parsed = JSON.parse(event.nativeEvent.data) as BridgeMessage;
-      if (parsed?.type === "READY") setReady(true);
-    } catch {
-      // ignore
+    const parsed = parseBridgeMessage(event.nativeEvent.data);
+    if (!parsed) return;
+    if (parsed.type === "READY") {
+      setReady(true);
+      return;
+    }
+    if (parsed.type === "ERROR") {
+      // Map TILE_ERROR to a compact copy — the inline preview has
+      // no chrome to render a long message, so keep the diagnostic
+      // to one line and let the parent screen explain it on tap.
+      const code = parsed.code as ErrorCode | undefined;
+      const message =
+        code && ERROR_MESSAGES[code]
+          ? "Map preview unavailable"
+          : parsed.message;
+      setPickerError(message);
     }
   }, []);
 

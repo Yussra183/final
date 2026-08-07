@@ -21,12 +21,33 @@ public record SellerProfileDto(
         String phone,
         BigDecimal rating,
         String[] availableSizes,
-        boolean openNow,
+        /**
+         * Boxed {@code Boolean} (not primitive {@code boolean}) so the
+         * PATCH path — which is bound straight from JSON via the
+         * canonical record constructor — accepts a missing
+         * {@code openNow} key. The frontend's {@code Partial<SellerProfile>}
+         * patch is allowed to omit fields; with a primitive
+         * {@code boolean} the missing key defaults to {@code null},
+         * which Jackson rejects as
+         * {@code HttpMessageNotReadableException: Cannot map `null` into
+         * type `boolean`} and the whole request 500s. Boxed here is a
+         * wire-only concession: the entity still uses primitive
+         * {@code boolean} (a saved profile always has an open-now flag),
+         * and {@link #from(SellerProfileEntity, String, double, String[])}
+         * always passes a non-null value, so the JSON response shape is
+         * unchanged for clients.
+         */
+        Boolean openNow,
         Double lat,
         Double lng,
         /** Admin / district view of where the Business Address sits. */
         String region,
-        String district
+        String district,
+        /** Ward and street inside the selected district. Added in V12
+         *  so the values the seller types at registration round-trip
+         *  through the backend instead of being silently dropped. */
+        String ward,
+        String street
 ) {
 
     public static SellerProfileDto from(SellerProfileEntity e, String sellerName, double distanceKm,
@@ -44,7 +65,9 @@ public record SellerProfileDto(
                 e.getLat(),
                 e.getLng(),
                 e.getRegion(),
-                e.getDistrict()
+                e.getDistrict(),
+                e.getWard(),
+                e.getStreet()
         );
     }
 }

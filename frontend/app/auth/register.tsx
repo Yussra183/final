@@ -42,6 +42,7 @@ import { roleHome } from "../../src/utils/format";
 import { resolveCurrentDeviceCoords } from "../../src/lib/deviceLocation";
 import {
   ZANZIBAR_REGIONS,
+  composeZanzibarAddress,
   getDistricts,
 } from "../../constants/zanzibar";
 
@@ -291,17 +292,16 @@ export default function RegisterScreen() {
     setBusinessDistrict("");
   }, [businessRegion]);
 
-  // Composed address from granular fields
-  const composedAddress = [
-    businessStreet,
-    businessWard,
-    businessDistrict,
-    businessRegion,
-    "Zanzibar",
-  ]
-    .map((p) => (p ?? "").trim())
-    .filter(Boolean)
-    .join(", ");
+  // Composed address from granular fields. Routed through the shared
+  // helper so the form, the seller profile header and the seller
+  // profile Edit modal all render the same string for the same input.
+  const composedAddress = composeZanzibarAddress({
+    street: businessStreet,
+    ward: businessWard,
+    districtKey: businessDistrict,
+    regionKey: businessRegion,
+    regionForDistrict: businessRegion,
+  });
   const effectiveAddress = businessAddress.trim() || composedAddress;
 
   // ── Validation per step ────────────────────────────────────────────────────

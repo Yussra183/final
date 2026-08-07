@@ -9,11 +9,15 @@ import com.project.gas_delivery.auth.exception.BadRequestException;
 import com.project.gas_delivery.auth.repository.UserRepository;
 import com.project.gas_delivery.auth.service.AuthService;
 import com.project.gas_delivery.auth.service.SessionService;
+import com.project.gas_delivery.seller.entity.SellerProfileEntity;
+import com.project.gas_delivery.seller.repository.SellerProfileRepository;
+import com.project.gas_delivery.seller.service.GeocodingService;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,6 +31,14 @@ import java.util.UUID;
  * signed-token generator — the rest of the application talks to
  * {@link AuthResponse} and stays unchanged.
  * </p>
+ *
+ * <p><strong>Seller registration (V12):</strong> when the role is
+ * {@link Role#SELLER} and the request carries any of the optional
+ * business fields, we create the {@code seller_profiles} row in the
+ * same transaction. The user row and the seller profile row commit
+ * together or not at all — no more "Welcome aboard!" behind a
+ * silently-failed second request that left the seller with no
+ * address.</p>
  */
 @Service
 public class AuthServiceImpl implements AuthService {
@@ -34,13 +46,19 @@ public class AuthServiceImpl implements AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final SessionService sessionService;
+    private final SellerProfileRepository sellerProfileRepository;
+    private final GeocodingService geocodingService;
 
     public AuthServiceImpl(UserRepository userRepository,
                            PasswordEncoder passwordEncoder,
-                           SessionService sessionService) {
+                           SessionService sessionService,
+                           SellerProfileRepository sellerProfileRepository,
+                           GeocodingService geocodingService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.sessionService = sessionService;
+        this.sellerProfileRepository = sellerProfileRepository;
+        this.geocodingService = geocodingService;
     }
 
     @Override
@@ -74,9 +92,93 @@ public class AuthServiceImpl implements AuthService {
             user.setActive(false);
         }
         User saved = userRepository.save(user);
+
+        // ---- Seller business profile (atomic) ----
+        // When the registration carries business fields, persist them
+        // inside this same transaction so the seller logs in to find
+        // their typed address, not "Address not set". The fields stay
+        // optional so legacy / curl / smoke-test registrations that
+        // omit them still succeed — the seller can fill in the address
+        // later via the dashboard and `SellerProfileService.upsertMe`.
+        if (request.role() == Role.SELLER
+                && hasAnyBusinessField(request)) {
+            createSellerProfile(saved, request);
+        }
+
         String token = issueToken(saved);
         sessionService.register(token, saved.getId());
         return AuthResponse.of(saved, token);
+    }
+
+    /**
+     * True when the registration payload carries at least one of the
+     * optional business fields. We only create a {@code seller_profiles}
+     * row in that case; a fully-empty payload means the seller didn't
+     * fill in the form (or is using a non-UI client) and the lazy
+     * {@code SellerProfileService.me()} path will still materialise a
+     * placeholder row on first dashboard load.
+     */
+    private static boolean hasAnyBusinessField(RegisterRequest r) {
+        return notBlank(r.businessName()) || notBlank(r.businessAddress())
+                || notBlank(r.businessRegion()) || notBlank(r.businessDistrict())
+                || notBlank(r.businessWard()) || notBlank(r.businessStreet())
+                || r.businessLat() != null || r.businessLng() != null;
+    }
+
+    private static boolean notBlank(String v) {
+        return v != null && !v.trim().isEmpty();
+    }
+
+    /**
+     * Build the {@code seller_profiles} row from a registration payload.
+     * Coordinates resolve to a real location when the seller typed
+     * them, otherwise the existing {@link GeocodingService} turns the
+     * typed address into one. The whole operation runs inside the
+     * {@link #register} transaction — if anything throws, the user row
+     * rolls back too, so we never end up with a half-registered seller.
+     */
+    private void createSellerProfile(User user, RegisterRequest r) {
+        Double lat = r.businessLat();
+        Double lng = r.businessLng();
+        if (lat != null && lng != null) {
+            // Mirror the seller-side range check: reject obviously
+            // bogus input at registration time rather than letting it
+            // surface later as "could not resolve address".
+            if (lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0
+                    || (lat == 0.0 && lng == 0.0)) {
+                throw new BadRequestException(
+                        "Business coordinates are out of range or (0, 0).");
+            }
+        } else if (notBlank(r.businessAddress())) {
+            Optional<GeocodingService.Coordinates> resolved =
+                    geocodingService.resolve(r.businessAddress().trim());
+            if (resolved.isPresent()) {
+                lat = resolved.get().lat();
+                lng = resolved.get().lng();
+            }
+        }
+
+        SellerProfileEntity profile = new SellerProfileEntity(
+                user.getId(),
+                notBlank(r.businessName()) ? r.businessName().trim()
+                        : user.getFullName() + "'s Shop",
+                notBlank(r.businessAddress()) ? r.businessAddress().trim()
+                        : "Address not set",
+                trimOrNull(r.businessDistrict()),
+                trimOrNull(r.businessRegion()),
+                trimOrNull(r.businessWard()),
+                trimOrNull(r.businessStreet()),
+                lat,
+                lng,
+                user.getPhone(),
+                BigDecimal.ZERO,
+                true
+        );
+        sellerProfileRepository.save(profile);
+    }
+
+    private static String trimOrNull(String v) {
+        return v == null || v.trim().isEmpty() ? null : v.trim();
     }
 
     @Override

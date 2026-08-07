@@ -767,26 +767,48 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // empty state. Successfully fetched rows are mirrored onto
       // `session.user` so the Profile "Business Address" field shows
       // the persisted value right after login / app restart.
+      //
+      // The merge covers every field the Edit Business Address modal
+      // can re-seed (region / district / ward / street / full address,
+      // lat / lng) plus businessName and rating. The equality guard
+      // must list the SAME fields — adding a field to the merge but
+      // not to the guard would make the merge a no-op (the guard
+      // would always see "no change" and bail out), which is exactly
+      // how the original Ward / Street bug snuck back in. The
+      // persistent comment is here on purpose.
       try {
         const sellerProfile = await SellersApi.me();
         if (sellerProfile) {
           setSession((prev) => {
             if (!prev || String(prev.user.id) !== String(sellerProfile.sellerId)) return prev;
             const u = prev.user;
+            const text = (v: string | null | undefined): string | undefined =>
+              v === null || v === undefined || v === "" ? undefined : v;
+            const num = (v: number | null | undefined): number | undefined =>
+              typeof v === "number" && Number.isFinite(v) ? v : undefined;
             const address = sellerProfile.location || u.address;
-            const district = sellerProfile.district ?? u.district;
-            const region = sellerProfile.region ?? u.region;
-            const lat = typeof sellerProfile.lat === "number" ? sellerProfile.lat : u.lat;
-            const lng = typeof sellerProfile.lng === "number" ? sellerProfile.lng : u.lng;
+            const district = text(sellerProfile.district) ?? u.district;
+            const region = text(sellerProfile.region) ?? u.region;
+            const ward = text(sellerProfile.ward) ?? u.ward;
+            const street = text(sellerProfile.street) ?? u.street;
+            const lat = num(sellerProfile.lat) ?? u.lat;
+            const lng = num(sellerProfile.lng) ?? u.lng;
             const businessName = sellerProfile.businessName || u.businessName;
+            const rating =
+              typeof sellerProfile.rating === "number"
+                ? sellerProfile.rating
+                : u.rating;
 
             if (
               u.address === address &&
               u.district === district &&
               u.region === region &&
+              u.ward === ward &&
+              u.street === street &&
               u.lat === lat &&
               u.lng === lng &&
-              u.businessName === businessName
+              u.businessName === businessName &&
+              u.rating === rating
             ) {
               return prev;
             }
@@ -799,8 +821,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 address,
                 district,
                 region,
+                ward,
+                street,
                 lat,
                 lng,
+                rating,
               },
             };
           });
@@ -929,9 +954,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             "Mock registration is disabled. Register through the live API.",
           );
         }
-        // Strip the optional seller business address out of the
-        // auth/register payload — the auth endpoint only accepts the
-        // base identity fields per the backend's RegisterRequest.
+        // Atomic registration. The backend's `POST /api/auth/register`
+        // accepts the optional seller business fields and writes the
+        // `users` row and the `seller_profiles` row inside the same
+        // `@Transactional` boundary — they commit together or not at
+        // all. The previous flow made two calls and only
+        // `console.warn`-ed if the second failed, which left an
+        // account behind a "Welcome aboard!" with no persisted
+        // address. One call, one transaction.
         const { user, token } = await AuthApi.register({
           fullName: input.fullName,
           username: input.username,
@@ -939,72 +969,39 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           phone: input.phone,
           password: input.password,
           role: input.role,
+          // Seller-only optional fields. Backend ignores them for
+          // non-seller roles, so we always pass them.
+          businessName: input.businessName,
+          businessRegion: input.businessRegion,
+          businessDistrict: input.businessDistrict,
+          businessWard: input.businessWard,
+          businessStreet: input.businessStreet,
+          businessAddress: input.businessAddress,
+          businessLat: input.businessLat ?? undefined,
+          businessLng: input.businessLng ?? undefined,
         });
         setTokenProvider(() => token);
-        setSession({ user, token });
-        // For SELLER registrations with a captured business address,
-        // follow up with the seller-profile upsert so the address
-        // lives on `seller_profiles` (the table the customer "Nearby
-        // Sellers" pipeline filters against). The profile upsert is a
-        // best-effort follow-on: a geocoding failure here must not
-        // un-create the account we just made.
-        if (input.role === "seller") {
-          const hasAnyAddressField =
-            input.businessName ||
-            input.businessAddress ||
-            input.businessRegion ||
-            input.businessDistrict ||
-            input.businessWard ||
-            input.businessStreet;
-          if (hasAnyAddressField) {
-            try {
-              const savedSeller = await SellersApi.updateMe({
-                businessName: input.businessName ?? input.fullName,
-                location:
-                  input.businessAddress ??
-                  [
-                    input.businessStreet,
-                    input.businessWard,
-                    input.businessDistrict,
-                    input.businessRegion,
-                  ]
-                    .filter(Boolean)
-                    .join(", "),
-                phone: input.phone,
-                region: input.businessRegion ?? undefined,
-                district: input.businessDistrict ?? undefined,
-                lat:
-                  typeof input.businessLat === "number"
-                    ? input.businessLat
-                    : undefined,
-                lng:
-                  typeof input.businessLng === "number"
-                    ? input.businessLng
-                    : undefined,
-              });
-              const text = (v?: string | null) => (v ? v : undefined);
-              const num = (v?: number | null) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-              const updatedUser: User = {
-                ...user,
-                address: text(savedSeller.location) ?? input.businessAddress,
-                district: text(savedSeller.district) ?? input.businessDistrict,
-                region: text(savedSeller.region) ?? input.businessRegion,
-                ward: text(savedSeller.ward) ?? input.businessWard,
-                street: text(savedSeller.street) ?? input.businessStreet,
-                lat: num(savedSeller.lat) ?? input.businessLat ?? undefined,
-                lng: num(savedSeller.lng) ?? input.businessLng ?? undefined,
-              };
-              setSession({ user: updatedUser, token });
-              return updatedUser;
-            } catch (err) {
-              console.warn(
-                "[register] seller-profile upsert failed:",
-                (err as Error)?.message,
-              );
-            }
-          }
-        }
-        return user;
+        // Seed `user.ward` / `user.street` (and the other granular
+        // fields) from the typed input so the post-registration
+        // session carries them without waiting for `refresh()` to
+        // round-trip. The auth response includes the resolved
+        // `user.address`, so anything typed or geocoded is reflected
+        // immediately.
+        const text = (v?: string | null) => (v ? v : undefined);
+        const num = (v?: number | null) =>
+          typeof v === "number" && Number.isFinite(v) ? v : undefined;
+        const seeded: User = {
+          ...user,
+          address: user.address ?? input.businessAddress,
+          district: text(user.district) ?? input.businessDistrict,
+          region: text(user.region) ?? input.businessRegion,
+          ward: text(input.businessWard) ?? user.ward,
+          street: text(input.businessStreet) ?? user.street,
+          lat: num(input.businessLat) ?? user.lat,
+          lng: num(input.businessLng) ?? user.lng,
+        };
+        setSession({ user: seeded, token });
+        return seeded;
       });
       return data;
     },

@@ -40,7 +40,7 @@ import { MapPickerSheet } from "../../src/components/MapPickerSheet";
 import { ShopMapPreview } from "../../src/components/ShopMapPreview";
 import { Picker } from "@react-native-picker/picker";
 import type { User } from "../../constants/types";
-import { ZANZIBAR_REGIONS, getDistricts, regionLabel, districtLabel, matchRegionValue, matchDistrictValue } from "../../constants/zanzibar";
+import { ZANZIBAR_REGIONS, composeZanzibarAddress, getDistricts, matchRegionValue, matchDistrictValue } from "../../constants/zanzibar";
 
 /** Field row used inside the profile. */
 function Field(props: {
@@ -122,15 +122,15 @@ export default function SellerProfile() {
       return {
         name: "—",
         address: "—",
-        hours: "Mon–Sat, 08:00 – 20:00",
       };
     }
-    const rLabel = user.region ? regionLabel(user.region) : "";
-    const dLabel = user.region && user.district ? districtLabel(user.region, user.district) : (user.district ?? "");
-    const composed = [user.street, user.ward, dLabel, rLabel]
-      .map((p) => (p ?? "").trim())
-      .filter(Boolean)
-      .join(", ");
+    const composed = composeZanzibarAddress({
+      street: user.street,
+      ward: user.ward,
+      districtKey: user.district,
+      regionKey: user.region,
+      regionForDistrict: user.region,
+    });
     const displayAddress =
       user.address?.trim() ||
       composed ||
@@ -141,7 +141,6 @@ export default function SellerProfile() {
     return {
       name: shopName,
       address: displayAddress,
-      hours: "Mon–Sat, 08:00 – 20:00",
     };
   }, [user, permit]);
 
@@ -205,13 +204,6 @@ export default function SellerProfile() {
               location on the map.
             </Text>
           )}
-          <Divider />
-          <Field
-            icon="time-outline"
-            label="Working Hours"
-            value={business.hours}
-            tint={Colors.info}
-          />
           <Divider />
           <View style={styles.field}>
             <View
@@ -288,23 +280,20 @@ export default function SellerProfile() {
           />
         </Card>
 
-        {/* Stats summary */}
+        {/* Stats summary — Rating is the only stat we have a real number
+           for (mirrored from `SellerProfile.rating` onto `user.rating`
+           by StoreContext.refresh()). Customers / Orders / Working
+           hours used to be hardcoded placeholders that looked like
+           real metrics — they were deleted so the only tile shown is
+           the one backed by actual data. */}
         <Text style={styles.sectionTitle}>At a Glance</Text>
         <View style={styles.statsRow}>
           <View style={[styles.statBox, { backgroundColor: "#CCFBF1" }]}>
             <Ionicons name="star" size={20} color={Colors.warning} />
-            <Text style={styles.statValue}>4.7</Text>
+            <Text style={styles.statValue}>
+              {typeof user?.rating === "number" ? user.rating.toFixed(1) : "—"}
+            </Text>
             <Text style={styles.statLabel}>Rating</Text>
-          </View>
-          <View style={[styles.statBox, { backgroundColor: "#DBEAFE" }]}>
-            <Ionicons name="people-outline" size={20} color={Colors.info} />
-            <Text style={[styles.statValue, { color: Colors.info }]}>240+</Text>
-            <Text style={styles.statLabel}>Customers</Text>
-          </View>
-          <View style={[styles.statBox, { backgroundColor: "#DCFCE7" }]}>
-            <Ionicons name="bag-check-outline" size={20} color={Colors.success} />
-            <Text style={[styles.statValue, { color: Colors.success }]}>1.2k</Text>
-            <Text style={styles.statLabel}>Orders</Text>
           </View>
         </View>
 
@@ -488,14 +477,12 @@ function EditProfileModal({
   const [fullName, setFullName] = useState(user?.fullName ?? "");
   const [phone, setPhone] = useState(user?.phone ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
-  const [address, setAddress] = useState(user?.address ?? "");
 
   React.useEffect(() => {
     if (visible && user) {
       setFullName(user.fullName);
       setPhone(user.phone);
       setEmail(user.email);
-      setAddress(user.address ?? "");
     }
   }, [visible, user]);
 
@@ -508,7 +495,6 @@ function EditProfileModal({
       fullName: fullName.trim(),
       phone: phone.trim(),
       email: email.trim(),
-      address: address.trim() || undefined,
     });
   };
 
@@ -540,13 +526,12 @@ function EditProfileModal({
               autoCapitalize="none"
               keyboardType="email-address"
             />
-            <AppInput
-              label="Business Address"
-              value={address}
-              onChangeText={setAddress}
-              multiline
-              numberOfLines={2}
-            />
+            {/* Business Address is edited through the dedicated
+                `EditBusinessAddressModal` (the "Business Information"
+                card opens it). The previous duplicate input here
+                routed through PATCH /api/customers/me which rejects
+                Role.SELLER, so saves silently no-op'd — deleting it
+                removes the dead UI. */}
           </ScrollView>
 
           <View style={styles.modalActions}>
@@ -729,10 +714,13 @@ function EditBusinessAddressModal({
 
   const composed = useMemo(
     () =>
-      [street, ward, districtLabel(region, district), regionLabel(region)]
-        .map((p) => (p ?? "").trim())
-        .filter(Boolean)
-        .join(", "),
+      composeZanzibarAddress({
+        street,
+        ward,
+        districtKey: district,
+        regionKey: region,
+        regionForDistrict: region,
+      }),
     [street, ward, district, region],
   );
   const effectiveAddress = fullAddress.trim() || composed;

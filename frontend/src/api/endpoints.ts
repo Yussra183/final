@@ -63,6 +63,18 @@ export interface RegisterPayload {
   phone: string;
   password: string;
   role: UserRole;
+  // ---- Optional seller business fields (V12) ----
+  // Forwarded by StoreContext.register() for SELLER registrations.
+  // The backend ignores them for non-seller roles and persists them
+  // atomically with the `users` row inside the same transaction.
+  businessName?: string;
+  businessRegion?: string;
+  businessDistrict?: string;
+  businessWard?: string;
+  businessStreet?: string;
+  businessAddress?: string;
+  businessLat?: number;
+  businessLng?: number;
 }
 
 export const AuthApi = {

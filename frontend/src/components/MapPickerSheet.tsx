@@ -49,6 +49,12 @@ import { AppInput } from "./AppInput";
 import { Card } from "./Card";
 import { resolveCurrentDeviceCoords } from "../lib/deviceLocation";
 import { getMaterialisedPicker } from "./mapPickerHtml";
+import {
+  ERROR_MESSAGES,
+  isFiniteNumber,
+  parseBridgeMessage,
+  type ErrorCode,
+} from "./mapPickerBridge";
 
 // `getMaterialisedPicker()` copies the bundled Leaflet picker assets
 // (HTML, CSS, JS) from the bundle into `Paths.cache + 'map-picker/'`
@@ -65,13 +71,6 @@ export interface PickedCoords {
   lng: number;
 }
 
-interface BridgeMessage {
-  type: "READY" | "PIN" | "ERROR";
-  lat?: number;
-  lng?: number;
-  message?: string;
-}
-
 interface MapPickerSheetProps {
   visible: boolean;
   onClose: () => void;
@@ -86,10 +85,6 @@ interface MapPickerSheetProps {
 }
 
 type Mode = "pick" | "type";
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === "number" && Number.isFinite(v);
-}
 
 export function MapPickerSheet({
   visible,
@@ -121,8 +116,18 @@ export function MapPickerSheet({
   // We keep the ref in lockstep with the state via a single setter
   // helper so callers cannot drift the two apart.
   const readyRef = useRef(false);
+  // Handle for the loadEnd grace-period timer that surfaces
+  // "The map could not start" after 3.5 s of silence. Held in a ref
+  // so we can clear it on READY / unmount / close — the previous
+  // version leaked it and called setPickerError on an unmounted
+  // component.
+  const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setReadyState = useCallback((v: boolean) => {
     readyRef.current = v;
+    if (v && graceTimerRef.current) {
+      clearTimeout(graceTimerRef.current);
+      graceTimerRef.current = null;
+    }
     setReady(v);
   }, []);
   // Active mode for the three chips.
@@ -172,6 +177,19 @@ export function MapPickerSheet({
     setLocationHint(null);
     setMode("pick");
   }, [visible, initialLat, initialLng, setReadyState]);
+
+  // Cancel any pending grace timer on unmount or when the modal
+  // closes. Without this, a slow boot that completes after the
+  // modal has been dismissed would still call setPickerError on an
+  // unmounted component.
+  useEffect(() => {
+    return () => {
+      if (graceTimerRef.current) {
+        clearTimeout(graceTimerRef.current);
+        graceTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Build the picker HTML in memory and store it for the WebView.
   // The build is synchronous (CSS + JS are already in the JS bundle
@@ -244,13 +262,8 @@ export function MapPickerSheet({
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
-      let parsed: BridgeMessage | null = null;
-      try {
-        parsed = JSON.parse(event.nativeEvent.data) as BridgeMessage;
-      } catch {
-        return;
-      }
-      if (!parsed || typeof parsed !== "object") return;
+      const parsed = parseBridgeMessage(event.nativeEvent.data);
+      if (!parsed) return;
       switch (parsed.type) {
         case "READY":
           setReadyState(true);
@@ -264,29 +277,40 @@ export function MapPickerSheet({
           // touching the map.
           break;
         case "PIN":
-          if (isFiniteNumber(parsed.lat) && isFiniteNumber(parsed.lng)) {
-            setPin({ lat: parsed.lat, lng: parsed.lng });
-            // Mirror the typed-coordinate inputs so they stay in sync
-            // with the map in either direction.
-            setLatText(String(parsed.lat));
-            setLngText(String(parsed.lng));
-            // The HTML only emits PIN from user gestures (tap / drag)
-            // now that the boot seed no longer auto-posts. Mark the
-            // pin as user-intended so Confirm can enable.
-            setUserInteracted(true);
-          }
+          setPin({ lat: parsed.lat, lng: parsed.lng });
+          // Mirror the typed-coordinate inputs so they stay in sync
+          // with the map in either direction.
+          setLatText(String(parsed.lat));
+          setLngText(String(parsed.lng));
+          // The HTML only emits PIN from user gestures (tap / drag)
+          // now that the boot seed no longer auto-posts. Mark the
+          // pin as user-intended so Confirm can enable.
+          setUserInteracted(true);
           break;
-        case "ERROR":
+        case "ERROR": {
           // Surface Leaflet load failures to the picker UI rather than
           // silently logging — the previous setup had the picker
           // hanging on its skeleton whenever Leaflet 404'd.
           console.warn("[MapPickerSheet] bridge error:", parsed.message);
-          if (parsed.message) {
-            setPickerError(parsed.message);
-          }
+          // Replace the loading overlay with an actionable message
+          // when we know the failure class. For TILE_ERROR, keep the
+          // Current Location and Type Coordinates chips usable —
+          // tiles are only one piece of the picker surface, and the
+          // user can still pick a coordinate via GPS or by typing.
+          const code = parsed.code as ErrorCode | undefined;
+          const message =
+            code && ERROR_MESSAGES[code]
+              ? ERROR_MESSAGES[code]
+              : parsed.message;
+          setPickerError(message);
           break;
+        }
       }
     },
+    // `setReadyState` and the local setters are stable React
+    // identities; including them would only cause this callback to
+    // be torn down on every render without changing behavior.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
@@ -475,19 +499,49 @@ export function MapPickerSheet({
           </View>
         ) : (
           <View style={styles.mapContainer}>
-            {pickerError ? (
+            {/* Loading spinner sits at zIndex 5. The error overlay is
+                zIndex 10 so it ALWAYS paints above the spinner, even
+                when the picker has been failing for several seconds
+                — the previous JSX order meant whichever overlay
+                mounted later won the paint, which is fragile. */}
+            {!ready && !pickerError ? (
               <View style={styles.loadingOverlay}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading map…</Text>
+              </View>
+            ) : null}
+            {pickerError ? (
+              <View style={styles.errorOverlay}>
                 <Ionicons
                   name="alert-circle-outline"
                   size={32}
                   color={Colors.danger}
                 />
-                <Text style={styles.loadingText}>{pickerError}</Text>
-              </View>
-            ) : !ready ? (
-              <View style={styles.loadingOverlay}>
-                <ActivityIndicator size="large" color={Colors.primary} />
-                <Text style={styles.loadingText}>Loading map…</Text>
+                <Text style={styles.errorText}>{pickerError}</Text>
+                {/*
+                  TILE_ERROR keeps the rest of the picker usable —
+                  the user can still pick via GPS or by typing
+                  coordinates, so we offer a Retry that simply
+                  re-mounts the WebView. SCRIPT_ERROR gets no retry
+                  because the page is non-functional until reopened.
+                */}
+                <Pressable
+                  style={styles.errorRetry}
+                  onPress={() => {
+                    setPickerError(null);
+                    setReadyState(false);
+                    setPicker(null);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading map"
+                >
+                  <Ionicons
+                    name="refresh-outline"
+                    size={14}
+                    color={Colors.primary}
+                  />
+                  <Text style={styles.errorRetryLabel}>Retry</Text>
+                </Pressable>
               </View>
             ) : null}
             {picker ? (
@@ -539,7 +593,9 @@ export function MapPickerSheet({
                 const url = e.nativeEvent?.url;
                 if (typeof status === "number" && status >= 400) {
                   setPickerError(
-                    `Map resource failed (HTTP ${status}${url ? `): ${url}` : ")"}`,
+                    `Map resource failed (HTTP ${status})${
+                      url ? `: ${url}` : ""
+                    }`,
                   );
                 }
               }}
@@ -555,13 +611,15 @@ export function MapPickerSheet({
                 // surface and taps the system back gesture to get
                 // out. Surface that as a clear error after a
                 // short grace period so the picker never appears
-                // to vanish silently.
+                // to vanish silently. The previous version leaked
+                // this timer (it never cleared on unmount or
+                // READY) and could setState on an unmounted
+                // component. We now stash the handle and clear it
+                // when READY arrives or the modal closes.
                 if (!ready) {
-                  setTimeout(() => {
+                  graceTimerRef.current = setTimeout(() => {
                     if (!readyRef.current) {
-                      setPickerError(
-                        "The map could not start. Please close and try again.",
-                      );
+                      setPickerError(ERROR_MESSAGES.SCRIPT_ERROR);
                     }
                   }, 3500);
                 }
@@ -727,6 +785,46 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     fontWeight: "600",
+  },
+  // Error overlay sits at zIndex 10, above the loading overlay
+  // (zIndex 5) and the WebView itself. Padded more than the loading
+  // overlay so multi-line error copy doesn't crash into the edges.
+  errorOverlay: {
+    position: "absolute",
+    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    zIndex: 10,
+    backgroundColor: Colors.background,
+  },
+  errorText: {
+    fontSize: FontSize.sm,
+    color: Colors.text,
+    fontWeight: "600",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  errorRetry: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    marginTop: Spacing.xs,
+  },
+  errorRetryLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.primary,
+    fontWeight: "800",
   },
   typeBody: {
     flex: 1,

@@ -18,17 +18,27 @@
 
   How this file is shipped
   ------------------------
-  This HTML is NOT shipped as-is to the WebView. At build time,
+  This HTML is NOT shipped as-is to the WebView, and it is NOT a
+  standalone-runnable page — it is a TEMPLATE. At build time,
   `scripts/build-map-picker-inline.js` reads this file along with the
-  sibling `leaflet.css` and `leaflet.script`, then emits
+  sibling `leaflet.css` and `leaflet.script`, substitutes them into the
+  `{{PICKER_CSS}}` / `{{PICKER_JS}}` placeholders, and emits
   `src/components/mapPickerInline.ts` with the three files as string
-  constants and the CSS / JS substituted into the placeholders below
-  (`{{PICKER_CSS}}`, `{{PICKER_JS}}`). At runtime, the picker writes
-  the self-contained HTML to `Paths.cache/map-picker/` and the WebView
-  loads it via `file://` — no Metro / asset-registry involvement.
+  constants. At runtime `mapPickerHtml.ts` assembles them in memory and
+  hands the result to `WebView.source.html` with an `https://localhost/`
+  baseUrl — no Metro asset registry, no filesystem, no `file://`.
 
-  Why the {{...}} placeholders? They mark where the generator should
-  paste the inlined CSS and JS. Don't remove them.
+  The placeholders sit on their own lines, NOT inside comments. This is
+  load-bearing. Wrapping `{{PICKER_JS}}` in a `//` comment swallows only
+  the first line of Leaflet's multi-line banner and lets the rest escape
+  as raw garbage, which is a syntax error that kills the whole script
+  block — the map then never boots, on every device, online or off.
+  Wrapping `{{PICKER_CSS}}` in a block comment breaks at the first of
+  the 30 comment-close sequences inside leaflet.css. The generator has
+  an automated guard against both; don't reintroduce them.
+
+  Run after editing this file or anything under `assets/map-picker/`:
+      node scripts/build-map-picker-inline.js --write
 
   Tile layer is OSM (`tile.openstreetmap.org`). Free for dev and very
   low-volume demos — see the project plan for the production migration
@@ -43,7 +53,12 @@
     content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
   <title>Map picker</title>
   <style>
-    /* {{PICKER_CSS}} */
+/* The generator replaces the bare token below with the whole of
+   leaflet.css. It MUST NOT be wrapped in a CSS comment: leaflet.css
+   contains 30 occurrences of the comment-close sequence, the first of
+   which would terminate the wrapper early and leak the remainder into
+   the stylesheet as garbage. Keep it on its own line, uncommented. */
+{{PICKER_CSS}}
 
     html,
     body,
@@ -100,7 +115,56 @@
   <div id="map" class="hidden"></div>
 
   <script>
-    // {{PICKER_JS}}
+    // ---- Out-of-band error probe -----------------------------------
+    // This block MUST stay in its own <script> tag, above the one
+    // holding the Leaflet placeholder. It is the only code that still
+    // runs when the main page script fails to parse.
+    //
+    // Rationale: a syntax error anywhere in an inline <script> kills the
+    // ENTIRE block — boot(), postReady(), the "Leaflet failed to load"
+    // reporter, all of it. That is exactly the failure this file used to
+    // have, and from RN it was indistinguishable from a hang: no READY
+    // ever arrived and the sheet fell back to a 3.5s timeout with a
+    // generic message. `window.onerror` fires for parse errors in OTHER
+    // script blocks, so registering it in its own <script> tag first
+    // means a future regression reports itself with file/line/stack
+    // instead of silently timing out.
+    (function () {
+      function report(payload) {
+        try {
+          if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+            window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+          }
+        } catch (e) {
+          /* bridge not up yet — nothing more we can do from here */
+        }
+      }
+      window.addEventListener("error", function (e) {
+        report({
+          type: "ERROR",
+          code: "SCRIPT_ERROR",
+          message: (e && e.message) || "Unknown script error",
+          lineno: e && e.lineno,
+        });
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        report({
+          type: "ERROR",
+          code: "SCRIPT_ERROR",
+          message: "Unhandled rejection: " + ((e && e.reason && e.reason.message) || e.reason),
+        });
+      });
+    })();
+  </script>
+
+  <script>
+/* The generator replaces the bare token below with the whole of
+   leaflet.script. It MUST NOT be wrapped in a `//` line comment:
+   Leaflet opens with a multi-line banner comment, so a leading `//`
+   would comment out only its first line and let the rest escape as raw
+   garbage — a syntax error that kills this entire script block. Keep it
+   on its own line, uncommented. */
+{{PICKER_JS}}
 
     "use strict";
 
@@ -230,11 +294,35 @@
       });
       window.__MAP__ = map;
 
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      var tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution:
           '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       }).addTo(map);
+
+      // Tiles are the ONLY part of this page that needs the network —
+      // Leaflet itself is bundled. Report the first failure so RN can
+      // say "tiles unavailable, check your connection" instead of
+      // implying the map itself is broken. Latched: a viewport pulls
+      // dozens of tiles and a dead connection would otherwise fire this
+      // on every one of them.
+      var tileErrorReported = false;
+      tiles.on("tileerror", function () {
+        if (tileErrorReported) return;
+        tileErrorReported = true;
+        if (!window.ReactNativeWebView || !window.ReactNativeWebView.postMessage) return;
+        try {
+          window.ReactNativeWebView.postMessage(
+            JSON.stringify({
+              type: "ERROR",
+              code: "TILE_ERROR",
+              message: "Map tiles unavailable",
+            }),
+          );
+        } catch (err) {
+          /* silent */
+        }
+      });
 
       // Draggable pin — initialised without coordinates so we don't
       // drop a marker at (0, 0) before the seed arrives.
