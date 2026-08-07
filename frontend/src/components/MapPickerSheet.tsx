@@ -504,7 +504,7 @@ export function MapPickerSheet({
                 // full rationale.
                 source={{
                   html: picker.html,
-                  baseUrl: picker.baseUrl,
+                  baseUrl: picker.baseUrl || undefined,
                 }}
                 style={styles.webview}
                 originWhitelist={["*"]}
