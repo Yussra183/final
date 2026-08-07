@@ -182,7 +182,7 @@ export default function SellerDashboard() {
         // Silent — the pull-to-refresh surface gives the seller a manual
         // retry path; we don't want to surface a toast every focus.
       });
-    }, [refresh]),
+    }, []),
   );
 
   const user = session?.user;

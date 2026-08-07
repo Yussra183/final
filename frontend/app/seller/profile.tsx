@@ -106,12 +106,8 @@ export default function SellerProfile() {
   // focus-refresh pattern the dashboard uses.
   useFocusEffect(
     useCallback(() => {
-      fetchMyPermit().catch(() => {
-        // Silent — the banner + status pill already handle the "no
-        // permit yet" state, and the user can pull-to-refresh from
-        // sibling screens to retry.
-      });
-    }, [fetchMyPermit]),
+      fetchMyPermit().catch(() => {});
+    }, []),
   );
 
   // Business metadata is read straight from the signed-in user's profile

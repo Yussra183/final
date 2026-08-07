@@ -725,20 +725,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       try {
         const permit = await PermitsApi.myPermit();
         if (permit) {
-          setSellerPermits((prev) => ({ ...prev, [permit.sellerId]: permit }));
-          // Mirror the latest status onto session.user for the layout banner.
-          setSession((prev) =>
-            prev && prev.user.id === permit.sellerId
-              ? {
-                  ...prev,
-                  user: {
-                    ...prev.user,
-                    permitStatus: permit.status,
-                    isActive: permit.status === "approved",
-                  },
-                }
-              : prev,
-          );
+          setSellerPermits((prev) => {
+            const existing = prev[permit.sellerId];
+            if (existing && existing.status === permit.status && existing.submittedAt === permit.submittedAt) {
+              return prev;
+            }
+            return { ...prev, [permit.sellerId]: permit };
+          });
+          setSession((prev) => {
+            if (!prev || prev.user.id !== permit.sellerId) return prev;
+            const isApproved = permit.status === "approved";
+            if (prev.user.permitStatus === permit.status && prev.user.isActive === isApproved) {
+              return prev;
+            }
+            return {
+              ...prev,
+              user: {
+                ...prev.user,
+                permitStatus: permit.status,
+                isActive: isApproved,
+              },
+            };
+          });
         }
       } catch (err) {
         if (__DEV__) {

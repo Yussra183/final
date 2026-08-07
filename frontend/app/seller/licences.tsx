@@ -41,11 +41,8 @@ export default function SellerLicences() {
   // seller to sign out and back in.
   useFocusEffect(
     useCallback(() => {
-      fetchMyPermit().catch(() => {
-        // Silent — the section's status row + the store's error slice
-        // already surface failures.
-      });
-    }, [fetchMyPermit]),
+      fetchMyPermit().catch(() => {});
+    }, []),
   );
 
   return (
