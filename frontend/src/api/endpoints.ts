@@ -139,8 +139,12 @@ export const ProductsApi = {
     api.get<GasProduct[]>(`/api/products?sellerId=${encodeURIComponent(sellerId)}`),
   create: (body: Omit<GasProduct, "id">) =>
     api.post<GasProduct>("/api/products", body),
+  update: (id: string, patch: Partial<GasProduct>) =>
+    api.put<GasProduct>(`/api/products/${id}`, patch),
   updateStock: (id: string, stock: number) =>
     api.patch<GasProduct>(`/api/products/${id}/stock`, { stock }),
+  delete: (id: string) =>
+    api.delete<void>(`/api/products/${id}`),
 };
 
 // ---- Seller profiles --------------------------------------------------

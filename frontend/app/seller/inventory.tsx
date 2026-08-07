@@ -300,7 +300,9 @@ export default function SellerInventory() {
     session,
     products,
     addProduct,
+    updateProduct,
     updateProductStock,
+    deleteProduct,
   } = useStore();
 
   const [sizeFilter, setSizeFilter] = useState<SizeFilter>("all");
@@ -339,19 +341,7 @@ export default function SellerInventory() {
 
   const handleEditConfirm = (patch: { price: number; description: string }) => {
     if (!editTarget) return;
-    // No dedicated "edit product" action in the store today, so we
-    // recreate the entry. Future backend hook: ProductsApi.update(id, patch).
-    addProduct({
-      sellerId: editTarget.sellerId,
-      sellerName: editTarget.sellerName,
-      name: editTarget.name,
-      size: editTarget.size,
-      price: patch.price,
-      stock: editTarget.stock,
-      image: editTarget.image,
-      description: patch.description,
-      category: editTarget.category,
-    });
+    updateProduct(editTarget.id, patch);
     Alert.alert(
       "Saved",
       `Pricing and description updated for ${editTarget.size} ${editTarget.name}.`,
@@ -369,9 +359,7 @@ export default function SellerInventory() {
           text: "Delete",
           style: "destructive",
           onPress: () => {
-            // Reset stock to 0 — until a dedicated delete API is wired
-            // through, this keeps the product visible but unavailable.
-            updateProductStock(p.id, 0);
+            deleteProduct(p.id);
             Alert.alert("Removed", `${p.size} ${p.name} has been removed.`);
           },
         },

@@ -68,6 +68,33 @@ public class ProductService {
         return ProductDto.from(saved, sellerName);
     }
 
+    @Transactional
+    public ProductDto updateProduct(Long productId, java.math.BigDecimal newPrice, String newDescription) {
+        ProductEntity product = productRepository.findById(productId)
+                .orElseThrow(() -> new com.project.gas_delivery.auth.exception.ResourceNotFoundException(
+                        "Product " + productId + " not found."));
+        if (newPrice != null && newPrice.compareTo(java.math.BigDecimal.ZERO) > 0) {
+            product.setPrice(newPrice);
+        }
+        if (newDescription != null) {
+            product.setDescription(newDescription.trim());
+        }
+        ProductEntity saved = productRepository.save(product);
+        String sellerName = userRepository.findById(saved.getSellerId())
+                .map(User::getFullName)
+                .orElse(null);
+        return ProductDto.from(saved, sellerName);
+    }
+
+    @Transactional
+    public void deleteProduct(Long productId) {
+        ProductEntity product = productRepository.findById(productId)
+                .orElseThrow(() -> new com.project.gas_delivery.auth.exception.ResourceNotFoundException(
+                        "Product " + productId + " not found."));
+        product.setActive(false);
+        productRepository.save(product);
+    }
+
     private List<ProductDto> map(List<ProductEntity> entities) {
         if (entities.isEmpty()) return List.of();
 

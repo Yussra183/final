@@ -181,7 +181,9 @@ interface StoreShape {
     riderName: string,
   ) => Promise<void>;
   addProduct: (p: Omit<GasProduct, "id">) => Promise<void>;
+  updateProduct: (productId: string, patch: Partial<GasProduct>) => Promise<void>;
   updateProductStock: (productId: string, stock: number) => Promise<void>;
+  deleteProduct: (productId: string) => Promise<void>;
   requestRestock: (
     r: Omit<RestockRequest, "id" | "createdAt" | "status">,
   ) => Promise<void>;
@@ -1404,6 +1406,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setProducts((prev) => [created, ...prev]);
   }, []);
 
+  const updateProduct = useCallback(
+    async (productId: string, patch: Partial<GasProduct>) => {
+      if (USE_MOCK) {
+        setProducts((prev) =>
+          prev.map((p) => (p.id === productId ? { ...p, ...patch } : p)),
+        );
+        return;
+      }
+      const updated = await ProductsApi.update(productId, patch);
+      setProducts((prev) => prev.map((p) => (p.id === productId ? updated : p)));
+    },
+    [],
+  );
+
   const updateProductStock = useCallback(
     async (productId: string, stock: number) => {
       if (USE_MOCK) {
@@ -1414,6 +1430,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
       const updated = await ProductsApi.updateStock(productId, stock);
       setProducts((prev) => prev.map((p) => (p.id === productId ? updated : p)));
+    },
+    [],
+  );
+
+  const deleteProduct = useCallback(
+    async (productId: string) => {
+      if (USE_MOCK) {
+        setProducts((prev) => prev.filter((p) => p.id !== productId));
+        return;
+      }
+      await ProductsApi.delete(productId);
+      setProducts((prev) => prev.filter((p) => p.id !== productId));
     },
     [],
   );
@@ -2651,7 +2679,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateOrderStatus,
       assignRider,
       addProduct,
+      updateProduct,
       updateProductStock,
+      deleteProduct,
       requestRestock,
       updateRestockStatus,
       submitPermit,
@@ -2741,7 +2771,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateOrderStatus,
       assignRider,
       addProduct,
+      updateProduct,
       updateProductStock,
+      deleteProduct,
       requestRestock,
       updateRestockStatus,
       submitPermit,

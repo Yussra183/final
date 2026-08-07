@@ -70,6 +70,39 @@ public class ProductController {
         return productService.updateStock(id, stock);
     }
 
+    @org.springframework.web.bind.annotation.PutMapping("/{id}")
+    public ProductDto update(
+            HttpServletRequest request,
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body
+    ) {
+        Role role = AuthFilter.currentActorRole(request);
+        if (role != Role.SELLER) {
+            throw new com.project.gas_delivery.order.exception.NotAuthorizedException(
+                    "Only sellers can edit products.");
+        }
+        Object rawPrice = body.get("price");
+        java.math.BigDecimal price = null;
+        if (rawPrice != null) {
+            price = new java.math.BigDecimal(rawPrice.toString());
+        }
+        String description = (String) body.get("description");
+        return productService.updateProduct(id, price, description);
+    }
+
+    @org.springframework.web.bind.annotation.DeleteMapping("/{id}")
+    public void delete(
+            HttpServletRequest request,
+            @PathVariable Long id
+    ) {
+        Role role = AuthFilter.currentActorRole(request);
+        if (role != Role.SELLER) {
+            throw new com.project.gas_delivery.order.exception.NotAuthorizedException(
+                    "Only sellers can delete products.");
+        }
+        productService.deleteProduct(id);
+    }
+
     private static Long parseLong(String raw, String field) {
         try {
             return Long.parseLong(raw.trim());
