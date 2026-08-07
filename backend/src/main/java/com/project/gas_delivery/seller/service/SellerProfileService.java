@@ -224,7 +224,7 @@ public class SellerProfileService {
                     SellerProfileEntity created = new SellerProfileEntity(
                             actorId,
                             user.getFullName() + "'s Shop",
-                            "Stone Town, Zanzibar",
+                            "Address not set",
                             null,
                             null,
                             -6.1659,
