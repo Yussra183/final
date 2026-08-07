@@ -214,14 +214,27 @@ public class SellerProfileService {
         return Math.round(v * 10.0) / 10.0;
     }
 
-    /** Return the seller's own profile (or 404). */
-    @Transactional(readOnly = true)
+    /** Return the seller's own profile, lazily creating it if not present. */
+    @Transactional
     public SellerProfileDto me(Long actorId) {
-        SellerProfileEntity entity = sellerProfileRepository.findById(actorId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Seller profile not yet created — complete your permit application first."));
         User user = userRepository.findById(actorId)
                 .orElseThrow(() -> new ResourceNotFoundException("Seller " + actorId + " not found."));
+        SellerProfileEntity entity = sellerProfileRepository.findById(actorId)
+                .orElseGet(() -> {
+                    SellerProfileEntity created = new SellerProfileEntity(
+                            actorId,
+                            user.getFullName() + "'s Shop",
+                            "Stone Town, Zanzibar",
+                            null,
+                            null,
+                            -6.1659,
+                            39.1994,
+                            user.getPhone(),
+                            java.math.BigDecimal.ZERO,
+                            true
+                    );
+                    return sellerProfileRepository.save(created);
+                });
         return SellerProfileDto.from(entity, user.getFullName(), 0.0, new String[0]);
     }
 
