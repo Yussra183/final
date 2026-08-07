@@ -760,26 +760,40 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       try {
         const sellerProfile = await SellersApi.me();
         if (sellerProfile) {
-          setSession((prev) =>
-            prev && prev.user.id === String(sellerProfile.sellerId)
-              ? {
-                  ...prev,
-                  user: {
-                    ...prev.user,
-                    address: sellerProfile.location || prev.user.address,
-                    district:
-                      sellerProfile.district ?? prev.user.district,
-                    region: sellerProfile.region ?? prev.user.region,
-                    lat: typeof sellerProfile.lat === "number"
-                      ? sellerProfile.lat
-                      : prev.user.lat,
-                    lng: typeof sellerProfile.lng === "number"
-                      ? sellerProfile.lng
-                      : prev.user.lng,
-                  },
-                }
-              : prev,
-          );
+          setSession((prev) => {
+            if (!prev || String(prev.user.id) !== String(sellerProfile.sellerId)) return prev;
+            const u = prev.user;
+            const address = sellerProfile.location || u.address;
+            const district = sellerProfile.district ?? u.district;
+            const region = sellerProfile.region ?? u.region;
+            const lat = typeof sellerProfile.lat === "number" ? sellerProfile.lat : u.lat;
+            const lng = typeof sellerProfile.lng === "number" ? sellerProfile.lng : u.lng;
+            const businessName = sellerProfile.businessName || u.businessName;
+
+            if (
+              u.address === address &&
+              u.district === district &&
+              u.region === region &&
+              u.lat === lat &&
+              u.lng === lng &&
+              u.businessName === businessName
+            ) {
+              return prev;
+            }
+
+            return {
+              ...prev,
+              user: {
+                ...u,
+                businessName,
+                address,
+                district,
+                region,
+                lat,
+                lng,
+              },
+            };
+          });
         }
       } catch (err) {
         // 404 here == seller has not created a profile yet. Anything
@@ -867,12 +881,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // refresh() clears local API data and exits before issuing any request;
   // after login, the token-provider effect above has already installed the
   // bearer token used by every endpoint in the refresh.
+  const token = session?.token;
   useEffect(() => {
-    if (USE_MOCK) return;
+    if (USE_MOCK || !token) return;
     refresh().catch((err) => {
       setError(`Couldn't refresh data: ${(err as Error)?.message ?? "unknown error"}`);
     });
-  }, [session, refresh]);
+  }, [token, refresh]);
 
   // ---- Async wrapper ---------------------------------------------------
   const run = useAsync(setLoading, setError, setErrorCode);

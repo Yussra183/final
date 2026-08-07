@@ -82,6 +82,7 @@ export interface User {
    * Sellers" pipeline sorts approved sellers by their distance from
    * `lat` / `lng`, which the backend derives from `address` on save.
    */
+  businessName?: string;
   address?: string;
   district?: string;
   region?: string;
