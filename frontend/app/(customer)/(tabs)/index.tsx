@@ -1,30 +1,28 @@
 /**
- * Customer Home — Map-first dashboard.
+ * Customer Home — Map-first dashboard. Tab destination inside the
+ * bottom-tab navigator (`(customer)/(tabs)/_layout.tsx`).
  *
  * Architecture
  * ------------
- * - Map: full-bleed OpenStreetMap (`NearbyMap`) showing every nearby
- *   seller with finite lat/lng. Tap a pin → seller-details screen.
+ * - Map: full-bleed map showing every nearby seller with finite
+ *   lat/lng. Tap a pin → seller-details screen.
  * - Location: `useCustomerLocation` resolves device GPS first, then
- *   the saved profile address, then Zanzibar default. The map centres
- *   on the resolved coordinates.
+ *   the saved profile address, then Zanzibar default. The map
+ *   centres on the resolved coordinates and is framed so the user +
+ *   every nearby seller are visible at once.
  * - Floating buttons:
  *     • "Locate me" — re-runs the GPS resolver, recentres the map.
  *     • "List"     — opens a `Sheet` showing the same sellers in a
- *                    vertical list (a `Place Order`-free mirror of
- *                    the prior screen). Tap a row → seller details.
- * - Empty state: unchanged copy ("Set a delivery address on your
- *   profile…") when no sellers are visible.
- * - Per-row "Place Order" CTA was REMOVED in favour of the
- *   flow-through-the-details-screen path. The Home screen no longer
- *   goes directly to the order form; the seller details screen is
- *   the new entry point.
+ *                    vertical list. Tap a row → seller details.
+ * - Empty state: "Set a delivery address on your profile…" when no
+ *   sellers are visible.
  *
- * The header (drawer / notifications / logout) is unchanged.
+ * App bar is intentionally minimal: title + notification bell on the
+ * right. The drawer (and its hamburger) is gone; logout now lives
+ * inside the Profile tab.
  */
 import React, { useCallback, useMemo, useState } from "react";
 import {
-  Alert,
   FlatList,
   Pressable,
   StyleSheet,
@@ -33,37 +31,34 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
   Colors,
   FontSize,
   Radius,
   Spacing,
-} from "../../constants/colors";
-import { Card } from "../../src/components/Card";
-import { StatusPill } from "../../src/components/StatusPill";
-import { Sheet } from "../../src/components/Sheet";
+} from "../../../constants/colors";
+import { Card } from "../../../src/components/Card";
+import { StatusPill } from "../../../src/components/StatusPill";
+import { Sheet } from "../../../src/components/Sheet";
 import {
   NearbySellersMap,
   type NearbySellerMarker,
-} from "../../src/components/NearbySellersMap";
-import { PressableScale, PulseDot } from "../../src/components/MicroAnimations";
-import { useStore } from "../../src/store/StoreContext";
-import { useNearbySellers } from "../../src/hooks/useNearbySellers";
+} from "../../../src/components/NearbySellersMap";
+import { PressableScale, PulseDot } from "../../../src/components/MicroAnimations";
+import { useStore } from "../../../src/store/StoreContext";
+import { useNearbySellers } from "../../../src/hooks/useNearbySellers";
 import {
   UNGUJA_PLACES,
   nearestPlaceName,
-} from "../../src/lib/ungujaPlaces";
-import {
-  isFiniteNumber,
-} from "../../src/components/mapPickerBridge";
-import type { NearbySeller } from "../../src/utils/sellers";
+} from "../../../src/lib/ungujaPlaces";
+import { isFiniteNumber } from "../../../src/components/mapPickerBridge";
+import type { NearbySeller } from "../../../src/utils/sellers";
 
 export default function CustomerHome() {
   const router = useRouter();
-  const drawer = useNavigation<any>();
-  const { session, logout, getNotificationsForUser, sellers: storeSellers } =
+  const { session, getNotificationsForUser, sellers: storeSellers } =
     useStore();
 
   // Sourced from the live `GET /api/sellers` store slice.
@@ -104,24 +99,6 @@ export default function CustomerHome() {
   const unreadCount = user
     ? getNotificationsForUser(user.id).filter((n) => !n.read).length
     : 0;
-
-  const openDrawer = () => {
-    drawer.openDrawer?.();
-  };
-
-  const confirmLogout = () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Logout",
-        style: "destructive",
-        onPress: () => {
-          logout();
-          router.replace("/auth/login" as any);
-        },
-      },
-    ]);
-  };
 
   // ---- Markers derived from the recommendation list ------------------
   // Sellers without finite coords are dropped from the map (the plan
@@ -205,16 +182,11 @@ export default function CustomerHome() {
       edges={["top"]}
     >
       {/* ---------------- Header ---------------- */}
+      {/* Minimal app bar: title left-aligned, notification bell on the
+          right. The drawer and its hamburger are gone; logout lives in
+          the Profile tab. */}
       <View style={styles.header}>
-        <TouchableOpacity
-          accessibilityLabel="Open drawer menu"
-          style={styles.iconBtn}
-          onPress={openDrawer}
-        >
-          <Ionicons name="menu-outline" size={20} color={Colors.text} />
-        </TouchableOpacity>
-
-        <View style={styles.headerCenter}>
+        <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle}>Home</Text>
         </View>
 
@@ -233,14 +205,6 @@ export default function CustomerHome() {
               <PulseDot size={10} color={Colors.danger} />
             </View>
           ) : null}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          accessibilityLabel="Logout"
-          style={[styles.iconBtn, styles.logoutBtn]}
-          onPress={confirmLogout}
-        >
-          <Ionicons name="log-out-outline" size={20} color="#B91C1C" />
         </TouchableOpacity>
       </View>
 
@@ -536,10 +500,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  logoutBtn: {
-    backgroundColor: "#FEE2E2",
-    marginLeft: Spacing.xs,
-  },
   notifBtn: {
     backgroundColor: "#CCFBF1",
     marginLeft: Spacing.xs,
@@ -549,9 +509,9 @@ const styles = StyleSheet.create({
     top: -3,
     right: -3,
   },
-  headerCenter: {
+  headerTitleWrap: {
     flex: 1,
-    alignItems: "center",
+    alignItems: "flex-start",
   },
   headerTitle: {
     fontSize: FontSize.lg,

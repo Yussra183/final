@@ -3,52 +3,63 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { useNavigation, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import {
   Colors,
   FontSize,
   Radius,
   Spacing,
-} from "../../constants/colors";
-import { Card } from "../../src/components/Card";
-import { Avatar } from "../../src/components/Avatar";
-import { AppInput } from "../../src/components/AppInput";
-import { AppButton } from "../../src/components/AppButton";
-import { StatusPill } from "../../src/components/StatusPill";
-import { useStore } from "../../src/store/StoreContext";
-import { isEmail, isPhone } from "../../src/utils/validators";
-import { formatDate } from "../../src/utils/format";
+} from "../../../constants/colors";
+import { Card } from "../../../src/components/Card";
+import { Avatar } from "../../../src/components/Avatar";
+import { AppInput } from "../../../src/components/AppInput";
+import { AppButton } from "../../../src/components/AppButton";
+import { StatusPill } from "../../../src/components/StatusPill";
+import { PulseDot } from "../../../src/components/MicroAnimations";
+import { useStore } from "../../../src/store/StoreContext";
+import { isEmail, isPhone } from "../../../src/utils/validators";
+import { formatDate } from "../../../src/utils/format";
 
 /**
- * Customer Profile screen.
+ * Customer Profile — tab destination inside the bottom-tab navigator.
  *
- * Responsibilities:
- *   • Render the customer's profile information (photo, personal,
- *     location, account, security).
- *   • Let the customer edit their profile and address.
- *   • Persist the location tuple via `saveCustomerLocation`, which
- *     writes to `customer_profiles` through `PUT /api/customers/me`.
- *     The backend geocodes the address and returns coordinates, which
- *     the store merges onto `session.user` — that's what lets the Home
- *     screen's `useNearbySellers` hook query the nearby endpoint and
- *     rank sellers by real distance.
+ * A complete, inline-editable profile:
+ *   • Personal: fullName, username, phone, email
+ *   • Address: region, district, ward, street, fullAddress
+ *   • Account: registration date / status / id
+ *   • Security: change-password link
+ *   • Session: Log out (with confirmation)
  *
- * The saved location is loaded once after login (see the customer
- * branch of `refresh()` in StoreContext) and cached for the session, so
- * the customer is never asked to re-enter it.
+ * Edits persist through `updateProfile` (personal) and
+ * `saveCustomerLocation` (address, backend geocodes) — same calls the
+ * page used before the bottom-tab restructure.
+ *
+ * The Log out button replaces the in-app-bar logout that lived on
+ * the drawer-era Home screen. Tapping it clears the session via the
+ * store's `logout()` action and routes back to `/auth/login`.
  */
 export default function CustomerProfileScreen() {
   const router = useRouter();
-  const drawer = useNavigation<any>();
-  const { session, updateProfile, saveCustomerLocation } = useStore();
+  const {
+    session,
+    updateProfile,
+    saveCustomerLocation,
+    logout,
+    getNotificationsForUser,
+  } = useStore();
   const user = session?.user;
+  const unreadCount = user
+    ? getNotificationsForUser(user.id).filter((n) => !n.read).length
+    : 0;
 
   // ---- Form state -------------------------------------------------------
   // Seed from the signed-in user so the screen survives profile edits
@@ -130,10 +141,6 @@ export default function CustomerProfileScreen() {
       : "Active";
 
   // ---- Handlers ---------------------------------------------------------
-  const openDrawer = () => drawer.openDrawer?.();
-
-  const handleEditProfile = () => router.push("/(customer)/edit-profile" as any);
-
   const handleChangePassword = () =>
     router.push("/(customer)/change-password" as any);
 
@@ -144,6 +151,25 @@ export default function CustomerProfileScreen() {
       "Change Photo",
       "Photo upload will be available once the storage service is connected.",
     );
+  };
+
+  /**
+   * Log out with confirmation. Same destructive Alert pattern the Home
+   * screen used under the drawer; just relocated here because the
+   * app bar no longer hosts a logout button.
+   */
+  const handleLogout = () => {
+    Alert.alert("Logout", "Are you sure you want to logout?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: () => {
+          logout();
+          router.replace("/auth/login" as any);
+        },
+      },
+    ]);
   };
 
   const validate = (): Record<string, string> => {
@@ -216,25 +242,29 @@ export default function CustomerProfileScreen() {
       edges={["top"]}
     >
       {/* ---------------- Header ---------------- */}
+      {/* Minimal app bar: title left-aligned, notification bell on the
+          right — same pattern as the Home tab. The drawer and its
+          hamburger are gone; logout lives at the bottom of the screen. */}
       <View style={styles.header}>
-        <TouchableOpacity
-          accessibilityLabel="Open drawer menu"
-          style={styles.iconBtn}
-          onPress={openDrawer}
-        >
-          <Text style={styles.iconText}>☰</Text>
-        </TouchableOpacity>
-
-        <View style={styles.headerCenter}>
+        <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle}>My Profile</Text>
         </View>
 
         <TouchableOpacity
-          accessibilityLabel="Edit profile"
-          style={[styles.iconBtn, styles.editBtn]}
-          onPress={handleEditProfile}
+          accessibilityLabel="View notifications"
+          style={[styles.iconBtn, styles.notifBtn]}
+          onPress={() => router.push("/(customer)/notifications" as any)}
         >
-          <Text style={[styles.iconText, styles.editIcon]}>✎</Text>
+          <Ionicons
+            name="notifications-outline"
+            size={20}
+            color={Colors.primary}
+          />
+          {unreadCount > 0 ? (
+            <View style={styles.notifDotWrap}>
+              <PulseDot size={10} color={Colors.danger} />
+            </View>
+          ) : null}
         </TouchableOpacity>
       </View>
 
@@ -397,13 +427,27 @@ export default function CustomerProfileScreen() {
               leftIcon={<Text style={styles.btnEmoji}>🔒</Text>}
               onPress={handleChangePassword}
             />
-            <View style={{ height: Spacing.sm }} />
-            <AppButton
-              title="Update Profile"
-              variant="ghost"
-              leftIcon={<Text style={styles.btnEmoji}>✏️</Text>}
-              onPress={handleEditProfile}
-            />
+          </Card>
+
+          {/* ---------------- Log out ---------------- */}
+          <Text style={styles.sectionTitle}>Session</Text>
+          <Card style={styles.logoutCard}>
+            <Text style={styles.logoutHelper}>
+              Sign out of this device. You can sign back in any time
+              with your username and password.
+            </Text>
+            <Pressable
+              onPress={handleLogout}
+              style={({ pressed }) => [
+                styles.logoutBtn,
+                pressed && styles.logoutBtnPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Log out"
+            >
+              <Ionicons name="log-out-outline" size={20} color="#FFF" />
+              <Text style={styles.logoutBtnText}>Log out</Text>
+            </Pressable>
           </Card>
 
           {/* Spacer above the save button so content isn't covered. */}
@@ -491,20 +535,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  editBtn: {
+  notifBtn: {
     backgroundColor: "#CCFBF1",
+    marginLeft: Spacing.xs,
   },
-  iconText: {
-    fontSize: 18,
-    color: Colors.text,
-    fontWeight: "800",
+  notifDotWrap: {
+    position: "absolute",
+    top: -3,
+    right: -3,
   },
-  editIcon: {
-    color: Colors.primary,
-  },
-  headerCenter: {
+  headerTitleWrap: {
     flex: 1,
-    alignItems: "center",
+    alignItems: "flex-start",
   },
   headerTitle: {
     fontSize: FontSize.lg,
@@ -582,6 +624,34 @@ const styles = StyleSheet.create({
   /* ----- Security card ----- */
   securityCard: {
     paddingVertical: Spacing.md,
+  },
+
+  /* ----- Log out card ----- */
+  logoutCard: {
+    paddingVertical: Spacing.md,
+  },
+  logoutHelper: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: Spacing.md,
+  },
+  logoutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.xs,
+    backgroundColor: "#B91C1C",
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.md,
+  },
+  logoutBtnPressed: {
+    opacity: 0.85,
+  },
+  logoutBtnText: {
+    color: "#FFF",
+    fontSize: FontSize.md,
+    fontWeight: "800",
   },
 
   /* ----- Footer / save ----- */
