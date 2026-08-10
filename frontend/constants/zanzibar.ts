@@ -202,3 +202,23 @@ export function composeZanzibarAddress(parts: AddressParts): string {
   out.push("Zanzibar");
   return out.join(", ");
 }
+
+// ─── Default map centre (added V14) ───────────────────────────────────────────
+
+/**
+ * Default lat/lng used by customer-facing map surfaces when neither
+ * the device GPS nor the saved profile address is available. Centred
+ * on Stone Town (Zanzibar) — the same fallback the live-tracking map
+ * has used historically for the customer side. The seller-side
+ * `useSellerLocation` hook still uses Nairobi as a placeholder
+ * because its consumers need a developer-environment value; this
+ * constant is intentionally for the customer side only.
+ *
+ * The values are duplicated from `app/(customer)/tracking.tsx`'s
+ * inline Zanzibar fallback so the customer map surfaces don't have
+ * to re-import that screen.
+ */
+export const ZANZIBAR_CENTRE: { lat: number; lng: number } = {
+  lat: -6.1629,
+  lng: 39.2026,
+};

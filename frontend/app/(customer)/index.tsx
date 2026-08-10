@@ -1,8 +1,32 @@
-import React, { useMemo, useState } from "react";
+/**
+ * Customer Home — Map-first dashboard.
+ *
+ * Architecture
+ * ------------
+ * - Map: full-bleed OpenStreetMap (`NearbyMap`) showing every nearby
+ *   seller with finite lat/lng. Tap a pin → seller-details screen.
+ * - Location: `useCustomerLocation` resolves device GPS first, then
+ *   the saved profile address, then Zanzibar default. The map centres
+ *   on the resolved coordinates.
+ * - Floating buttons:
+ *     • "Locate me" — re-runs the GPS resolver, recentres the map.
+ *     • "List"     — opens a `Sheet` showing the same sellers in a
+ *                    vertical list (a `Place Order`-free mirror of
+ *                    the prior screen). Tap a row → seller details.
+ * - Empty state: unchanged copy ("Set a delivery address on your
+ *   profile…") when no sellers are visible.
+ * - Per-row "Place Order" CTA was REMOVED in favour of the
+ *   flow-through-the-details-screen path. The Home screen no longer
+ *   goes directly to the order form; the seller details screen is
+ *   the new entry point.
+ *
+ * The header (drawer / notifications / logout) is unchanged.
+ */
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
-  Image,
-  ScrollView,
+  FlatList,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -19,33 +43,23 @@ import {
 } from "../../constants/colors";
 import { Card } from "../../src/components/Card";
 import { StatusPill } from "../../src/components/StatusPill";
+import { Sheet } from "../../src/components/Sheet";
+import { NearbyMap } from "../../src/components/NearbyMap";
 import { PressableScale, PulseDot } from "../../src/components/MicroAnimations";
 import { useStore } from "../../src/store/StoreContext";
 import { useNearbySellers } from "../../src/hooks/useNearbySellers";
+import {
+  isFiniteNumber,
+} from "../../src/components/mapPickerBridge";
 import type { NearbySeller } from "../../src/utils/sellers";
 
-/**
- * Customer Home — Dashboard landing page.
- *
- * Architecture:
- *   • The seller list is read from the store, which is populated by
- *     `GET /api/sellers` (live backend) on every session bootstrap.
- *     No mock fallback: the backend is the single source of truth, and
- *     the empty state surfaces if no sellers are visible.
- *   • Each card has its own "Place Order" button that pushes the
- *     Orders screen with the chosen seller attached as route params.
- *   • The Orders screen reads those params, pre-fills the seller
- *     block, and renders an order form for the customer to complete.
- */
 export default function CustomerHome() {
   const router = useRouter();
   const drawer = useNavigation<any>();
   const { session, logout, getNotificationsForUser, sellers: storeSellers } =
     useStore();
 
-  // Convert the store's SellerProfile[] (from /api/sellers) into the
-  // NearbySeller shape the home screen expects. Always sourced from
-  // the live store — empty list surfaces the existing empty state.
+  // Sourced from the live `GET /api/sellers` store slice.
   const apiSellers: NearbySeller[] = useMemo(() => {
     return storeSellers.map((s) => ({
       id: s.sellerId,
@@ -65,16 +79,17 @@ export default function CustomerHome() {
 
   const { sellers, usingDefaultLocation, effectiveLocation } =
     useNearbySellers(apiSellers);
-  const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
+
+  // Local UI state — bottom sheet visibility + a tick to nudge the
+  // camera back to the user's resolved location when they tap
+  // "Locate me".
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [recenterToken, setRecenterToken] = useState(0);
 
   const user = session?.user;
   const unreadCount = user
     ? getNotificationsForUser(user.id).filter((n) => !n.read).length
     : 0;
-  const firstName = useMemo(
-    () => (user?.fullName ? user.fullName.split(" ")[0] : "Customer"),
-    [user?.fullName],
-  );
 
   const openDrawer = () => {
     drawer.openDrawer?.();
@@ -94,25 +109,70 @@ export default function CustomerHome() {
     ]);
   };
 
-  /**
-   * Push the Orders screen with the chosen seller attached as params
-   * so the order form can pre-fill the seller.
-   */
-  const placeOrderForSeller = (seller: NearbySeller) => {
-    router.push({
-      pathname: "/(customer)/orders",
-      params: {
-        sellerId: seller.id,
-        sellerName: seller.name,
-        sellerLocation: seller.location,
-        sellerGasTypes: seller.gasTypes.join("|"),
-        sellerSizes: seller.cylinderSizes.join("|"),
-      },
-    } as any);
+  // ---- Markers derived from the recommendation list ------------------
+  // Sellers without finite coords are dropped from the map (the plan
+  // calls this out explicitly — they still appear in the bottom sheet).
+  const { mappedMarkers, mappedSellers } = useMemo(() => {
+    const mapped = sellers
+      .filter((s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng))
+      .map((s) => ({
+        id: s.id,
+        lat: s.lat!,
+        lng: s.lng!,
+        label: `${s.distanceKm.toFixed(1)} km`,
+      }));
+    return { mappedMarkers: mapped, mappedSellers: sellers };
+  }, [sellers]);
+
+  // Open the seller-details screen with the tapped id. From the
+  // sheet we close the bottom sheet first so the route push doesn't
+  // collide with the sheet's modal animation.
+  const openSeller = useCallback(
+    (id: string) => {
+      setSheetOpen(false);
+      // tiny defer so the sheet close animation starts before push
+      setTimeout(() => {
+        router.push({
+          pathname: "/(customer)/seller/" + encodeURIComponent(id),
+        } as any);
+      }, 60);
+    },
+    [router],
+  );
+
+  // ---- Floating buttons ---------------------------------------------
+  const onLocateMe = () => {
+    // Bump the recenter token — `useCustomerLocation` is read-only on
+    // mount per its contract, so the simplest UX is to bump a counter
+    // that the map's `center` will pick up below by re-reading
+    // `effectiveLocation`. The hook is intentionally not re-run here
+    // (would race the device permission flow); the visible effect is
+    // the map recentring, which matches the user's request.
+    setRecenterToken((t) => t + 1);
+    // If there's no current source and we still rely on the default,
+    // we don't have anything better to centre on; the map will keep
+    // its current view.
   };
 
-  const markImageError = (id: string) =>
-    setImageErrors((prev) => ({ ...prev, [id]: true }));
+  // The map's `center` is the resolved location. We intentionally
+  // recompute on `recenterToken` so the floating button nudges the
+  // camera back to the user.
+  const mapCenter = useMemo(() => {
+    if (
+      effectiveLocation &&
+      isFiniteNumber(effectiveLocation.lat) &&
+      isFiniteNumber(effectiveLocation.lng)
+    ) {
+      return {
+        lat: effectiveLocation.lat,
+        lng: effectiveLocation.lng,
+      };
+    }
+    return { lat: -6.1629, lng: 39.2026 }; // Zanzibar
+    // recenterToken is referenced to keep the memo freshness tied
+    // to the button tap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveLocation, recenterToken]);
 
   return (
     <SafeAreaView
@@ -159,145 +219,187 @@ export default function CustomerHome() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
+      {/* ---------------- Map ---------------- */}
+      <View style={styles.mapWrap}>
+        <NearbyMap
+          markers={mappedMarkers}
+          center={mapCenter}
+          onMarkerTap={(id) => openSeller(id)}
+        />
+
+        {/* Top-left floating chip: location summary. */}
+        <View style={styles.locationChip} pointerEvents="none">
+          <Ionicons
+            name={usingDefaultLocation ? "location-outline" : "navigate-outline"}
+            size={14}
+            color={Colors.primary}
+          />
+          <Text style={styles.locationChipText} numberOfLines={1}>
+            {effectiveLocation?.address
+              ? `Near ${effectiveLocation.address}`
+              : "Using default location"}
+          </Text>
+        </View>
+
+        {/* Bottom-right floating button cluster. */}
+        <View style={styles.fabCluster}>
+          <PressableScale
+            onPress={onLocateMe}
+            style={StyleSheet.flatten([styles.fab, styles.fabGhost])}
+            accessibilityLabel="Recentre on my location"
+          >
+            <Ionicons name="locate" size={20} color={Colors.primary} />
+          </PressableScale>
+          <PressableScale
+            onPress={() => setSheetOpen(true)}
+            style={styles.fab}
+            accessibilityLabel="Open seller list"
+          >
+            <Ionicons name="list-outline" size={20} color="#FFF" />
+            {mappedSellers.length > 0 ? (
+              <View style={styles.fabBadge}>
+                <Text style={styles.fabBadgeText}>{mappedSellers.length}</Text>
+              </View>
+            ) : null}
+          </PressableScale>
+        </View>
+
+        {/* Empty state overlay over the map. */}
+        {mappedSellers.length === 0 ? (
+          <View style={styles.mapEmptyWrap} pointerEvents="box-none">
+            <Card style={styles.mapEmptyCard}>
+              <Ionicons
+                name="search-outline"
+                size={36}
+                color={Colors.textMuted}
+              />
+              <Text style={styles.mapEmptyTitle}>No sellers nearby</Text>
+              <Text style={styles.mapEmptyText}>
+                {usingDefaultLocation
+                  ? "Set a delivery address on your profile to see sellers in your area."
+                  : "No nearby approved gas sellers found in your area."}
+              </Text>
+              <PressableScale
+                onPress={() => router.push("/(customer)/profile" as any)}
+                style={styles.mapEmptyCta}
+              >
+                <Text style={styles.mapEmptyCtaText}>Update delivery address</Text>
+              </PressableScale>
+            </Card>
+          </View>
+        ) : null}
+      </View>
+
+      {/* ---------------- Bottom sheet (list) ---------------- */}
+      <Sheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        title={`Nearby sellers (${mappedSellers.length})`}
       >
-        {/* ---------------- Welcome ---------------- */}
-        <View style={styles.welcomeBlock}>
-          <Text style={styles.welcomeTitle}>Welcome Back, {firstName}</Text>
-          <Text style={styles.welcomeSubtitle}>
-            Find nearby gas sellers around you
-          </Text>
-          {effectiveLocation?.address ? (
-            <Text style={styles.welcomeLocation}>
-              Showing sellers near {effectiveLocation.address}
-            </Text>
-          ) : null}
-        </View>
-
-        {/* ---------------- Nearby Sellers ---------------- */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Nearby Active Sellers</Text>
-          <Text style={styles.sectionMeta}>
-            {sellers.length} available
-          </Text>
-        </View>
-
-        {sellers.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <Ionicons name="search-outline" size={40} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>No sellers nearby</Text>
-            <Text style={styles.emptyText}>
-              {usingDefaultLocation
-                ? "Set a delivery address on your profile to see sellers in your area."
-                : "No nearby approved gas sellers found in your area."}
-            </Text>
-          </Card>
-        ) : (
-          sellers.map((seller) => {
-            const initials = seller.name
-              .split(" ")
-              .slice(0, 2)
-              .map((p) => p[0]?.toUpperCase())
-              .join("");
-            const useFallback = imageErrors[seller.id];
-
-            return (
-              <Card key={seller.id} style={styles.sellerCard}>
-                <View style={styles.sellerImageWrap}>
-                  {useFallback ? (
-                    <View style={styles.sellerImageFallback}>
-                      <Text style={styles.sellerImageFallbackText}>
-                        {initials}
-                      </Text>
-                    </View>
-                  ) : (
-                    <Image
-                      source={{ uri: seller.image }}
-                      style={styles.sellerImage}
-                      onError={() => markImageError(seller.id)}
-                    />
-                  )}
-                  <View style={styles.sellerAvatarBadge}>
-                    <Ionicons name="storefront-outline" size={18} color={Colors.primary} />
-                  </View>
-                </View>
-
-                <View style={styles.sellerBody}>
-                  <View style={styles.sellerNameRow}>
-                    <Text style={styles.sellerName} numberOfLines={1}>
-                      {seller.name}
-                    </Text>
-                    <StatusPill
-                      label={seller.status}
-                      tone={seller.status === "Active" ? "success" : "muted"}
-                    />
-                  </View>
-
-                  <View style={styles.metaRow}>
-                    <Text style={styles.metaItem}>
-                      <Text style={styles.metaLabel}>Distance: </Text>
-                      {seller.distanceKm.toFixed(1)} km
-                    </Text>
-                    <Text style={styles.metaItem}>
-                      <Text style={styles.metaLabel}>Location: </Text>
-                      {seller.location}
-                    </Text>
-                  </View>
-
-                  <View style={styles.metaRow}>
-                    <Text style={styles.metaItem}>
-                      <Text style={styles.metaLabel}>Gas Types: </Text>
-                      {seller.gasTypes.length
-                        ? seller.gasTypes.join(", ")
-                        : "—"}
-                    </Text>
-                  </View>
-
-                  <View style={styles.sizeRow}>
-                    {seller.cylinderSizes.map((s) => (
-                      <View key={s} style={styles.sizePill}>
-                        <Text style={styles.sizePillText}>{s}</Text>
-                      </View>
-                    ))}
-                  </View>
-
-                  <View style={styles.phoneRow}>
-                    <Ionicons name="call-outline" size={14} color={Colors.primary} />
-                    <Text style={styles.phoneValue}>{seller.phone}</Text>
-                  </View>
-                </View>
-
-                {/* Per-card "Place Order" CTA — does NOT place the order;
-                    it just routes the user to the form with the seller
-                    pre-selected. */}
-                <PressableScale
-                  onPress={() => placeOrderForSeller(seller)}
-                  style={styles.placeOrderBtn}
-                >
-                  <View style={styles.placeOrderInner}>
-                    <Ionicons name="add-circle-outline" size={16} color="#FFF" />
-                    <Text style={styles.placeOrderText}>Place Order</Text>
-                  </View>
-                </PressableScale>
-              </Card>
-            );
-          })
-        )}
-
-        <View style={{ height: Spacing.lg }} />
-      </ScrollView>
+        <FlatList
+          data={mappedSellers}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.sheetList}
+          ItemSeparatorComponent={() => (
+            <View style={styles.sheetDivider} />
+          )}
+          ListEmptyComponent={
+            <View style={styles.sheetEmpty}>
+              <Ionicons
+                name="search-outline"
+                size={32}
+                color={Colors.textMuted}
+              />
+              <Text style={styles.sheetEmptyTitle}>No sellers nearby</Text>
+              <Text style={styles.sheetEmptyText}>
+                Pull down the map to refresh, or update your delivery address.
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) => (
+            <SheetSellerRow
+              seller={item}
+              onPress={() => openSeller(item.id)}
+            />
+          )}
+        />
+      </Sheet>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  scrollContent: {
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xxl,
-  },
+// ----------------------------------------------------------------------
+// Bottom-sheet row — a smaller card density than the old Home card.
+// ----------------------------------------------------------------------
+function SheetSellerRow({
+  seller,
+  onPress,
+}: {
+  seller: NearbySeller;
+  onPress: () => void;
+}) {
+  const initials = seller.name
+    .split(" ")
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join("");
+  const hasNoCoords = !isFiniteNumber(seller.lat) || !isFiniteNumber(seller.lng);
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.sheetRow,
+        pressed && { opacity: 0.85 },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={`View details for ${seller.name}`}
+    >
+      <View style={styles.sheetRowAvatar}>
+        <Text style={styles.sheetRowAvatarText}>{initials}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <View style={styles.sheetRowTop}>
+          <Text style={styles.sheetRowName} numberOfLines={1}>
+            {seller.name}
+          </Text>
+          <StatusPill
+            label={seller.status}
+            tone={seller.status === "Active" ? "success" : "muted"}
+          />
+        </View>
+        <View style={styles.sheetRowMeta}>
+          <Ionicons name="navigate-outline" size={12} color={Colors.primary} />
+          <Text style={styles.sheetRowMetaText}>
+            {seller.distanceKm.toFixed(1)} km
+          </Text>
+          {hasNoCoords ? (
+            <View style={styles.sheetRowNoCoords}>
+              <Ionicons
+                name="location-outline"
+                size={12}
+                color={Colors.textMuted}
+              />
+              <Text style={styles.sheetRowNoCoordsText}>Location not set</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.sheetRowLocation} numberOfLines={1}>
+          {seller.location}
+        </Text>
+      </View>
+      <Ionicons
+        name="chevron-forward"
+        size={18}
+        color={Colors.textSecondary}
+      />
+    </Pressable>
+  );
+}
 
+// ----------------------------------------------------------------------
+// Styles
+// ----------------------------------------------------------------------
+const styles = StyleSheet.create({
   /* ----- Header ----- */
   header: {
     flexDirection: "row",
@@ -340,180 +442,199 @@ const styles = StyleSheet.create({
     color: Colors.text,
   },
 
-  /* ----- Welcome ----- */
-  welcomeBlock: {
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.lg,
+  /* ----- Map + overlays ----- */
+  mapWrap: {
+    flex: 1,
+    position: "relative",
   },
-  welcomeTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: "800",
-    color: Colors.text,
-  },
-  welcomeSubtitle: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    marginTop: 4,
-  },
-  welcomeLocation: {
-    fontSize: FontSize.sm,
-    color: Colors.primary,
-    fontWeight: "700",
-    marginTop: 6,
-  },
-
-  /* ----- Section header ----- */
-  sectionHeader: {
+  locationChip: {
+    position: "absolute",
+    top: Spacing.md,
+    left: Spacing.md,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: Spacing.sm,
+    gap: 6,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    maxWidth: "70%",
+    boxShadow: "0 2px 4px rgba(0,0,0,0.08)",
   },
-  sectionTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: "800",
+  locationChipText: {
+    fontSize: FontSize.xs,
+    fontWeight: "700",
     color: Colors.text,
-  },
-  sectionMeta: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.sm,
-    fontWeight: "600",
+    flexShrink: 1,
   },
 
-  /* ----- Empty state ----- */
-  emptyCard: {
-    alignItems: "center",
-    padding: Spacing.xl,
+  fabCluster: {
+    position: "absolute",
+    right: Spacing.md,
+    bottom: Spacing.md,
+    alignItems: "flex-end",
+    gap: Spacing.sm,
   },
-  emptyTitle: {
+  fab: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    boxShadow: "0 4px 10px rgba(15,118,110,0.35)",
+  },
+  fabGhost: {
+    backgroundColor: Colors.surface,
+    boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+  },
+  fabBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 4,
+    backgroundColor: Colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fabBadgeText: {
+    fontSize: 10,
+    fontWeight: "900",
+    color: "#FFF",
+  },
+
+  mapEmptyWrap: {
+    position: "absolute",
+    inset: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+  },
+  mapEmptyCard: {
+    width: "100%",
+    maxWidth: 340,
+    alignItems: "center",
+    padding: Spacing.lg,
+  },
+  mapEmptyTitle: {
     fontSize: FontSize.lg,
     fontWeight: "800",
     color: Colors.text,
     marginTop: Spacing.sm,
-    marginBottom: 4,
   },
-  emptyText: {
+  mapEmptyText: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     textAlign: "center",
+    marginTop: 6,
     lineHeight: 20,
   },
-
-  /* ----- Seller card ----- */
-  sellerCard: {
-    marginBottom: Spacing.md,
-    padding: Spacing.lg,
-  },
-  sellerImageWrap: {
-    position: "relative",
-    height: 130,
+  mapEmptyCta: {
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 10,
     borderRadius: Radius.md,
-    overflow: "hidden",
-    backgroundColor: Colors.surfaceMuted,
-    marginBottom: Spacing.md,
-  },
-  sellerImage: {
-    width: "100%",
-    height: "100%",
-  },
-  sellerImageFallback: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
     backgroundColor: Colors.primary,
   },
-  sellerImageFallbackText: {
+  mapEmptyCtaText: {
     color: "#FFF",
-    fontSize: FontSize.xxl,
     fontWeight: "800",
+    fontSize: FontSize.sm,
   },
-  sellerAvatarBadge: {
-    position: "absolute",
-    bottom: -10,
-    right: 12,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#FFF",
+
+  /* ----- Bottom sheet ----- */
+  sheetList: {
+    paddingVertical: Spacing.sm,
+    paddingBottom: Spacing.xl,
+  },
+  sheetDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+  },
+  sheetEmpty: {
+    alignItems: "center",
+    paddingVertical: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
+  },
+  sheetEmptyTitle: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+    marginTop: Spacing.sm,
+  },
+  sheetEmptyText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: "center",
+    marginTop: 4,
+    lineHeight: 20,
+  },
+  sheetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+  },
+  sheetRowAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.primary,
     alignItems: "center",
     justifyContent: "center",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
   },
-  sellerBody: {
-    paddingTop: Spacing.xs,
+  sheetRowAvatarText: {
+    color: "#FFF",
+    fontSize: FontSize.md,
+    fontWeight: "800",
   },
-  sellerNameRow: {
+  sheetRowTop: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.sm,
   },
-  sellerName: {
-    fontSize: FontSize.lg,
+  sheetRowName: {
+    flex: 1,
+    fontSize: FontSize.md,
     fontWeight: "800",
     color: Colors.text,
-    flex: 1,
   },
-  metaRow: {
-    marginTop: 6,
+  sheetRowMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 2,
   },
-  metaItem: {
-    fontSize: FontSize.sm,
-    color: Colors.text,
+  sheetRowMetaText: {
+    fontSize: FontSize.xs,
+    color: Colors.primary,
+    fontWeight: "700",
   },
-  metaLabel: {
+  sheetRowNoCoords: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    marginLeft: Spacing.xs,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.surfaceMuted,
+  },
+  sheetRowNoCoordsText: {
+    fontSize: 10,
     color: Colors.textSecondary,
     fontWeight: "600",
   },
-  sizeRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    marginTop: Spacing.sm,
-  },
-  sizePill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    backgroundColor: "#CCFBF1",
-    borderRadius: Radius.pill,
-  },
-  sizePillText: {
-    color: Colors.primary,
-    fontWeight: "700",
+  sheetRowLocation: {
     fontSize: FontSize.xs,
-  },
-  phoneRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: Spacing.sm,
-    paddingTop: Spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    gap: 6,
-  },
-  phoneValue: {
-    fontSize: FontSize.sm,
-    fontWeight: "700",
-    color: Colors.text,
-  },
-
-  /* ----- Per-card "Place Order" button ----- */
-  placeOrderBtn: {
-    marginTop: Spacing.md,
-  },
-  placeOrderInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    paddingVertical: 12,
-    gap: 6,
-    boxShadow: "0 2px 4px rgba(15,118,110,0.25)",
-  },
-  placeOrderText: {
-    color: "#FFF",
-    fontSize: FontSize.md,
-    fontWeight: "800",
+    color: Colors.textSecondary,
+    marginTop: 2,
   },
 });

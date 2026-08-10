@@ -267,6 +267,120 @@
       }
     };
 
+    // ---- Multi-pin viewer (NearbyMap) -------------------------------
+    // Additive layer on the same page as the single-pin picker. The
+    // single-pin layer above continues to emit `PIN` and the
+    // multi-pin layer emits `MARKER_TAP` — same page, two contracts.
+    // Both can coexist: MapPickerSheet / ShopMapPreview never call
+    // `__setMarkers`, so the layer stays empty for them.
+    function postMarkerTap(id) {
+      if (typeof id !== "string" || id.length === 0) return;
+      if (!window.ReactNativeWebView || !window.ReactNativeWebView.postMessage) return;
+      try {
+        window.ReactNativeWebView.postMessage(
+          JSON.stringify({ type: "MARKER_TAP", id: id }),
+        );
+      } catch (err) {
+        /* bridge unavailable — silent */
+      }
+    }
+
+    function escapeHtml(s) {
+      if (typeof s !== "string") return "";
+      return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    // Replace the current marker layer with the supplied list of
+    // markers. Each marker is `{ id, lat, lng, label? }`. Tap on a
+    // marker posts MARKER_TAP to RN. Always keeps at least one map
+    // view (centred or fit-bounded) so the caller doesn't need to
+    // separately call __setView.
+    window.__setMarkers = function (json) {
+      if (!window.__MAP__) {
+        // Page hasn't booted yet — store the payload and replay
+        // from boot() (mirrors the single-pin __SEED__ pattern).
+        try {
+          window.__MARKERS__ = typeof json === "string" ? JSON.parse(json) : { markers: [] };
+        } catch (err) {
+          window.__MARKERS__ = { markers: [] };
+        }
+        return;
+      }
+      var parsed;
+      try {
+        parsed = typeof json === "string" ? JSON.parse(json) : json;
+      } catch (err) {
+        return;
+      }
+      var list = (parsed && parsed.markers) || [];
+      // Drop any prior layer.
+      if (window.__MARKER_LAYER__) {
+        window.__MAP__.removeLayer(window.__MARKER_LAYER__);
+        window.__MARKER_LAYER__ = null;
+      }
+      if (!list.length) {
+        return;
+      }
+      var layer = L.layerGroup();
+      var bounds = [];
+      for (var i = 0; i < list.length; i++) {
+        (function (m) {
+          var lat = m.lat;
+          var lng = m.lng;
+          if (typeof lat !== "number" || !isFinite(lat)) return;
+          if (typeof lng !== "number" || !isFinite(lng)) return;
+          bounds.push([lat, lng]);
+          var html = m.label
+            ? '<div class="nm-pin"><span class="nm-pin-label">' + escapeHtml(m.label) + "</span></div>"
+            : '<div class="nm-pin"></div>';
+          var marker = L.marker([lat, lng], {
+            icon: L.divIcon({
+              className: "",
+              html: html,
+              iconSize: [28, 36],
+              iconAnchor: [14, 36],
+            }),
+            // Stash id on options so __selectMarker can find it later
+            // without a parallel registry.
+            mkId: m.id,
+          });
+          marker.on("click", function () {
+            postMarkerTap(m.id);
+          });
+          layer.addLayer(marker);
+        })(list[i]);
+      }
+      layer.addTo(window.__MAP__);
+      window.__MARKER_LAYER__ = layer;
+      if (bounds.length > 1) {
+        window.__MAP__.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+      } else if (bounds.length === 1) {
+        window.__MAP__.setView(bounds[0], 14);
+      }
+    };
+
+    // Toggle the selected styling on a marker. Cheaper than re-emitting
+    // the whole layer when only the selectedId changes.
+    window.__selectMarker = function (id) {
+      if (!window.__MARKER_LAYER__) return;
+      window.__MARKER_LAYER__.eachLayer(function (mk) {
+        var el = mk.getElement && mk.getElement();
+        if (!el) return;
+        var inner = el.querySelector(".nm-pin");
+        if (!inner) return;
+        if (mk.options.mkId === id) {
+          inner.classList.add("nm-pin-selected");
+        } else {
+          inner.classList.remove("nm-pin-selected");
+        }
+      });
+    };
+
     // ---- Bootstrapping ----------------------------------------------
     function boot() {
       if (typeof L === "undefined") {
@@ -364,6 +478,17 @@
       // Apply read-only state if RN requested it before boot.
       if (window.__READ_ONLY__) {
         window.__setReadOnly(true);
+      }
+
+      // Replay any multi-pin payload that arrived before the map
+      // booted (same pattern as __SEED__ above).
+      if (window.__MARKERS__) {
+        try {
+          window.__setMarkers(JSON.stringify(window.__MARKERS__));
+        } catch (err) {
+          /* ignore */
+        }
+        window.__MARKERS__ = null;
       }
 
       // Signal ready. Do NOT auto-emit a PIN postReady — the RN side

@@ -179,6 +179,18 @@ export const SellersApi = {
     api.post<SellerProfile>("/api/sellers/me", patch),
   riders: (sellerId: string) =>
     api.get<Rider[]>(`/api/sellers/${encodeURIComponent(sellerId)}/riders`),
+  /**
+   * Fetch a single seller profile by id. Added for the customer
+   * seller-details screen: the home map only carries the
+   * radius-filtered slice, but a deep link or a hot-reload race may
+   * land on a seller that isn't in the slice. The backend exposes
+   * the same `SellerProfile` shape returned by `list()`, so the
+   * details screen can re-use its existing mapper.
+   */
+  byId: (sellerId: string) =>
+    api.get<SellerProfile>(
+      `/api/sellers/${encodeURIComponent(sellerId)}`,
+    ),
 };
 
 // ---- Riders ------------------------------------------------------------
