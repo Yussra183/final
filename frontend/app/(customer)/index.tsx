@@ -44,10 +44,18 @@ import {
 import { Card } from "../../src/components/Card";
 import { StatusPill } from "../../src/components/StatusPill";
 import { Sheet } from "../../src/components/Sheet";
-import { NearbyMap } from "../../src/components/NearbyMap";
+import {
+  NearbySellersMap,
+  type NearbySellerMarker,
+} from "../../src/components/NearbySellersMap";
 import { PressableScale, PulseDot } from "../../src/components/MicroAnimations";
 import { useStore } from "../../src/store/StoreContext";
 import { useNearbySellers } from "../../src/hooks/useNearbySellers";
+import {
+  UNGUJA_PLACES,
+  nearestPlaceName,
+  type UngujaPlace,
+} from "../../src/lib/ungujaPlaces";
 import {
   isFiniteNumber,
 } from "../../src/components/mapPickerBridge";
@@ -82,9 +90,30 @@ export default function CustomerHome() {
 
   // Local UI state — bottom sheet visibility + a tick to nudge the
   // camera back to the user's resolved location when they tap
-  // "Locate me".
+  // "Locate me", plus the active place chip (drives the map's
+  // recentre target).
   const [sheetOpen, setSheetOpen] = useState(false);
   const [recenterToken, setRecenterToken] = useState(0);
+  const [activePlaceId, setActivePlaceId] = useState<string | null>(null);
+  const activePlace: UngujaPlace | null = useMemo(
+    () => UNGUJA_PLACES.find((p) => p.id === activePlaceId) ?? null,
+    [activePlaceId],
+  );
+  // The map recentre target. We build a fresh object on every
+  // change so the effect that consumes it always fires — the map
+  // effect does a `===` check internally.
+  const recenterTo = useMemo(
+    () =>
+      activePlace
+        ? {
+            lat: activePlace.lat,
+            lng: activePlace.lng,
+            latitudeDelta: activePlace.zoom,
+            longitudeDelta: activePlace.zoom,
+          }
+        : null,
+    [activePlace],
+  );
 
   const user = session?.user;
   const unreadCount = user
@@ -112,15 +141,26 @@ export default function CustomerHome() {
   // ---- Markers derived from the recommendation list ------------------
   // Sellers without finite coords are dropped from the map (the plan
   // calls this out explicitly — they still appear in the bottom sheet).
+  // Each marker is annotated with the nearest Unguja place name
+  // (resolved via `nearestPlaceName`); if the seller's coordinates
+  // fall within 1.5 km of a known place, the pin is also snapped to
+  // that place's centroid so two sellers on the same street don't
+  // overlap on the map.
   const { mappedMarkers, mappedSellers } = useMemo(() => {
-    const mapped = sellers
+    const mapped: NearbySellerMarker[] = sellers
       .filter((s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng))
-      .map((s) => ({
-        id: s.id,
-        lat: s.lat!,
-        lng: s.lng!,
-        label: `${s.distanceKm.toFixed(1)} km`,
-      }));
+      .map((s) => {
+        const placeName = nearestPlaceName({ lat: s.lat!, lng: s.lng! });
+        return {
+          id: s.id,
+          lat: s.lat!,
+          lng: s.lng!,
+          // Show the resolved place name under the pin (or the raw
+          // distance if the seller is more than 1.5 km from any
+          // known place).
+          label: placeName ?? `${s.distanceKm.toFixed(1)} km`,
+        };
+      });
     return { mappedMarkers: mapped, mappedSellers: sellers };
   }, [sellers]);
 
@@ -219,11 +259,70 @@ export default function CustomerHome() {
         </TouchableOpacity>
       </View>
 
+      {/* ---------------- Places chip strip ---------------- */}
+      {/* Horizontal scroll of Unguja places; tap a chip to recentre
+          the map on that place. The active chip is highlighted. */}
+      <View style={styles.placesWrap}>
+        <FlatList
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          data={UNGUJA_PLACES}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.placesList}
+          renderItem={({ item }) => {
+            const active = item.id === activePlaceId;
+            return (
+              <PressableScale
+                onPress={() => {
+                  // Toggle: tapping the same chip again clears it and
+                  // the map returns to the bbox-fit view.
+                  setActivePlaceId((current) =>
+                    current === item.id ? null : item.id,
+                  );
+                }}
+                style={StyleSheet.flatten([
+                  styles.placeChip,
+                  active && styles.placeChipActive,
+                ])}
+                accessibilityRole="button"
+                accessibilityLabel={`Centre map on ${item.name}`}
+              >
+                <Ionicons
+                  name={
+                    active
+                      ? "location"
+                      : item.region === "Zanzibar City"
+                      ? "business"
+                      : item.region === "North" || item.region === "South"
+                      ? "sunny-outline"
+                      : "navigate-outline"
+                  }
+                  size={12}
+                  color={active ? "#FFF" : Colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.placeChipText,
+                    active && styles.placeChipTextActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {item.name}
+                </Text>
+              </PressableScale>
+            );
+          }}
+        />
+      </View>
+
       {/* ---------------- Map ---------------- */}
       <View style={styles.mapWrap}>
-        <NearbyMap
+        <NearbySellersMap
           markers={mappedMarkers}
           center={mapCenter}
+          recenterToken={recenterToken}
+          recenterTo={recenterTo ?? undefined}
+          style={StyleSheet.absoluteFill}
           onMarkerTap={(id) => openSeller(id)}
         />
 
@@ -410,6 +509,40 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
+  },
+  /* ----- Places chip strip ----- */
+  placesWrap: {
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  placesList: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    gap: Spacing.xs,
+  },
+  placeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  placeChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  placeChipText: {
+    fontSize: FontSize.xs,
+    fontWeight: "700",
+    color: Colors.text,
+  },
+  placeChipTextActive: {
+    color: "#FFF",
   },
   iconBtn: {
     width: 40,

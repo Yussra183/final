@@ -25,13 +25,15 @@
  * module. README.md inside the folder documents the regeneration
  * step.
  */
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
   StyleSheet,
   Text,
   View,
+  type ViewStyle,
+  type StyleProp,
 } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
@@ -62,8 +64,19 @@ export interface NearbyMapProps {
   center: { lat: number; lng: number };
   /** Initial zoom. Defaults to 12. */
   zoom?: number;
-  /** Fixed height in px. Defaults to 320. Pass `undefined` + flex in the parent to fill. */
+  /**
+   * Fixed height in px. Defaults to 320.
+   *
+   * If you want the map to fill its parent (e.g. a flex: 1 wrapper on
+   * a tab/page), pass `style={{ flex: 1 }}` instead of `height` —
+   * `style` wins when provided.
+   */
   height?: number;
+  /**
+   * Wrapper style. Pass `{ flex: 1 }` to make the map fill its parent.
+   * Overrides the `height` prop when present.
+   */
+  style?: StyleProp<ViewStyle>;
   /** When set, paints that marker in the selected colour (single-select). */
   selectedId?: string;
   /** Fired when the user taps a marker. */
@@ -89,6 +102,7 @@ export function NearbyMap({
   center,
   zoom = 12,
   height = 320,
+  style,
   selectedId,
   onMarkerTap,
   fitMode = "auto",
@@ -199,7 +213,12 @@ export function NearbyMap({
   }, [ready, picker, pickerError, selectedId]);
 
   return (
-    <View style={[styles.wrap, { height }]}>
+    <View
+      style={[
+        styles.wrap,
+        style ? style : { height },
+      ]}
+    >
       {pickerError ? (
         <Pressable
           style={styles.errorState}

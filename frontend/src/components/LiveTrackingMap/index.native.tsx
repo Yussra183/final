@@ -29,50 +29,11 @@ import {
   ResolvedMapProps,
   resolveLiveTrackingMapProps,
 } from "../LiveTrackingMap.types";
+import { bboxOf, regionFor } from "./region";
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                   */
 /* -------------------------------------------------------------------------- */
-
-interface BBox {
-  minLat: number;
-  maxLat: number;
-  minLng: number;
-  maxLng: number;
-}
-
-function bboxOf(points: LatLng[]): BBox | null {
-  if (!points || points.length === 0) return null;
-  let minLat = points[0].lat;
-  let maxLat = points[0].lat;
-  let minLng = points[0].lng;
-  let maxLng = points[0].lng;
-  for (const p of points) {
-    if (p.lat < minLat) minLat = p.lat;
-    if (p.lat > maxLat) maxLat = p.lat;
-    if (p.lng < minLng) minLng = p.lng;
-    if (p.lng > maxLng) maxLng = p.lng;
-  }
-  return { minLat, maxLat, minLng, maxLng };
-}
-
-function regionFor(b: BBox, pad = 1.6): {
-  latitude: number;
-  longitude: number;
-  latitudeDelta: number;
-  longitudeDelta: number;
-} {
-  const centerLat = (b.minLat + b.maxLat) / 2;
-  const centerLng = (b.minLng + b.maxLng) / 2;
-  const latDelta = Math.max(0.005, (b.maxLat - b.minLat) * pad);
-  const lngDelta = Math.max(0.005, (b.maxLng - b.minLng) * pad);
-  return {
-    latitude: centerLat,
-    longitude: centerLng,
-    latitudeDelta: latDelta,
-    longitudeDelta: lngDelta,
-  };
-}
 
 /* -------------------------------------------------------------------------- */
 /* Real Google Map view                                                      */
@@ -100,24 +61,37 @@ function NativeLiveTrackingMap(props: ResolvedMapProps) {
   }, [props.origin, props.live, props.destination, props.waypoints, polyline]);
 
   const mapRef = useRef<any>(null);
-  useEffect(() => {
+  const fitMapToPoints = React.useCallback(() => {
     if (!mapRef.current) return;
-    const pts = [
+    const points = [
       props.origin,
       props.live,
       props.destination,
       ...(props.waypoints ?? []),
       ...polyline,
-    ];
-    const b = bboxOf(pts);
-    if (!b) return;
-    const region = regionFor(b, 1.4);
+    ].map((p) => ({ latitude: p.lat, longitude: p.lng }));
+    if (points.length < 2) return;
+
     try {
-      mapRef.current.animateToRegion(region, 700);
+      mapRef.current.fitToCoordinates(points, {
+        edgePadding: { top: 48, right: 48, bottom: 48, left: 48 },
+        animated: true,
+      });
     } catch {
       /* ignore */
     }
-  }, [props.live.lat, props.live.lng]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [props.origin, props.live, props.destination, props.waypoints, polyline]);
+
+  useEffect(() => {
+    // Wait until MapView has laid out before fitting; initialRegion alone can
+    // be clipped when the map is rendered inside a card or a scrolling page.
+    const timer = setTimeout(fitMapToPoints, 100);
+    return () => clearTimeout(timer);
+  }, [fitMapToPoints]);
+
+  useEffect(() => {
+    fitMapToPoints();
+  }, [props.live.lat, props.live.lng, fitMapToPoints]);
 
   return (
     <View style={[styles.frame, { height: props.height ?? 260 }, props.style]}>
@@ -126,6 +100,7 @@ function NativeLiveTrackingMap(props: ResolvedMapProps) {
         provider={PROVIDER_GOOGLE}
         style={StyleSheet.absoluteFill}
         initialRegion={initialRegion}
+        onLayout={fitMapToPoints}
         showsCompass
         showsMyLocationButton={false}
         showsTraffic={false}
