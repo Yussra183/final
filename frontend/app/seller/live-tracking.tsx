@@ -25,7 +25,7 @@
  * Tab bar pattern mirrors `app/seller/orders.tsx` so the visual
  * language is identical to the rest of the seller module.
  */
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   RefreshControl,
   ScrollView,
@@ -60,6 +60,7 @@ import {
   useRiderTracking,
   type RiderStatus,
 } from "../../src/hooks/useRiderTracking";
+import { useStore } from "../../src/store/StoreContext";
 
 type TabKey = "supplier" | "rider";
 
@@ -137,7 +138,7 @@ function StatusTimelineRow<S extends string>({
                 <Ionicons
                   name={step.icon}
                   size={12}
-                  color={reached ? "#FFF" : Colors.textMuted}
+                  color={reached ? Colors.textInverse : Colors.textMuted}
                 />
               </View>
               {i < steps.length - 1 ? (
@@ -266,7 +267,7 @@ function SupplierTab() {
           <View
             style={[
               styles.progressBarFill,
-              { width: `${Math.max(2, Math.min(100, progress * 100))}%`, backgroundColor: tone },
+              { width: `${Math.min(100, Math.max(0, progress * 100))}%`, backgroundColor: tone },
             ]}
           />
         </View>
@@ -450,7 +451,7 @@ function RiderTab() {
           <View
             style={[
               styles.progressBarFill,
-              { width: `${Math.max(2, Math.min(100, progress * 100))}%`, backgroundColor: tone },
+              { width: `${Math.min(100, Math.max(0, progress * 100))}%`, backgroundColor: tone },
             ]}
           />
         </View>
@@ -542,13 +543,21 @@ function RiderTab() {
 /* -------------------------------------------------------------------------- */
 
 export default function SellerLiveTracking() {
+  const { refresh } = useStore();
   const [tab, setTab] = useState<TabKey>("supplier");
   const [refreshing, setRefreshing] = useState(false);
 
-  const onRefresh = () => {
+  // Real pull-to-refresh — the local tracking hooks derive from the store,
+  // so re-hydrating the store brings in any rider/supplier updates that
+  // happened in another session. The previous setTimeout(700) was a UX lie.
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 700);
-  };
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -568,7 +577,7 @@ export default function SellerLiveTracking() {
               <Ionicons
                 name={t.icon}
                 size={18}
-                color={isActive ? "#FFF" : Colors.textSecondary}
+                color={isActive ? Colors.textInverse : Colors.textSecondary}
               />
               <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
                 {t.label}
@@ -635,7 +644,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: Colors.textSecondary,
   },
-  tabLabelActive: { color: "#FFF" },
+  tabLabelActive: { color: Colors.textInverse },
 
   // Body
   tabBody: { gap: Spacing.md },
@@ -744,7 +753,7 @@ const styles = StyleSheet.create({
   // Timeline
   timelineCard: { gap: Spacing.sm },
   sectionTitle: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.lg,
     fontWeight: "800",
     color: Colors.text,
     marginBottom: Spacing.xs,

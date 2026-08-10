@@ -124,7 +124,7 @@ function ProductCard({
           style={[styles.actionBtn, styles.btnAddStock]}
           onPress={() => onAddStock(product)}
         >
-          <Ionicons name="add-circle-outline" size={16} color="#FFF" />
+          <Ionicons name="add-circle-outline" size={16} color={Colors.textInverse} />
           <Text style={styles.actionBtnText}>Add Stock</Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -374,11 +374,11 @@ export default function SellerInventory() {
       <ScrollView contentContainerStyle={styles.content}>
         {/* Stat row */}
         <View style={styles.statRow}>
-          <View style={[styles.statBox, { backgroundColor: "#CCFBF1" }]}>
+          <View style={[styles.statBox, { backgroundColor: Colors.primarySoft }]}>
             <Text style={styles.statValue}>{myProducts.length}</Text>
             <Text style={styles.statLabel}>Products</Text>
           </View>
-          <View style={[styles.statBox, { backgroundColor: "#FEF3C7" }]}>
+          <View style={[styles.statBox, { backgroundColor: Colors.warningSoft }]}>
             <Text style={[styles.statValue, { color: Colors.warning }]}>
               {lowCount}
             </Text>
@@ -387,7 +387,7 @@ export default function SellerInventory() {
           <View
             style={[
               styles.statBox,
-              { backgroundColor: "#DCFCE7" },
+              { backgroundColor: Colors.successSoft },
             ]}
           >
             <Text style={[styles.statValue, { color: Colors.success }]}>
@@ -520,7 +520,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: Radius.md,
-    backgroundColor: "#FEF3C7",
+    backgroundColor: Colors.warningSoft,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -558,7 +558,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   filterChipTextActive: {
-    color: "#FFF",
+    color: Colors.textInverse,
   },
 
   // Product card
@@ -567,7 +567,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#FEF3C7",
+    backgroundColor: Colors.warningSoft,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 6,
     borderRadius: Radius.sm,
@@ -588,7 +588,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: Radius.md,
-    backgroundColor: "#CCFBF1",
+    backgroundColor: Colors.primarySoft,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -612,7 +612,7 @@ const styles = StyleSheet.create({
   },
   sizeChipText: {
     fontSize: FontSize.xs,
-    color: "#FFF",
+    color: Colors.textInverse,
     fontWeight: "800",
   },
   categoryText: {
@@ -679,17 +679,17 @@ const styles = StyleSheet.create({
   },
   btnAddStock: { backgroundColor: Colors.primary },
   btnEdit: {
-    backgroundColor: "#CCFBF1",
+    backgroundColor: Colors.primarySoft,
     borderWidth: 1,
     borderColor: Colors.primary,
   },
   btnDelete: {
-    backgroundColor: "#FEE2E2",
+    backgroundColor: Colors.dangerSoft,
     borderWidth: 1,
     borderColor: Colors.danger,
   },
   actionBtnText: {
-    color: "#FFF",
+    color: Colors.textInverse,
     fontSize: FontSize.sm,
     fontWeight: "700",
   },
@@ -699,7 +699,7 @@ const styles = StyleSheet.create({
   // Modal shared
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.55)",
+    backgroundColor: Colors.scrim,
     justifyContent: "flex-end",
   },
   modalSheet: {

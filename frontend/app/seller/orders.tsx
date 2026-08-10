@@ -186,7 +186,7 @@ function OrderCard({
         <View style={styles.bodyItem}>
           <Ionicons name="layers-outline" size={16} color={Colors.primary} />
           <Text style={styles.bodyLabel}>Qty</Text>
-          <Text style={styles.bodyValue}>{first?.quantity ?? 0}</Text>
+          <Text style={styles.bodyValue}>{first?.quantity ?? "—"}</Text>
         </View>
       </View>
 
@@ -214,14 +214,14 @@ function OrderCard({
               style={[styles.actionBtn, styles.btnAccept]}
               onPress={() => onAccept(order)}
             >
-              <Ionicons name="checkmark" size={16} color="#FFF" />
+              <Ionicons name="checkmark" size={16} color={Colors.textInverse} />
               <Text style={styles.actionBtnText}>Accept</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionBtn, styles.btnReject]}
               onPress={() => onReject(order)}
             >
-              <Ionicons name="close" size={16} color="#FFF" />
+              <Ionicons name="close" size={16} color={Colors.textInverse} />
               <Text style={styles.actionBtnText}>Reject</Text>
             </TouchableOpacity>
           </>
@@ -270,7 +270,10 @@ function OrderDetailModal({
             />
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            style={styles.modalScroll}
+          >
             <DetailRow label="Order #" value={`#${order.id.slice(-4)}`} />
             <DetailRow label="Customer" value={order.customerName} />
             <DetailRow label="Placed" value={formatDateTime(order.createdAt)} />
@@ -313,6 +316,9 @@ function OrderDetailModal({
             </View>
           </ScrollView>
 
+          {/* Footer — reserved height so the ScrollView above can flex-shrink
+              instead of pushing the Close button under the system home bar
+              when the item list is long. */}
           <TouchableOpacity style={styles.modalClose} onPress={onClose}>
             <Text style={styles.modalCloseText}>Close</Text>
           </TouchableOpacity>
@@ -577,7 +583,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   tabActive: {
-    backgroundColor: "#CCFBF1",
+    backgroundColor: Colors.primarySoft,
   },
   tabLabel: {
     fontSize: FontSize.sm,
@@ -605,7 +611,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   tabBadgeTextActive: {
-    color: "#FFF",
+    color: Colors.textInverse,
   },
 
   // Order card
@@ -696,12 +702,12 @@ const styles = StyleSheet.create({
   btnAccept: { backgroundColor: Colors.success },
   btnReject: { backgroundColor: Colors.danger },
   btnView: {
-    backgroundColor: "#CCFBF1",
+    backgroundColor: Colors.primarySoft,
     borderWidth: 1,
     borderColor: Colors.primary,
   },
   actionBtnText: {
-    color: "#FFF",
+    color: Colors.textInverse,
     fontSize: FontSize.sm,
     fontWeight: "700",
   },
@@ -710,7 +716,7 @@ const styles = StyleSheet.create({
   // Modal — order detail
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.55)",
+    backgroundColor: Colors.scrim,
     justifyContent: "flex-end",
   },
   modalSheet: {
@@ -720,6 +726,9 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     maxHeight: "85%",
   },
+  /** flex:1 here lets the inner ScrollView shrink so the Close footer always
+      reserves its height, even on tall item lists. */
+  modalScroll: { flex: 1 },
   modalHandle: {
     width: 44,
     height: 5,
@@ -808,7 +817,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   modalCloseText: {
-    color: "#FFF",
+    color: Colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: "700",
   },
@@ -831,28 +840,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
     marginBottom: Spacing.md,
   },
-  riderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  riderAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  riderName: {
-    flex: 1,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    fontWeight: "700",
-  },
+  // (riderRow / riderAvatar / riderName were unused dead styles — deleted.
+  // When an "Assign Rider" picker lands in OrderDetailModal, reintroduce
+  // them at that call site so the styles live next to the feature.)
 
   // Reject modal
   rejectInput: {

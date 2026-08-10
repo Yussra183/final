@@ -35,6 +35,26 @@ export const Colors = {
   supplier: "#6366F1",
   rider: "#10B981",
   admin: "#1E293B",
+
+  // Soft surface tints — used for badge / pill / banner backgrounds where a
+  // pale wash of a brand color is wanted without hand-rolling a hex literal
+  // in every screen.
+  primarySoft: "#CCFBF1",   // primary teal @ ~20%
+  successSoft: "#DCFCE7",   // emerald-100
+  warningSoft: "#FEF3C7",   // amber-100
+  dangerSoft: "#FEE2E2",    // red-100
+  accentSoft: "#FFF7ED",    // orange-50
+  infoSoft: "#DBEAFE",      // blue-100
+
+  // Foreground tokens for use over those soft surfaces, where the standard
+  // `text`/`textSecondary` would be too pale.
+  successText: "#047857",   // emerald-700
+  warningText: "#92400E",   // amber-800
+  dangerText: "#B91C1C",    // red-700
+
+  // Modal scrim — applied to the dim layer behind full-screen modals. Centralised
+  // so every screen's modal matches without re-typing the rgba literal.
+  scrim: "rgba(15,23,42,0.55)",
 };
 
 export const Spacing = {

@@ -29,8 +29,9 @@
  * the standard empty state.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
+  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -39,6 +40,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { SellerHeader } from "../../src/components/SellerHeader";
@@ -119,7 +121,7 @@ function StatusTimeline({ status }: { status: DeliveryStatus }) {
                 <Ionicons
                   name={step.icon as keyof typeof Ionicons.glyphMap}
                   size={13}
-                  color={reached ? "#FFF" : Colors.textMuted}
+                  color={reached ? Colors.textInverse : Colors.textMuted}
                 />
               </View>
               {i < TIMELINE_STEPS.length - 1 ? (
@@ -186,6 +188,26 @@ function DeliveryCard({
 
   const isDelivered = state.status === "delivered";
   const isWaiting = state.status === "waiting_for_rider";
+
+  /**
+   * Confirms before cancelling — orders.tsx and inventory.tsx already do this
+   * for destructive ops. Cancelling an in-flight delivery is destructive: a
+   * mis-tap cancels a customer's order.
+   */
+  const confirmCancel = () => {
+    Alert.alert(
+      "Cancel delivery?",
+      `This will cancel the in-flight order for ${order.customerName}.`,
+      [
+        { text: "Keep delivery", style: "cancel" },
+        {
+          text: "Cancel delivery",
+          style: "destructive",
+          onPress: cancel,
+        },
+      ],
+    );
+  };
 
   return (
     <Card style={styles.card}>
@@ -258,18 +280,28 @@ function DeliveryCard({
           style={[styles.expandBtn, expanded && styles.expandBtnActive]}
           onPress={onToggle}
           activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={
+            expanded ? "Hide delivery details" : "Track delivery on map"
+          }
         >
           <Ionicons
             name={expanded ? "chevron-up-circle" : "chevron-down-circle"}
             size={18}
-            color={expanded ? "#FFF" : Colors.primary}
+            color={expanded ? Colors.textInverse : Colors.primary}
           />
           <Text style={[styles.expandBtnText, expanded && styles.expandBtnActive]}>
             {expanded ? "Hide details" : "Track on Map"}
           </Text>
         </TouchableOpacity>
         {!isDelivered ? (
-          <TouchableOpacity style={styles.cancelBtn} onPress={cancel} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={confirmCancel}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={`Cancel delivery for order ${order.id.slice(-4).toUpperCase()}`}
+          >
             <Ionicons name="close-circle-outline" size={16} color={Colors.danger} />
             <Text style={styles.cancelBtnText}>Cancel</Text>
           </TouchableOpacity>
@@ -292,7 +324,9 @@ function DeliveryCard({
             <View style={styles.metricCell}>
               <Text style={styles.metricLabel}>Rider Location</Text>
               <Text style={styles.metricValue} numberOfLines={1}>
-                {state.riderLatLng.lat.toFixed(4)}, {state.riderLatLng.lng.toFixed(4)}
+                {state.riderLatLng
+                  ? `${state.riderLatLng.lat.toFixed(4)}, ${state.riderLatLng.lng.toFixed(4)}`
+                  : "—"}
               </Text>
             </View>
             <View style={styles.metricCell}>
@@ -383,14 +417,25 @@ export default function SellerDelivery() {
     });
   }, [orders, user, shopCoords.lat, shopCoords.lng]);
 
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await refresh();
     } finally {
       setRefreshing(false);
     }
-  };
+  }, [refresh]);
+
+  // Auto-refresh on focus so newly-accepted in-transit orders (a rider picked
+  // up from their app) appear the instant the seller returns to this tab.
+  // Mirrors dashboard.tsx's pattern.
+  useFocusEffect(
+    useCallback(() => {
+      refresh().catch(() => {
+        /* silent — manual pull-to-refresh remains available */
+      });
+    }, [refresh]),
+  );
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -480,10 +525,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: Spacing.md,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
   },
   sectionTitle: {
-    fontSize: FontSize.xl,
+    fontSize: FontSize.lg,
     fontWeight: "800",
     color: Colors.text,
   },
@@ -491,7 +537,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: "#FEE2E2",
+    backgroundColor: Colors.dangerSoft,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 4,
     borderRadius: Radius.pill,
@@ -580,7 +626,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-    backgroundColor: "#FFF7ED",
+    backgroundColor: Colors.accentSoft,
     padding: Spacing.sm,
     borderRadius: Radius.md,
     marginBottom: Spacing.md,
@@ -624,7 +670,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-    backgroundColor: "#FEF3C7",
+    backgroundColor: Colors.warningSoft,
     padding: Spacing.sm,
     borderRadius: Radius.md,
     marginBottom: Spacing.md,
@@ -633,7 +679,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.sm,
     fontWeight: "700",
-    color: "#92400E",
+    color: Colors.warningText,
   },
 
   // Actions
@@ -651,7 +697,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.primary,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: Colors.surface,
   },
   expandBtnActive: {
     backgroundColor: Colors.primary,
@@ -670,8 +716,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: "#FECACA",
-    backgroundColor: "#FEF2F2",
+    borderColor: Colors.dangerSoft,
+    backgroundColor: Colors.dangerSoft,
   },
   cancelBtnText: {
     fontSize: FontSize.sm,
@@ -742,7 +788,7 @@ const styles = StyleSheet.create({
   tbtBulletText: {
     fontSize: FontSize.xs,
     fontWeight: "800",
-    color: "#FFF",
+    color: Colors.textInverse,
   },
   tbtText: {
     flex: 1,
@@ -785,7 +831,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   timelineDotCurrent: {
-    boxShadow: "0 0 0 4px #CCFBF1",
+    boxShadow: `0 0 0 4px ${Colors.primarySoft}`,
   },
   timelineLine: {
     width: 2,
@@ -810,13 +856,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-    backgroundColor: "#DCFCE7",
+    backgroundColor: Colors.successSoft,
     padding: Spacing.md,
     borderRadius: Radius.md,
   },
   deliveredText: {
     fontSize: FontSize.sm,
     fontWeight: "800",
-    color: "#047857",
+    color: Colors.successText,
   },
 });

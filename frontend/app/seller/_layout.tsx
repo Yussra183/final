@@ -220,7 +220,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: Radius.lg,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: Colors.surface,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: Spacing.md,
@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   brandSub: {
-    color: "#CCFBF1",
+    color: Colors.primarySoft,
     fontSize: FontSize.sm,
     marginTop: 2,
   },

@@ -8,7 +8,7 @@
  * Each unread notification shows a colored badge, and tapping the
  * notification marks it as read through `markNotificationRead()`.
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   RefreshControl,
   ScrollView,
@@ -157,8 +157,25 @@ export default function SellerNotifications() {
     getNotificationsForUser,
     markNotificationRead,
     markAllNotificationsRead,
+    refresh,
   } = useStore();
   const [activeCat, setActiveCat] = useState<CategoryKey>("all");
+  const [refreshing, setRefreshing] = useState(false);
+
+  /**
+   * Real pull-to-refresh — re-hydrates the shared notifications list from
+   * the backend. Previously this ScrollView passed a no-op handler so the
+   * gesture was a UX lie; notifications is the most server-state-driven
+   * screen on the seller side and the gesture was already muscle memory.
+   */
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
 
   const user = session?.user;
   const items = useMemo(
@@ -241,7 +258,7 @@ export default function SellerNotifications() {
       {/* Banner */}
       <View style={styles.banner}>
         <View style={styles.bannerIcon}>
-          <Ionicons name="notifications" size={22} color="#FFF" />
+          <Ionicons name="notifications" size={22} color={Colors.textInverse} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.bannerTitle}>
@@ -278,12 +295,12 @@ export default function SellerNotifications() {
               <Ionicons
                 name={c.icon}
                 size={14}
-                color={active ? "#FFF" : c.tint}
+                color={active ? Colors.textInverse : c.tint}
               />
               <Text
                 style={[
                   styles.chipText,
-                  active && { color: "#FFF" },
+                  active && { color: Colors.textInverse },
                 ]}
               >
                 {c.label}
@@ -293,14 +310,14 @@ export default function SellerNotifications() {
                   style={[
                     styles.chipBadge,
                     active
-                      ? { backgroundColor: "#FFF" }
+                      ? { backgroundColor: Colors.textInverse }
                       : { backgroundColor: c.tint },
                   ]}
                 >
                   <Text
                     style={[
                       styles.chipBadgeText,
-                      active ? { color: c.tint } : { color: "#FFF" },
+                      active ? { color: c.tint } : { color: Colors.textInverse },
                     ]}
                   >
                     {c_unread}
@@ -315,7 +332,13 @@ export default function SellerNotifications() {
       {/* Notification list */}
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={false} onRefresh={() => {}} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+          />
+        }
       >
         {grouped.length === 0 ? (
           <EmptyState
@@ -371,17 +394,17 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.2)",
+    backgroundColor: Colors.textInverse + "22",
     alignItems: "center",
     justifyContent: "center",
   },
   bannerTitle: {
-    color: "#FFF",
+    color: Colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: "800",
   },
   bannerSub: {
-    color: "#CCFBF1",
+    color: Colors.primarySoft,
     fontSize: FontSize.xs,
     marginTop: 2,
   },

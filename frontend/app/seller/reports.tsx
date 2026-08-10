@@ -12,7 +12,7 @@ import React, { useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
+import { Colors, FontSize, Radius, Shadow, Spacing } from "../../constants/colors";
 import { SellerHeader } from "../../src/components/SellerHeader";
 import { Card } from "../../src/components/Card";
 import { useStore } from "../../src/store/StoreContext";
@@ -188,6 +188,7 @@ export default function SellerReports() {
   const todayBounds = useMemo(() => rangeBounds("today"), []);
   const weekBounds = useMemo(() => rangeBounds("week"), []);
   const monthBounds = useMemo(() => rangeBounds("month"), []);
+  const yearBounds = useMemo(() => rangeBounds("year"), []);
 
   const todaysSales = useMemo(
     () => sumRevenue(myOrders, todayBounds.start, todayBounds.end),
@@ -200,6 +201,13 @@ export default function SellerReports() {
   const monthlySales = useMemo(
     () => sumRevenue(myOrders, monthBounds.start, monthBounds.end),
     [myOrders, monthBounds],
+  );
+  // Year revenue must use the year bounds — using totalRevenue (all-time) was
+  // the bug: it rendered "This Year" with the lifetime total, misleading the
+  // seller into thinking this year's sales were higher than they were.
+  const yearlySales = useMemo(
+    () => sumRevenue(myOrders, yearBounds.start, yearBounds.end),
+    [myOrders, yearBounds],
   );
   const totalRevenue = useMemo(
     () =>
@@ -221,12 +229,38 @@ export default function SellerReports() {
     () => countOrders(myOrders, monthBounds.start, monthBounds.end),
     [myOrders, monthBounds],
   );
+  const yearOrderCount = useMemo(
+    () => countOrders(myOrders, yearBounds.start, yearBounds.end),
+    [myOrders, yearBounds],
+  );
 
   const weekly = useMemo(() => last7Days(myOrders), [myOrders]);
   const monthTop = useMemo(() => topProducts(myOrders, monthBounds), [
     myOrders,
     monthBounds,
   ]);
+
+  /**
+   * Period-over-period trend. Compares the currently selected range against
+   * the same-length window immediately preceding it (e.g. "this week" vs
+   * "previous week"). Returning `null` hides the badge rather than printing
+   * `+∞%` or `NaN%` when the previous period was empty.
+   */
+  const trend = useMemo(() => {
+    const currentBounds = rangeBounds(range);
+    const lengthMs = currentBounds.end.getTime() - currentBounds.start.getTime();
+    const prevStart = new Date(currentBounds.start.getTime() - lengthMs);
+    const prevEnd = new Date(currentBounds.start.getTime());
+    const currentValue = sumRevenue(
+      myOrders,
+      currentBounds.start,
+      currentBounds.end,
+    );
+    const previousValue = sumRevenue(myOrders, prevStart, prevEnd);
+    if (previousValue <= 0) return null;
+    const pct = Math.round(((currentValue - previousValue) / previousValue) * 100);
+    return { pct, positive: pct >= 0 };
+  }, [range, myOrders]);
 
   // Range headline shown above the chart.
   const headline = useMemo(() => {
@@ -238,9 +272,9 @@ export default function SellerReports() {
       case "month":
         return { label: "This Month", value: monthlySales, orders: monthOrderCount };
       case "year":
-        return { label: "This Year", value: totalRevenue, orders: myOrders.length };
+        return { label: "This Year", value: yearlySales, orders: yearOrderCount };
     }
-  }, [range, todaysSales, weeklySales, monthlySales, totalRevenue, todayOrderCount, weekOrderCount, monthOrderCount, myOrders.length]);
+  }, [range, todaysSales, weeklySales, monthlySales, yearlySales, todayOrderCount, weekOrderCount, monthOrderCount, yearOrderCount]);
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -317,8 +351,19 @@ export default function SellerReports() {
               </Text>
             </View>
             <View style={styles.chartBadge}>
-              <Ionicons name="trending-up" size={16} color={Colors.success} />
-              <Text style={styles.chartBadgeText}>+12.4%</Text>
+              {trend ? (
+                <>
+                  <Ionicons
+                    name={trend.positive ? "trending-up" : "trending-down"}
+                    size={16}
+                    color={trend.positive ? Colors.success : Colors.danger}
+                  />
+                  <Text style={styles.chartBadgeText}>
+                    {trend.positive ? "+" : ""}
+                    {trend.pct}%
+                  </Text>
+                </>
+              ) : null}
             </View>
           </View>
 
@@ -401,7 +446,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
     padding: Spacing.md,
-    boxShadow: "0 4px 8px rgba(0,0,0,0.08)",
+    ...Shadow.card,
   },
   statTopRow: {
     flexDirection: "row",
@@ -455,7 +500,7 @@ const styles = StyleSheet.create({
   },
   tabActive: {
     backgroundColor: Colors.primary,
-    color: "#FFF",
+    color: Colors.textInverse,
   },
 
   // Chart
@@ -486,7 +531,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: "#DCFCE7",
+    backgroundColor: Colors.successSoft,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: Radius.pill,
@@ -590,7 +635,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "#CCFBF1",
+    backgroundColor: Colors.primarySoft,
     alignItems: "center",
     justifyContent: "center",
   },

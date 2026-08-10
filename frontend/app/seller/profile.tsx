@@ -249,7 +249,6 @@ export default function SellerProfile() {
                             ? "info"
                             : "warning"
                     }
-                    style={styles.permitPill}
                   />
                 ) : null}
               </View>
@@ -288,7 +287,7 @@ export default function SellerProfile() {
            the one backed by actual data. */}
         <Text style={styles.sectionTitle}>At a Glance</Text>
         <View style={styles.statsRow}>
-          <View style={[styles.statBox, { backgroundColor: "#CCFBF1" }]}>
+          <View style={[styles.statBox, { backgroundColor: Colors.primarySoft }]}>
             <Ionicons name="star" size={20} color={Colors.warning} />
             <Text style={styles.statValue}>
               {typeof user?.rating === "number" ? user.rating.toFixed(1) : "—"}
@@ -430,20 +429,20 @@ export default function SellerProfile() {
         visible={pwdOpen}
         onClose={() => setPwdOpen(false)}
         onSave={() => {
-          // Future backend hook: UsersApi.changePassword(...)
-          Alert.alert(
-            "Password updated",
-            "Your password has been changed successfully.",
-          );
+          // TODO: wire to UsersApi.changePassword(...) when the backend
+          // endpoint lands. Until then, the modal closes silently — telling
+          // the user "Password updated" while nothing changed is a UX lie.
           setPwdOpen(false);
         }}
       />
 
       <MapPickerSheet
         visible={mapPickerOpen}
+        // Distinguishes cancel from confirm: on cancel we just close the
+        // picker and leave the address modal closed too (so the user can
+        // back out without being forced back into editing).
         onClose={() => {
           setMapPickerOpen(false);
-          setAddressOpen(true);
         }}
         initialLat={selectedPin?.lat ?? (typeof user?.lat === "number" ? user.lat : undefined)}
         initialLng={selectedPin?.lng ?? (typeof user?.lng === "number" ? user.lng : undefined)}
@@ -930,7 +929,7 @@ const styles = StyleSheet.create({
 
   // Sections
   sectionTitle: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.lg,
     fontWeight: "800",
     color: Colors.text,
     marginTop: Spacing.sm,
@@ -973,9 +972,7 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     marginTop: 2,
   },
-  permitPill: {
-    marginTop: 0,
-  },
+  // permitPill was a no-op `{ marginTop: 0 }` override — deleted.
   divider: {
     height: 1,
     backgroundColor: Colors.border,
@@ -1094,7 +1091,7 @@ const styles = StyleSheet.create({
   // Modal
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.55)",
+    backgroundColor: Colors.scrim,
     justifyContent: "flex-end",
   },
   modalSheet: {
