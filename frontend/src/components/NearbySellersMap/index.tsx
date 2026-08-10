@@ -53,6 +53,12 @@ export interface NearbySellersMapProps {
     longitudeDelta?: number;
   };
   fitMode?: "auto" | "fixed";
+  /**
+   * Include the user's resolved `center` in the projection so the
+   * first paint shows "me + every nearby seller" on one canvas,
+   * even when there's only a single seller. Defaults to true.
+   */
+  includeCenterInFit?: boolean;
   selectedId?: string;
   onMarkerTap?: (id: string) => void;
   style?: StyleProp<ViewStyle>;
@@ -125,6 +131,7 @@ export function NearbySellersMap({
   selectedId,
   onMarkerTap,
   fitMode = "auto",
+  includeCenterInFit = true,
   // recenterTo / recenterToken are accepted for API parity with the
   // native component but have no effect on web (no camera to drive).
   recenterTo: _recenterTo,
@@ -139,24 +146,55 @@ export function NearbySellersMap({
     [markers],
   );
 
-  // Compute a "padding-adjusted" bbox so the projection matches the
-  // native fitToCoordinates call. Used to show the user roughly
-  // where the map is centred.
-  const bounds = useMemo(() => {
-    if (finiteMarkers.length < 2) return null;
-    return regionForPoints(
-      finiteMarkers.map((m) => ({ lat: m.lat, lng: m.lng })),
-      1.4,
-    );
-  }, [finiteMarkers]);
-
-  const projected = useMemo(
-    () => (fitMode === "auto" ? project(finiteMarkers, center) : []),
-    [finiteMarkers, center, fitMode],
+  // Effective user centre — only valid when finite. Used both for the
+  // bbox and as a fallback pin when no markers exist.
+  const finiteCenter = useMemo(
+    () =>
+      Number.isFinite(center.lat) && Number.isFinite(center.lng)
+        ? { lat: center.lat, lng: center.lng }
+        : null,
+    [center.lat, center.lng],
   );
 
-  // For single-marker / no-marker cases, project that one marker (or
-  // the centre) so the user still sees *something* on the canvas.
+  // Compute a "padding-adjusted" bbox so the projection matches the
+  // native fitToCoordinates call. Used to show the user roughly
+  // where the map is centred. Includes the user's resolved location
+  // when `includeCenterInFit` is true so a single-marker case still
+  // frames "user + nearest seller".
+  const bounds = useMemo(() => {
+    const pts: { lat: number; lng: number }[] = finiteMarkers.map((m) => ({
+      lat: m.lat,
+      lng: m.lng,
+    }));
+    if (includeCenterInFit && finiteCenter) pts.push(finiteCenter);
+    if (pts.length < 2) return null;
+    return regionForPoints(pts, 1.4);
+  }, [finiteMarkers, finiteCenter, includeCenterInFit]);
+
+  // Projection gets every marker PLUS a synthetic user pin so the
+  // canvas frames the user alongside every nearby seller.
+  const projected = useMemo(() => {
+    if (fitMode !== "auto") return [];
+    const synthetic = includeCenterInFit && finiteCenter
+      ? [
+          {
+            id: "__user__",
+            lat: finiteCenter.lat,
+            lng: finiteCenter.lng,
+            // Synthetic pin is rendered too so the user always sees
+            // themselves on the canvas. `selected` stays false and the
+            // tap callback short-circuits for this id below.
+            label: "You",
+          },
+        ]
+      : [];
+    return project([...finiteMarkers, ...synthetic], finiteCenter ?? center);
+  }, [finiteMarkers, finiteCenter, center, fitMode, includeCenterInFit]);
+
+  // For the single-marker case (or no-marker case), project that one
+  // marker (or the centre) so the user still sees *something* on the
+  // canvas. With `includeCenterInFit` the projection above already
+  // handles single-marker; this is a true empty-state fallback.
   const single = useMemo<Projected | null>(() => {
     if (projected.length > 0) return null;
     const target = finiteMarkers[0];
@@ -173,27 +211,38 @@ export function NearbySellersMap({
     (p: Projected, isSelected: boolean) => {
       const left = `${(p.x * 100).toFixed(2)}%` as `${number}%`;
       const top = `${(p.y * 100).toFixed(2)}%` as `${number}%`;
+      const isUserPin = p.pin.id === "__user__";
       return (
         <Pressable
           key={p.pin.id}
-          onPress={() => onMarkerTap?.(p.pin.id)}
+          // User pin is decorative — taps must NOT open seller details.
+          onPress={isUserPin ? undefined : () => onMarkerTap?.(p.pin.id)}
+          disabled={isUserPin}
           style={[styles.pinAnchor, { left, top }]}
-          accessibilityRole="button"
+          accessibilityRole={isUserPin ? undefined : "button"}
           accessibilityLabel={
-            p.pin.label ? `Open seller ${p.pin.label}` : "Open seller"
+            isUserPin
+              ? "Your current location"
+              : p.pin.label
+              ? `Open seller ${p.pin.label}`
+              : "Open seller"
           }
         >
           <View
             style={[
               styles.pin,
-              { backgroundColor: Colors.primary },
-              isSelected && {
+              { backgroundColor: isUserPin ? Colors.accent : Colors.primary },
+              isSelected && !isUserPin && {
                 backgroundColor: Colors.accent,
                 transform: [{ scale: 1.15 }],
               },
             ]}
           >
-            <Ionicons name="storefront" size={14} color="#FFF" />
+            <Ionicons
+              name={isUserPin ? "navigate" : "storefront"}
+              size={14}
+              color="#FFF"
+            />
           </View>
           {p.pin.label ? (
             <View style={styles.pinLabel}>

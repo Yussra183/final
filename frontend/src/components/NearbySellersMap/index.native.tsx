@@ -127,11 +127,19 @@ export interface NearbySellersMapProps {
     longitudeDelta?: number;
   };
   /**
-   * "auto" — fit-bounds when 2+ markers exist, otherwise centre on
-   * `center`. "fixed" — always centre on `center`, no auto fit. Default
+   * "auto" — fit-bounds to all markers (and, when `includeCenterInFit`
+   * is true, the user's centre) so every nearby seller is visible at
+   * once. "fixed" — always centre on `center`, no auto fit. Default
    * "auto".
    */
   fitMode?: "auto" | "fixed";
+  /**
+   * Include the user's resolved `center` in the initial bbox so the
+   * "user + all nearby sellers" framing is preserved even when there
+   * is only a single seller (or none at all). Defaults to true — this
+   * is the behaviour the customer Home wants on first paint.
+   */
+  includeCenterInFit?: boolean;
   /** When set, paints that marker in the selected colour. */
   selectedId?: string;
   /** Fired when the user taps a marker. */
@@ -147,6 +155,7 @@ export function NearbySellersMap({
   recenterToken = 0,
   recenterTo,
   fitMode = "auto",
+  includeCenterInFit = true,
   selectedId,
   onMarkerTap,
   style,
@@ -163,37 +172,47 @@ export function NearbySellersMap({
     [markers],
   );
 
-  // Initial region = bbox-fit when we have enough markers, otherwise
-  // a small fixed region around the centre. Every path is clamped to
-  // the Unguja bounding box so the camera can never start off-island.
+  // Combined point list used for the bbox: every marker PLUS the
+  // user's resolved centre (when finite + opted in). This means the
+  // initial frame shows "me + every nearby seller", even when there
+  // is only a single seller on the map.
+  const fitPoints = useMemo(() => {
+    const pts: { lat: number; lng: number }[] = finiteMarkers.map((m) => ({
+      lat: m.lat,
+      lng: m.lng,
+    }));
+    if (includeCenterInFit && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
+      pts.push({ lat: center.lat, lng: center.lng });
+    }
+    return pts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finiteMarkers, includeCenterInFit, center.lat, center.lng]);
+
+  // Initial region. With 1+ points we frame the bbox of every marker
+  // (and the user); only the truly empty case falls back to the
+  // Unguja-wide region. This guarantees the first paint shows ALL
+  // nearby sellers in one view, never a tight zoom on a single pin.
   const initialRegion = useMemo(() => {
-    if (fitMode === "auto" && finiteMarkers.length >= 2) {
-      const r = regionForPoints(
-        finiteMarkers.map((m) => ({ lat: m.lat, lng: m.lng })),
-        1.4,
-      );
+    if (fitMode === "auto" && fitPoints.length >= 1) {
+      const r = regionForPoints(fitPoints, 1.4);
       if (r) return clampRegionToUnguja(r);
     }
-    return clampRegionToUnguja({
-      latitude: center.lat,
-      longitude: center.lng,
-      latitudeDelta: 0.08,
-      longitudeDelta: 0.08,
-    });
-    // zoom / center are used only as a fallback path; finiteMarkers is
-    // the primary driver.
+    return clampRegionToUnguja(UNGUJA_FALLBACK_REGION);
+    // zoom is used only as a fallback path; fitPoints drives the
+    // primary case.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [finiteMarkers, fitMode]);
+  }, [fitPoints, fitMode]);
 
-  // Refit when the marker set changes (e.g. the store resolves, the
-  // user types a new address). The post-mount + onLayout passes catch
-  // the "first paint" case before the WebView had time to lay out.
+  // Refit when the marker set or centre changes (e.g. the store
+  // resolves, the user types a new address, "Locate me" is tapped).
+  // The post-mount + onLayout passes catch the "first paint" case
+  // before the MapView had time to lay out.
   const fitToMarkers = useCallback(() => {
     if (!mapRef.current) return;
-    if (fitMode !== "auto" || finiteMarkers.length < 2) return;
-    const points = finiteMarkers.map((m) => ({
-      latitude: m.lat,
-      longitude: m.lng,
+    if (fitMode !== "auto" || fitPoints.length < 1) return;
+    const points = fitPoints.map((p) => ({
+      latitude: p.lat,
+      longitude: p.lng,
     }));
     try {
       mapRef.current.fitToCoordinates(points, {
@@ -203,7 +222,7 @@ export function NearbySellersMap({
     } catch {
       /* ignore — the map ref is stale during fast unmount */
     }
-  }, [finiteMarkers, fitMode]);
+  }, [fitPoints, fitMode]);
 
   useEffect(() => {
     // Small delay so the first fit lands after the map's tile layer
@@ -339,6 +358,35 @@ export function NearbySellersMap({
             </Marker>
           );
         })}
+
+        {/* User "you are here" pin — mirrors the synthetic web-fallback
+            pin so the user always sees themselves on the canvas
+            alongside every nearby seller. Renders only when the
+            resolved `center` is finite; non-tappable so a stray tap
+            can't open a phantom seller-details screen. */}
+        {Number.isFinite(center.lat) && Number.isFinite(center.lng) ? (
+          <Marker
+            key="__user__"
+            coordinate={{ latitude: center.lat, longitude: center.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+            // Intentionally no `onPress` — the user pin is decorative.
+          >
+            <View
+              style={[styles.pinWrap, styles.pinWrapUser]}
+              pointerEvents="none"
+            >
+              <View style={[styles.pin, styles.pinUser]}>
+                <Ionicons name="navigate" size={16} color="#FFF" />
+              </View>
+              <View style={styles.pinLabel}>
+                <Text style={styles.pinLabelText} numberOfLines={1}>
+                  You
+                </Text>
+              </View>
+            </View>
+          </Marker>
+        ) : null}
       </MapView>
 
       <View style={styles.attribution} pointerEvents="none">
@@ -365,6 +413,11 @@ const styles = StyleSheet.create({
   pinWrapSelected: {
     zIndex: 10,
   },
+  pinWrapUser: {
+    // Lift the user pin above seller pins so the user can always see
+    // themselves even when their coords coincide with a seller's.
+    zIndex: 20,
+  },
   pin: {
     width: 28,
     height: 28,
@@ -374,6 +427,17 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "#FFF",
     boxShadow: "0 2px 4px rgba(0,0,0,0.25)",
+  },
+  pinUser: {
+    // Slightly larger than a seller pin so the "you" marker reads as
+    // distinct. Uses the accent colour (same as the web fallback's
+    // synthetic user pin).
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.accent,
+    borderWidth: 3,
+    boxShadow: "0 3px 6px rgba(0,0,0,0.35)",
   },
   pinLabel: {
     marginTop: 2,

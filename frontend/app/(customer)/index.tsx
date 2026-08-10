@@ -54,7 +54,6 @@ import { useNearbySellers } from "../../src/hooks/useNearbySellers";
 import {
   UNGUJA_PLACES,
   nearestPlaceName,
-  type UngujaPlace,
 } from "../../src/lib/ungujaPlaces";
 import {
   isFiniteNumber,
@@ -94,26 +93,12 @@ export default function CustomerHome() {
   // recentre target).
   const [sheetOpen, setSheetOpen] = useState(false);
   const [recenterToken, setRecenterToken] = useState(0);
+  // Place-chip selection state is kept so the chip strip still shows
+  // its active highlight, but it no longer drives a camera recentre —
+  // the map stays framed on "user + all nearby sellers" at all times.
+  // Tapping a seller pin still opens the seller-details screen via
+  // `onMarkerTap` below.
   const [activePlaceId, setActivePlaceId] = useState<string | null>(null);
-  const activePlace: UngujaPlace | null = useMemo(
-    () => UNGUJA_PLACES.find((p) => p.id === activePlaceId) ?? null,
-    [activePlaceId],
-  );
-  // The map recentre target. We build a fresh object on every
-  // change so the effect that consumes it always fires — the map
-  // effect does a `===` check internally.
-  const recenterTo = useMemo(
-    () =>
-      activePlace
-        ? {
-            lat: activePlace.lat,
-            lng: activePlace.lng,
-            latitudeDelta: activePlace.zoom,
-            longitudeDelta: activePlace.zoom,
-          }
-        : null,
-    [activePlace],
-  );
 
   const user = session?.user;
   const unreadCount = user
@@ -321,7 +306,6 @@ export default function CustomerHome() {
           markers={mappedMarkers}
           center={mapCenter}
           recenterToken={recenterToken}
-          recenterTo={recenterTo ?? undefined}
           style={StyleSheet.absoluteFill}
           onMarkerTap={(id) => openSeller(id)}
         />
