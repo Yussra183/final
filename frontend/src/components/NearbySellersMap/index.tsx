@@ -27,6 +27,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, FontSize, Radius, Spacing } from "../../../constants/colors";
 import { regionForPoints } from "../LiveTrackingMap/region";
+import { identityColor } from "../../lib/identityColor";
 
 export interface NearbySellerMarker {
   id: string;
@@ -34,6 +35,20 @@ export interface NearbySellerMarker {
   lng: number;
   label?: string;
   selected?: boolean;
+  /** Business name shown on the pin label. Falls back to `label`. */
+  name?: string;
+  /** Open / closed status shown as a pill under the pin label. */
+  status?: "Active" | "Closed";
+  /** Distance from the user, used by the bottom-sheet card row. */
+  distanceKm?: number;
+  /** Cylinder sizes the seller stocks, used by the bottom-sheet card. */
+  cylinderSizes?: string[];
+  /**
+   * Optional per-marker accent colour. When set, overrides the
+   * automatic `identityColor(id)` default — use for semantic cases
+   * (e.g. the seller's most recent order).
+   */
+  color?: string;
 }
 
 export interface NearbySellersMapProps {
@@ -61,6 +76,12 @@ export interface NearbySellersMapProps {
   includeCenterInFit?: boolean;
   selectedId?: string;
   onMarkerTap?: (id: string) => void;
+  /**
+   * When false, hide the synthetic "You" pin entirely (the
+   * privacy-style live-location toggle on the customer Home).
+   * Defaults to true.
+   */
+  showUserPin?: boolean;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -132,6 +153,7 @@ export function NearbySellersMap({
   onMarkerTap,
   fitMode = "auto",
   includeCenterInFit = true,
+  showUserPin = true,
   // recenterTo / recenterToken are accepted for API parity with the
   // native component but have no effect on web (no camera to drive).
   recenterTo: _recenterTo,
@@ -175,7 +197,7 @@ export function NearbySellersMap({
   // canvas frames the user alongside every nearby seller.
   const projected = useMemo(() => {
     if (fitMode !== "auto") return [];
-    const synthetic = includeCenterInFit && finiteCenter
+    const synthetic = showUserPin && includeCenterInFit && finiteCenter
       ? [
           {
             id: "__user__",
@@ -189,7 +211,7 @@ export function NearbySellersMap({
         ]
       : [];
     return project([...finiteMarkers, ...synthetic], finiteCenter ?? center);
-  }, [finiteMarkers, finiteCenter, center, fitMode, includeCenterInFit]);
+  }, [finiteMarkers, finiteCenter, center, fitMode, includeCenterInFit, showUserPin]);
 
   // For the single-marker case (or no-marker case), project that one
   // marker (or the centre) so the user still sees *something* on the
@@ -212,6 +234,24 @@ export function NearbySellersMap({
       const left = `${(p.x * 100).toFixed(2)}%` as `${number}%`;
       const top = `${(p.y * 100).toFixed(2)}%` as `${number}%`;
       const isUserPin = p.pin.id === "__user__";
+      // Bolt-lite richer label: business name + open/closed pill.
+      // Falls back to the legacy single-line `label` when richer fields
+      // are absent so older callers keep their place-name text.
+      const richName = !isUserPin ? p.pin.name ?? p.pin.label : null;
+      const richStatus = !isUserPin ? p.pin.status : null;
+      // Per-seller identity color (overridable via `pin.color`).
+      const pinColor = !isUserPin
+        ? p.pin.color ?? identityColor(p.pin.id)
+        : Colors.accent;
+      // Status halo: success for open, border for closed, self-tinted
+      // when no status reported. 2 px normal, 3 px when selected.
+      const haloColor =
+        richStatus === "Active"
+          ? Colors.success
+          : richStatus === "Closed"
+          ? Colors.border
+          : pinColor;
+      const haloWidth = isSelected ? 3 : 2;
       return (
         <Pressable
           key={p.pin.id}
@@ -223,32 +263,76 @@ export function NearbySellersMap({
           accessibilityLabel={
             isUserPin
               ? "Your current location"
-              : p.pin.label
-              ? `Open seller ${p.pin.label}`
+              : richName
+              ? `Open seller ${richName}`
               : "Open seller"
           }
         >
           <View
             style={[
-              styles.pin,
-              { backgroundColor: isUserPin ? Colors.accent : Colors.primary },
+              styles.pinHalo,
+              {
+                borderColor: isUserPin ? Colors.accent : haloColor,
+                borderWidth: haloWidth,
+                opacity: isUserPin || isSelected ? 1 : 0.55,
+              },
               isSelected && !isUserPin && {
-                backgroundColor: Colors.accent,
                 transform: [{ scale: 1.15 }],
               },
             ]}
           >
-            <Ionicons
-              name={isUserPin ? "navigate" : "storefront"}
-              size={14}
-              color="#FFF"
-            />
+            <View
+              style={[
+                styles.pin,
+                { backgroundColor: pinColor },
+              ]}
+            >
+              <Ionicons
+                name={isUserPin ? "navigate" : "storefront"}
+                size={14}
+                color="#FFF"
+              />
+            </View>
           </View>
-          {p.pin.label ? (
+          {isUserPin && p.pin.label ? (
             <View style={styles.pinLabel}>
               <Text style={styles.pinLabelText} numberOfLines={1}>
                 {p.pin.label}
               </Text>
+            </View>
+          ) : null}
+          {!isUserPin && (richName || richStatus) ? (
+            <View style={styles.pinLabel}>
+              {richName ? (
+                <Text style={styles.pinLabelName} numberOfLines={1}>
+                  {richName}
+                </Text>
+              ) : null}
+              {richStatus ? (
+                <View
+                  style={[
+                    styles.pinStatusPill,
+                    {
+                      backgroundColor:
+                        richStatus === "Active"
+                          ? "#DCFCE7"
+                          : "#FEE2E2",
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.pinStatusPillText,
+                      {
+                        color:
+                          richStatus === "Active" ? "#047857" : "#B91C1C",
+                      },
+                    ]}
+                  >
+                    {richStatus === "Active" ? "Open" : "Closed"}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           ) : null}
         </Pressable>
@@ -345,19 +429,51 @@ const styles = StyleSheet.create({
     borderColor: "#FFF",
     boxShadow: "0 2px 4px rgba(0,0,0,0.25)",
   },
+  pinHalo: {
+    // Outer ring around the pin bubble. Color / width come from the
+    // seller status (success for open, border for closed, self-tinted
+    // when status is unknown). 2 px normal, 3 px when selected.
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    borderColor: Colors.success,
+  },
   pinLabel: {
     marginTop: 4,
     paddingHorizontal: Spacing.xs,
-    paddingVertical: 1,
-    borderRadius: Radius.pill,
+    paddingVertical: 3,
+    borderRadius: Radius.md,
     backgroundColor: "rgba(255,255,255,0.95)",
     borderWidth: 1,
     borderColor: Colors.border,
+    alignItems: "center",
+    minWidth: 64,
+    maxWidth: 160,
   },
   pinLabelText: {
     color: Colors.text,
     fontSize: FontSize.xs - 2,
     fontWeight: "800",
+  },
+  pinLabelName: {
+    color: Colors.text,
+    fontSize: FontSize.xs - 1,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  pinStatusPill: {
+    marginTop: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+  },
+  pinStatusPillText: {
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
   crosshair: {
     ...StyleSheet.absoluteFillObject,

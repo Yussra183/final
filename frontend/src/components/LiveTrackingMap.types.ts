@@ -55,6 +55,17 @@ export interface LiveTrackingMapProps {
   destinationLabel?: string;
   /** Hex colour for the route polyline. Default Colors.primary. */
   routeColor?: string;
+  /**
+   * Optional per-marker accent colours. Any unset field falls back
+   * to the current static colour (`surfaceMuted` / `accent` /
+   * `primary`). Use `identityColor(sellerId)` for the seller-side
+   * pin so a seller keeps the same identity across screens.
+   */
+  markerColors?: {
+    origin?: string;
+    live?: string;
+    destination?: string;
+  };
   /** Optional wrapper style. */
   style?: ViewStyle;
 }

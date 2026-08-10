@@ -58,6 +58,7 @@ function FallbackFrame({
   originLabel,
   destinationLabel,
   routeColor,
+  markerColors,
   style,
 }: ResolvedMapProps) {
   const all: LatLng[] = [
@@ -133,13 +134,14 @@ function FallbackFrame({
       </View>
 
       {/* Pins */}
-      <Pin x={originPos.x} y={originPos.y} icon="storefront" label={originLabel ?? "Origin"} tone="muted" />
+      <Pin x={originPos.x} y={originPos.y} icon="storefront" label={originLabel ?? "Origin"} tone="muted" bg={markerColors?.origin} />
       <Pin
         x={livePos.x}
         y={livePos.y}
         icon="navigate"
         label={liveLabel ?? "Live"}
         tone="live"
+        bg={markerColors?.live}
         pulse
       />
       <Pin
@@ -148,6 +150,7 @@ function FallbackFrame({
         icon="flag"
         label={destinationLabel ?? "Destination"}
         tone="primary"
+        bg={markerColors?.destination}
       />
 
       {/* Attribution chip */}
@@ -165,16 +168,19 @@ interface PinProps {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   tone: "primary" | "muted" | "live";
+  /** Optional background override (per-marker color). */
+  bg?: string;
   pulse?: boolean;
 }
 
-function Pin({ x, y, icon, label, tone, pulse }: PinProps) {
+function Pin({ x, y, icon, label, tone, bg: bgOverride, pulse }: PinProps) {
   const bg =
-    tone === "primary"
+    bgOverride ??
+    (tone === "primary"
       ? Colors.primary
       : tone === "live"
       ? Colors.accent
-      : Colors.surfaceMuted;
+      : Colors.surfaceMuted);
   const fg = tone === "muted" ? Colors.textSecondary : "#FFF";
   return (
     <View

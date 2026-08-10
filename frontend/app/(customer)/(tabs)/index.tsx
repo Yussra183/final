@@ -49,6 +49,8 @@ import {
 import { PressableScale, PulseDot } from "../../../src/components/MicroAnimations";
 import { useStore } from "../../../src/store/StoreContext";
 import { useNearbySellers } from "../../../src/hooks/useNearbySellers";
+import { useCustomerLocation } from "../../../src/hooks/useCustomerLocation";
+import { identityColor } from "../../../src/lib/identityColor";
 import {
   UNGUJA_PLACES,
   nearestPlaceName,
@@ -82,6 +84,15 @@ export default function CustomerHome() {
   const { sellers, usingDefaultLocation, effectiveLocation } =
     useNearbySellers(apiSellers);
 
+  // Live device location — drives the "You" pin on the map. Once
+  // permission is granted this hook subscribes to watchPositionAsync,
+  // so the pin keeps moving with the customer (throttled to 3 s / 5 m).
+  // The hook never overwrites the customer's saved profile address;
+  // `effectiveLocation` (used for the server-side sellers query) stays
+  // tied to `session.user.lat/lng` per the useNearbySellers contract.
+  const { coords: deviceCoords, refresh: refreshDeviceLocation } =
+    useCustomerLocation();
+
   // Local UI state — bottom sheet visibility + a tick to nudge the
   // camera back to the user's resolved location when they tap
   // "Locate me", plus the active place chip (drives the map's
@@ -94,6 +105,15 @@ export default function CustomerHome() {
   // Tapping a seller pin still opens the seller-details screen via
   // `onMarkerTap` below.
   const [activePlaceId, setActivePlaceId] = useState<string | null>(null);
+  // Bolt-lite: privacy-style toggle that hides the customer's "You"
+  // pin AND the underlying native blue dot together. Default ON.
+  const [showUserPin, setShowUserPin] = useState(true);
+  // Bolt-lite: highlighted seller (tapped on the map or in the sheet)
+  // — used to paint both the pin and the matching card in the
+  // selected colour.
+  const [selectedSellerId, setSelectedSellerId] = useState<string | null>(
+    null,
+  );
 
   const user = session?.user;
   const unreadCount = user
@@ -108,6 +128,9 @@ export default function CustomerHome() {
   // fall within 1.5 km of a known place, the pin is also snapped to
   // that place's centroid so two sellers on the same street don't
   // overlap on the map.
+  // Bolt-lite: also carry the business name, open/closed status,
+  // distance, and cylinder sizes through to the marker so the
+  // `<NearbySellersMap>` can render richer pin labels.
   const { mappedMarkers, mappedSellers } = useMemo(() => {
     const mapped: NearbySellerMarker[] = sellers
       .filter((s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng))
@@ -117,10 +140,14 @@ export default function CustomerHome() {
           id: s.id,
           lat: s.lat!,
           lng: s.lng!,
-          // Show the resolved place name under the pin (or the raw
-          // distance if the seller is more than 1.5 km from any
-          // known place).
+          // Legacy single-line label (used by callers / web fallback
+          // when no `name` is set).
           label: placeName ?? `${s.distanceKm.toFixed(1)} km`,
+          // Richer Bolt-lite fields.
+          name: s.name,
+          status: s.status,
+          distanceKm: s.distanceKm,
+          cylinderSizes: s.cylinderSizes,
         };
       });
     return { mappedMarkers: mapped, mappedSellers: sellers };
@@ -131,6 +158,7 @@ export default function CustomerHome() {
   // collide with the sheet's modal animation.
   const openSeller = useCallback(
     (id: string) => {
+      setSelectedSellerId(id);
       setSheetOpen(false);
       // tiny defer so the sheet close animation starts before push
       setTimeout(() => {
@@ -142,24 +170,37 @@ export default function CustomerHome() {
     [router],
   );
 
+  // Handle a pin tap from the map: highlight the matching card and
+  // surface the bottom sheet so the customer can either inspect the
+  // card or continue to the seller-details screen.
+  const onPinTap = useCallback((id: string) => {
+    setSelectedSellerId(id);
+    setSheetOpen(true);
+  }, []);
+
   // ---- Floating buttons ---------------------------------------------
   const onLocateMe = () => {
-    // Bump the recenter token — `useCustomerLocation` is read-only on
-    // mount per its contract, so the simplest UX is to bump a counter
-    // that the map's `center` will pick up below by re-reading
-    // `effectiveLocation`. The hook is intentionally not re-run here
-    // (would race the device permission flow); the visible effect is
-    // the map recentring, which matches the user's request.
+    // Kick a fresh GPS fix so the recentre target reflects the
+    // device, not a stale profile address. The hook re-runs the
+    // permission + GPS race and re-arms the watch subscription on
+    // success; while the race is in flight we also bump the recentre
+    // token so the camera animates back to whatever centre the
+    // resolver is about to land on.
     setRecenterToken((t) => t + 1);
-    // If there's no current source and we still rely on the default,
-    // we don't have anything better to centre on; the map will keep
-    // its current view.
+    void refreshDeviceLocation();
   };
 
-  // The map's `center` is the resolved location. We intentionally
-  // recompute on `recenterToken` so the floating button nudges the
-  // camera back to the user.
+  // The map's `center` is the live device position when we have one,
+  // otherwise the resolved profile address. We recompute on
+  // `recenterToken` so the floating button nudges the camera back to
+  // the user.
   const mapCenter = useMemo(() => {
+    if (
+      isFiniteNumber(deviceCoords.lat) &&
+      isFiniteNumber(deviceCoords.lng)
+    ) {
+      return { lat: deviceCoords.lat, lng: deviceCoords.lng };
+    }
     if (
       effectiveLocation &&
       isFiniteNumber(effectiveLocation.lat) &&
@@ -174,7 +215,7 @@ export default function CustomerHome() {
     // recenterToken is referenced to keep the memo freshness tied
     // to the button tap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveLocation, recenterToken]);
+  }, [deviceCoords.lat, deviceCoords.lng, effectiveLocation, recenterToken]);
 
   return (
     <SafeAreaView
@@ -270,8 +311,10 @@ export default function CustomerHome() {
           markers={mappedMarkers}
           center={mapCenter}
           recenterToken={recenterToken}
+          showUserPin={showUserPin}
+          selectedId={selectedSellerId ?? undefined}
           style={StyleSheet.absoluteFill}
-          onMarkerTap={(id) => openSeller(id)}
+          onMarkerTap={onPinTap}
         />
 
         {/* Top-left floating chip: location summary. */}
@@ -290,6 +333,25 @@ export default function CustomerHome() {
 
         {/* Bottom-right floating button cluster. */}
         <View style={styles.fabCluster}>
+          <PressableScale
+            onPress={() => setShowUserPin((v) => !v)}
+            style={StyleSheet.flatten([
+              styles.fab,
+              styles.fabGhost,
+              showUserPin && styles.fabGhostActive,
+            ])}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: showUserPin }}
+            accessibilityLabel={
+              showUserPin ? "Hide my live location" : "Show my live location"
+            }
+          >
+            <Ionicons
+              name={showUserPin ? "eye-outline" : "eye-off-outline"}
+              size={20}
+              color={showUserPin ? Colors.accent : Colors.primary}
+            />
+          </PressableScale>
           <PressableScale
             onPress={onLocateMe}
             style={StyleSheet.flatten([styles.fab, styles.fabGhost])}
@@ -366,6 +428,8 @@ export default function CustomerHome() {
           renderItem={({ item }) => (
             <SheetSellerRow
               seller={item}
+              color={identityColor(item.id)}
+              selected={item.id === selectedSellerId}
               onPress={() => openSeller(item.id)}
             />
           )}
@@ -380,9 +444,13 @@ export default function CustomerHome() {
 // ----------------------------------------------------------------------
 function SheetSellerRow({
   seller,
+  color,
+  selected,
   onPress,
 }: {
   seller: NearbySeller;
+  color: string;
+  selected: boolean;
   onPress: () => void;
 }) {
   const initials = seller.name
@@ -391,17 +459,29 @@ function SheetSellerRow({
     .map((p) => p[0]?.toUpperCase())
     .join("");
   const hasNoCoords = !isFiniteNumber(seller.lat) || !isFiniteNumber(seller.lng);
+  const sizes = seller.cylinderSizes ?? [];
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.sheetRow,
         pressed && { opacity: 0.85 },
+        selected && styles.sheetRowSelected,
       ]}
       accessibilityRole="button"
+      accessibilityState={{ selected }}
       accessibilityLabel={`View details for ${seller.name}`}
     >
-      <View style={styles.sheetRowAvatar}>
+      <View
+        style={[
+          styles.sheetRowAvatar,
+          { backgroundColor: color },
+          selected && [
+            styles.sheetRowAvatarSelected,
+            { borderColor: color },
+          ],
+        ]}
+      >
         <Text style={styles.sheetRowAvatarText}>{initials}</Text>
       </View>
       <View style={{ flex: 1 }}>
@@ -433,6 +513,15 @@ function SheetSellerRow({
         <Text style={styles.sheetRowLocation} numberOfLines={1}>
           {seller.location}
         </Text>
+        {sizes.length > 0 ? (
+          <View style={styles.sheetRowSizes}>
+            {sizes.slice(0, 4).map((size) => (
+              <View key={size} style={styles.sheetRowSizeChip}>
+                <Text style={styles.sheetRowSizeChipText}>{size}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
       </View>
       <Ionicons
         name="chevron-forward"
@@ -567,6 +656,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
   },
+  fabGhostActive: {
+    borderWidth: 2,
+    borderColor: Colors.accent,
+  },
   fabBadge: {
     position: "absolute",
     top: -4,
@@ -657,6 +750,10 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.xs,
+    borderRadius: Radius.md,
+  },
+  sheetRowSelected: {
+    backgroundColor: "#CCFBF1",
   },
   sheetRowAvatar: {
     width: 44,
@@ -665,6 +762,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     alignItems: "center",
     justifyContent: "center",
+  },
+  sheetRowAvatarSelected: {
+    borderWidth: 2,
+    borderColor: Colors.accent,
   },
   sheetRowAvatarText: {
     color: "#FFF",
@@ -713,5 +814,24 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textSecondary,
     marginTop: 2,
+  },
+  sheetRowSizes: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+    marginTop: 6,
+  },
+  sheetRowSizeChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  sheetRowSizeChipText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: Colors.primary,
   },
 });

@@ -122,7 +122,12 @@ function NativeLiveTrackingMap(props: ResolvedMapProps) {
           anchor={{ x: 0.5, y: 1 }}
           title={props.originLabel ?? "Origin"}
         >
-          <View style={[styles.mapPin, { backgroundColor: Colors.surfaceMuted }]}>
+          <View
+            style={[
+              styles.mapPin,
+              { backgroundColor: props.markerColors?.origin ?? Colors.surfaceMuted },
+            ]}
+          >
             <Ionicons name="storefront" size={14} color={Colors.textSecondary} />
           </View>
         </Marker>
@@ -132,7 +137,12 @@ function NativeLiveTrackingMap(props: ResolvedMapProps) {
           anchor={{ x: 0.5, y: 0.5 }}
           title={props.liveLabel ?? "Live"}
         >
-          <View style={[styles.mapPinLive, { backgroundColor: Colors.accent }]}>
+          <View
+            style={[
+              styles.mapPinLive,
+              { backgroundColor: props.markerColors?.live ?? Colors.accent },
+            ]}
+          >
             <Ionicons name="navigate" size={16} color="#FFF" />
           </View>
         </Marker>
@@ -142,7 +152,12 @@ function NativeLiveTrackingMap(props: ResolvedMapProps) {
           anchor={{ x: 0.5, y: 1 }}
           title={props.destinationLabel ?? "Destination"}
         >
-          <View style={[styles.mapPin, { backgroundColor: Colors.primary }]}>
+          <View
+            style={[
+              styles.mapPin,
+              { backgroundColor: props.markerColors?.destination ?? Colors.primary },
+            ]}
+          >
             <Ionicons name="flag" size={14} color="#FFF" />
           </View>
         </Marker>

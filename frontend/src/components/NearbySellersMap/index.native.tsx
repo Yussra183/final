@@ -29,6 +29,7 @@ import { Ionicons } from "@expo/vector-icons";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { Colors, FontSize, Radius } from "../../../constants/colors";
 import { regionForPoints } from "../LiveTrackingMap/region";
+import { identityColor } from "../../lib/identityColor";
 import type { StyleProp, ViewStyle } from "react-native";
 
 /**
@@ -98,6 +99,20 @@ export interface NearbySellerMarker {
   label?: string;
   /** Visual selection; usually driven by `selectedId`. */
   selected?: boolean;
+  /** Business name shown on the pin label. Falls back to `label`. */
+  name?: string;
+  /** Open / closed status shown as a pill under the pin label. */
+  status?: "Active" | "Closed";
+  /** Distance from the user, used by the bottom-sheet card row. */
+  distanceKm?: number;
+  /** Cylinder sizes the seller stocks, used by the bottom-sheet card. */
+  cylinderSizes?: string[];
+  /**
+   * Optional per-marker accent colour. When set, overrides the
+   * automatic `identityColor(id)` default — use for semantic cases
+   * (e.g. the seller's most recent order).
+   */
+  color?: string;
 }
 
 /** Props for `<NearbySellersMap>`. */
@@ -144,6 +159,12 @@ export interface NearbySellersMapProps {
   selectedId?: string;
   /** Fired when the user taps a marker. */
   onMarkerTap?: (id: string) => void;
+  /**
+   * When false, hide the synthetic "You" pin AND disable the
+   * native `showsUserLocation` blue dot — the customer Home's
+   * privacy-style live-location toggle. Defaults to true.
+   */
+  showUserPin?: boolean;
   /** Wrapper style. Pass `{ flex: 1 }` to make the map fill its parent. */
   style?: StyleProp<ViewStyle>;
 }
@@ -156,6 +177,7 @@ export function NearbySellersMap({
   recenterTo,
   fitMode = "auto",
   includeCenterInFit = true,
+  showUserPin = true,
   selectedId,
   onMarkerTap,
   style,
@@ -305,6 +327,7 @@ export function NearbySellersMap({
         }}
         showsCompass
         showsMyLocationButton={false}
+        showsUserLocation={showUserPin}
         showsTraffic={false}
         toolbarEnabled={false}
         rotateEnabled
@@ -320,6 +343,24 @@ export function NearbySellersMap({
       >
         {finiteMarkers.map((m) => {
           const isSelected = selectedId === m.id || m.selected;
+          // Bolt-lite richer label: business name on top, open/closed
+          // pill underneath. Falls back to the legacy single-line
+          // `label` string when richer fields are absent so older
+          // callers keep their place-name text.
+          const richName = m.name ?? m.label;
+          const richStatus = m.status;
+          // Per-seller identity color, hashed from id when no explicit
+          // override. Same seller → same color on every map surface.
+          const pinColor = m.color ?? identityColor(m.id);
+          // Status halo: green ring for open sellers, grey for closed,
+          // and a thin self-tinted ring when no status is reported.
+          const haloColor =
+            richStatus === "Active"
+              ? Colors.success
+              : richStatus === "Closed"
+              ? Colors.border
+              : pinColor;
+          const haloWidth = isSelected ? 3 : 2;
           return (
             <Marker
               key={m.id}
@@ -337,21 +378,54 @@ export function NearbySellersMap({
               >
                 <View
                   style={[
-                    styles.pin,
-                    { backgroundColor: Colors.primary },
-                    isSelected && {
-                      backgroundColor: Colors.accent,
-                      transform: [{ scale: 1.15 }],
+                    styles.pinHalo,
+                    {
+                      borderColor: haloColor,
+                      borderWidth: haloWidth,
+                      opacity: isSelected ? 1 : 0.55,
                     },
+                    isSelected && { transform: [{ scale: 1.15 }] },
                   ]}
                 >
-                  <Ionicons name="storefront" size={14} color="#FFF" />
+                  <View
+                    style={[
+                      styles.pin,
+                      { backgroundColor: pinColor },
+                    ]}
+                  >
+                    <Ionicons name="storefront" size={14} color="#FFF" />
+                  </View>
                 </View>
-                {m.label ? (
+                {(richName || richStatus) ? (
                   <View style={styles.pinLabel}>
-                    <Text style={styles.pinLabelText} numberOfLines={1}>
-                      {m.label}
-                    </Text>
+                    {richName ? (
+                      <Text style={styles.pinLabelName} numberOfLines={1}>
+                        {richName}
+                      </Text>
+                    ) : null}
+                    {richStatus ? (
+                      <View
+                        style={[
+                          styles.pinStatusPill,
+                          {
+                            backgroundColor:
+                              richStatus === "Active" ? "#DCFCE7" : "#FEE2E2",
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.pinStatusPillText,
+                            {
+                              color:
+                                richStatus === "Active" ? "#047857" : "#B91C1C",
+                            },
+                          ]}
+                        >
+                          {richStatus === "Active" ? "Open" : "Closed"}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
                 ) : null}
               </View>
@@ -362,9 +436,12 @@ export function NearbySellersMap({
         {/* User "you are here" pin — mirrors the synthetic web-fallback
             pin so the user always sees themselves on the canvas
             alongside every nearby seller. Renders only when the
-            resolved `center` is finite; non-tappable so a stray tap
-            can't open a phantom seller-details screen. */}
-        {Number.isFinite(center.lat) && Number.isFinite(center.lng) ? (
+            resolved `center` is finite AND `showUserPin` is on (the
+            customer Home's privacy toggle). Non-tappable so a stray
+            tap can't open a phantom seller-details screen. */}
+        {showUserPin &&
+        Number.isFinite(center.lat) &&
+        Number.isFinite(center.lng) ? (
           <Marker
             key="__user__"
             coordinate={{ latitude: center.lat, longitude: center.lng }}
@@ -418,6 +495,17 @@ const styles = StyleSheet.create({
     // themselves even when their coords coincide with a seller's.
     zIndex: 20,
   },
+  pinHalo: {
+    // Outer ring around the pin bubble. Color / width come from the
+    // seller status (success for open, border for closed, self-tinted
+    // when status is unknown). 2 px normal, 3 px when selected.
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    borderColor: Colors.success,
+  },
   pin: {
     width: 28,
     height: 28,
@@ -440,18 +528,39 @@ const styles = StyleSheet.create({
     boxShadow: "0 3px 6px rgba(0,0,0,0.35)",
   },
   pinLabel: {
-    marginTop: 2,
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: Radius.pill,
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.md,
     backgroundColor: "rgba(255,255,255,0.95)",
     borderWidth: 1,
     borderColor: Colors.border,
+    alignItems: "center",
+    minWidth: 64,
+    maxWidth: 160,
   },
   pinLabelText: {
     color: Colors.text,
     fontSize: FontSize.xs - 2,
     fontWeight: "800",
+  },
+  pinLabelName: {
+    color: Colors.text,
+    fontSize: FontSize.xs - 1,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  pinStatusPill: {
+    marginTop: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+  },
+  pinStatusPillText: {
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
   attribution: {
     position: "absolute",

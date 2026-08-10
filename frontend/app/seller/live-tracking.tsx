@@ -61,6 +61,7 @@ import {
   type RiderStatus,
 } from "../../src/hooks/useRiderTracking";
 import { useStore } from "../../src/store/StoreContext";
+import { identityColor } from "../../src/lib/identityColor";
 
 type TabKey = "supplier" | "rider";
 
@@ -176,6 +177,10 @@ function StatusTimelineRow<S extends string>({
 /* -------------------------------------------------------------------------- */
 
 function SupplierTab() {
+  const { session } = useStore();
+  // Stable per-seller accent — same color wherever this seller's pin
+  // appears (Home map → tracking → delivery list).
+  const myColor = identityColor(session?.user.id ?? "");
   const {
     trip,
     myStop,
@@ -235,6 +240,7 @@ function SupplierTab() {
         originLabel="Depot"
         destinationLabel="Your Shop"
         routeColor={Colors.primary}
+        markerColors={{ destination: myColor }}
         height={260}
         style={styles.mapShadow}
       />
@@ -346,6 +352,10 @@ function SupplierTab() {
 /* -------------------------------------------------------------------------- */
 
 function RiderTab() {
+  const { session } = useStore();
+  // Stable per-seller accent — same color wherever this seller's pin
+  // appears (Home map → tracking → delivery list).
+  const myColor = identityColor(session?.user.id ?? "");
   const {
     order,
     riderName,
@@ -420,6 +430,7 @@ function RiderTab() {
         originLabel="Your Shop"
         destinationLabel="Customer"
         routeColor={Colors.primary}
+        markerColors={{ origin: myColor }}
         height={260}
         style={styles.mapShadow}
       />

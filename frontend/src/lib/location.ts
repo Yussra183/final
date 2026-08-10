@@ -16,6 +16,7 @@
  *   • Replace `bearingToManeuver()` with the `maneuver` steps returned
  *     by the Directions response.
  */
+import * as ExpoLocation from "expo-location";
 import { Location } from "../../constants/types";
 
 export interface LatLng {
@@ -117,18 +118,33 @@ export function maneuverFromDelta(delta: number, distanceMeters: number): string
 /**
  * Promise that resolves with the device's current position.
  *
- * Today: returns a mocked LatLng centered on `fallback`. Production:
- * replace the body with a call to `expo-location`.
+ * Requests foreground permission (via `expo-location`) and reads one
+ * GPS fix. Falls back to the caller-supplied `fallback` on permission
+ * denial, an unsupported platform (e.g. web / Expo Go without the
+ * native module), a non-finite fix, or any thrown error so the caller
+ * can use the result without a try/catch.
  *
- *   const { status } = await Location.requestForegroundPermissionsAsync();
- *   if (status !== 'granted') throw new Error('permission denied');
- *   const { coords } = await Location.getCurrentPositionAsync({});
- *   return { lat: coords.latitude, lng: coords.longitude };
+ * For continuous tracking, prefer `useCustomerLocation` /
+ * `useRiderGps`, which wrap `Location.watchPositionAsync` with the
+ * appropriate throttle + cleanup.
  */
 export async function getCurrentPosition(fallback: LatLng): Promise<LatLng> {
-  // The fallback returns the seller's shop, so the seller card is
-  // never blank before GPS permission is granted.
-  return Promise.resolve(fallback);
+  try {
+    const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+    if (status !== "granted") return fallback;
+    const { coords } = await ExpoLocation.getCurrentPositionAsync({
+      accuracy: ExpoLocation.Accuracy.High,
+    });
+    if (
+      !Number.isFinite(coords.latitude) ||
+      !Number.isFinite(coords.longitude)
+    ) {
+      return fallback;
+    }
+    return { lat: coords.latitude, lng: coords.longitude };
+  } catch {
+    return fallback;
+  }
 }
 
 /**
