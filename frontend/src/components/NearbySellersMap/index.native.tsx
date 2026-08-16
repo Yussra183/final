@@ -90,6 +90,22 @@ function clampRegionToUnguja<
   return { ...region, latitude, longitude, latitudeDelta, longitudeDelta };
 }
 
+/**
+ * Clamp a single coordinate pair to the Unguja box. Reused by the
+ * seller picker's tap-to-drop pin so a seller can never drop a pin
+ * in the Indian Ocean even by tapping a tile outside the island.
+ */
+export function clampCoordToUnguja(c: {
+  latitude: number;
+  longitude: number;
+}): { lat: number; lng: number } {
+  const { minLat, maxLat, minLng, maxLng } = UNGUJA_BOUNDS;
+  return {
+    lat: Math.min(Math.max(c.latitude, minLat), maxLat),
+    lng: Math.min(Math.max(c.longitude, minLng), maxLng),
+  };
+}
+
 /** A single pin in the NearbySellersMap viewer. */
 export interface NearbySellerMarker {
   id: string;
@@ -165,6 +181,13 @@ export interface NearbySellersMapProps {
    * privacy-style live-location toggle. Defaults to true.
    */
   showUserPin?: boolean;
+  /**
+   * Fires when the user taps the map background (i.e. not a marker).
+   * Coordinates are clamped to Unguja before being delivered.
+   * Used by the seller picker so the seller can tap to drop a pin.
+   * Marker taps do NOT fire this — they go through `onMarkerTap`.
+   */
+  onMapTap?: (coords: { lat: number; lng: number }) => void;
   /** Wrapper style. Pass `{ flex: 1 }` to make the map fill its parent. */
   style?: StyleProp<ViewStyle>;
 }
@@ -180,6 +203,7 @@ export function NearbySellersMap({
   showUserPin = true,
   selectedId,
   onMarkerTap,
+  onMapTap,
   style,
 }: NearbySellersMapProps) {
   const mapRef = useRef<MapView | null>(null);
@@ -198,11 +222,20 @@ export function NearbySellersMap({
   // user's resolved centre (when finite + opted in). This means the
   // initial frame shows "me + every nearby seller", even when there
   // is only a single seller on the map.
+  //
+  // Coordinates are clamped to Unguja before the bbox calc so an
+  // out-of-bounds seller (e.g. a Dar es Salaam seed row) doesn't drag
+  // the camera frame off-island and hide the rest of the markers. The
+  // marker itself is also rendered with the clamped coord (see the
+  // `pinCoord` below), so the bbox and the actual pin position agree.
   const fitPoints = useMemo(() => {
-    const pts: { lat: number; lng: number }[] = finiteMarkers.map((m) => ({
-      lat: m.lat,
-      lng: m.lng,
-    }));
+    const pts: { lat: number; lng: number }[] = finiteMarkers.map((m) => {
+      const c = clampCoordToUnguja({
+        latitude: m.lat,
+        longitude: m.lng,
+      });
+      return { lat: c.lat, lng: c.lng };
+    });
     if (includeCenterInFit && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
       pts.push({ lat: center.lat, lng: center.lng });
     }
@@ -210,25 +243,65 @@ export function NearbySellersMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finiteMarkers, includeCenterInFit, center.lat, center.lng]);
 
-  // Initial region. With 1+ points we frame the bbox of every marker
-  // (and the user); only the truly empty case falls back to the
-  // Unguja-wide region. This guarantees the first paint shows ALL
-  // nearby sellers in one view, never a tight zoom on a single pin.
+  // Initial region.
+  //
+  //   `auto` — with 1+ points, frame the bbox of every marker (and
+  //            the user when `includeCenterInFit` is true) so the
+  //            first paint shows everything in one view.
+  //   `fixed` — centre the camera on the user's resolved location at
+  //             a tight street-level zoom. Sellers are still rendered
+  //             as individual pins at their own coordinates but the
+  //             camera never auto-zooms away from the customer. This
+  //             is the customer Home's behaviour: open the map on
+  //             "you are here", then surface every approved seller as
+  //             a pin in its own location without re-anchoring the
+  //             camera.
+  //
+  // The truly empty (no markers, no center) case falls back to the
+  // Unguja-wide region.
   const initialRegion = useMemo(() => {
     if (fitMode === "auto" && fitPoints.length >= 1) {
       const r = regionForPoints(fitPoints, 1.4);
       if (r) return clampRegionToUnguja(r);
     }
+    if (fitMode === "fixed" && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
+      // `zoom` is treated as the desired delta in degrees. Default
+      // `12` would be ~1,300 km of viewport (the whole island);
+      // callers that want a tighter street-level zoom pass a smaller
+      // value (e.g. 0.02 for ~2.2 km around the customer). The
+      // customer Home relies on the default to keep the user pin
+      // front-and-centre while still showing nearby sellers within a
+      // few kilometres; when a seller sits outside that viewport the
+      // user can pan to it or tap "Locate me".
+      const delta = zoom;
+      return clampRegionToUnguja({
+        latitude: center.lat,
+        longitude: center.lng,
+        latitudeDelta: delta,
+        longitudeDelta: delta,
+      });
+    }
     return clampRegionToUnguja(UNGUJA_FALLBACK_REGION);
     // zoom is used only as a fallback path; fitPoints drives the
     // primary case.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitPoints, fitMode]);
+  }, [fitPoints, fitMode, center.lat, center.lng]);
 
-  // Refit when the marker set or centre changes (e.g. the store
-  // resolves, the user types a new address, "Locate me" is tapped).
-  // The post-mount + onLayout passes catch the "first paint" case
-  // before the MapView had time to lay out.
+  // Refit when the marker set changes (e.g. the store resolves, the
+  // user types a new address, "Locate me" is tapped). The post-mount
+  // + onLayout passes catch the "first paint" case before the MapView
+  // had time to lay out.
+  //
+  // We deliberately depend ONLY on the marker count + ids, NOT on the
+  // customer's live GPS coordinates. Without this, every GPS fix from
+  // `useCustomerLocation` would re-fit the camera and re-frame the
+  // whole map, which feels like the markers "wobble" and prevents the
+  // user from panning / zooming on their own.
+  const markerKey = useMemo(
+    () => finiteMarkers.map((m) => m.id).join("|"),
+    [finiteMarkers],
+  );
+
   const fitToMarkers = useCallback(() => {
     if (!mapRef.current) return;
     if (fitMode !== "auto" || fitPoints.length < 1) return;
@@ -252,7 +325,7 @@ export function NearbySellersMap({
     // before the world is ready and the result looks clipped.
     const timer = setTimeout(fitToMarkers, 120);
     return () => clearTimeout(timer);
-  }, [fitToMarkers]);
+  }, [fitToMarkers, markerKey]);
 
   // Recentre on the user's location. Parent bumps `recenterToken`
   // when the "Locate me" button is tapped. The dep list keeps this
@@ -306,6 +379,16 @@ export function NearbySellersMap({
         style={StyleSheet.absoluteFill}
         initialRegion={initialRegion}
         onLayout={fitToMarkers}
+        // Tap-to-drop pin for the seller picker. Marker taps go
+        // through the per-Marker `onPress` and never reach this
+        // handler (react-native-maps swallows the event when a
+        // marker consumes it).
+        onPress={(e) => {
+          if (!onMapTap) return;
+          const c = e.nativeEvent?.coordinate;
+          if (!c) return;
+          onMapTap(clampCoordToUnguja(c));
+        }}
         onRegionChangeComplete={(region) => {
           if (!mapRef.current) return;
           const clamped = clampRegionToUnguja(region);
@@ -349,6 +432,14 @@ export function NearbySellersMap({
           // callers keep their place-name text.
           const richName = m.name ?? m.label;
           const richStatus = m.status;
+          // Snap out-of-bounds markers (e.g. legacy Dar es Salaam
+          // seed rows) onto Unguja so the pin is visible on the map
+          // instead of hanging in the ocean. The clamp uses the same
+          // helper the tap-to-drop surface relies on.
+          const pinCoord = clampCoordToUnguja({
+            latitude: m.lat,
+            longitude: m.lng,
+          });
           // Per-seller identity color, hashed from id when no explicit
           // override. Same seller → same color on every map surface.
           const pinColor = m.color ?? identityColor(m.id);
@@ -364,10 +455,34 @@ export function NearbySellersMap({
           return (
             <Marker
               key={m.id}
-              coordinate={{ latitude: m.lat, longitude: m.lng }}
+              coordinate={{ latitude: pinCoord.lat, longitude: pinCoord.lng }}
               anchor={{ x: 0.5, y: 0.5 }}
               tracksViewChanges={false}
-              onPress={() => onMarkerTap?.(m.id)}
+              tracksInfoWindowChanges={false}
+              // `stopPropagation` keeps the marker's own tap from
+              // reaching the MapView's `onPress` (which fires
+              // `onMapTap` — used by the seller picker to drop a pin
+              // by tapping empty map space).
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                onMarkerTap?.(m.id);
+              }}
+              // Native Google-Maps `title` shows as a tooltip label when
+              // the marker is tapped — keeps the pin discoverable even
+              // when the custom storefront bubble is hidden behind a
+              // POI label or the location chip.
+              title={richName ?? "Seller"}
+              description={
+                Number.isFinite(m.distanceKm)
+                  ? `${m.distanceKm!.toFixed(1)} km`
+                  : richStatus ?? undefined
+              }
+              // Pin tint: the default red marker is hard to miss on the
+              // map and renders reliably across iOS / Android / Expo Go.
+              // The custom storefront bubble stays as the visible
+              // element; tint is just a safety net so the marker is
+              // never invisible.
+              pinColor={pinColor as any}
             >
               <View
                 style={[
@@ -396,34 +511,45 @@ export function NearbySellersMap({
                     <Ionicons name="storefront" size={14} color="#FFF" />
                   </View>
                 </View>
-                {(richName || richStatus) ? (
+                {(richName || richStatus || Number.isFinite(m.distanceKm)) ? (
                   <View style={styles.pinLabel}>
                     {richName ? (
                       <Text style={styles.pinLabelName} numberOfLines={1}>
                         {richName}
                       </Text>
                     ) : null}
-                    {richStatus ? (
-                      <View
-                        style={[
-                          styles.pinStatusPill,
-                          {
-                            backgroundColor:
-                              richStatus === "Active" ? "#DCFCE7" : "#FEE2E2",
-                          },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.pinStatusPillText,
-                            {
-                              color:
-                                richStatus === "Active" ? "#047857" : "#B91C1C",
-                            },
-                          ]}
-                        >
-                          {richStatus === "Active" ? "Open" : "Closed"}
-                        </Text>
+                    {(Number.isFinite(m.distanceKm) || richStatus) ? (
+                      <View style={styles.pinLabelRow}>
+                        {Number.isFinite(m.distanceKm) ? (
+                          <View style={styles.pinDistancePill}>
+                            <Text style={styles.pinDistanceText} numberOfLines={1}>
+                              {m.distanceKm!.toFixed(1)} km
+                            </Text>
+                          </View>
+                        ) : null}
+                        {richStatus ? (
+                          <View
+                            style={[
+                              styles.pinStatusPill,
+                              {
+                                backgroundColor:
+                                  richStatus === "Active" ? "#DCFCE7" : "#FEE2E2",
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.pinStatusPillText,
+                                {
+                                  color:
+                                    richStatus === "Active" ? "#047857" : "#B91C1C",
+                                },
+                              ]}
+                            >
+                              {richStatus === "Active" ? "Open" : "Closed"}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
                     ) : null}
                   </View>
@@ -486,9 +612,14 @@ const styles = StyleSheet.create({
   pinWrap: {
     alignItems: "center",
     justifyContent: "center",
+    // Lift seller pins above the Google Maps POI label layer so
+    // nearby labels (e.g. "Stone Town") never cover the storefront
+    // pin. Without this, the pin reads as a thin icon behind a
+    // paragraph of text and is hard to tap.
+    zIndex: 50,
   },
   pinWrapSelected: {
-    zIndex: 10,
+    zIndex: 60,
   },
   pinWrapUser: {
     // Lift the user pin above seller pins so the user can always see
@@ -499,22 +630,24 @@ const styles = StyleSheet.create({
     // Outer ring around the pin bubble. Color / width come from the
     // seller status (success for open, border for closed, self-tinted
     // when status is unknown). 2 px normal, 3 px when selected.
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    // Sized generously so the pin is easy to spot on a busy map and
+    // large enough for a fingertip tap target.
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     alignItems: "center",
     justifyContent: "center",
     borderColor: Colors.success,
   },
   pin: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: "#FFF",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.25)",
+    boxShadow: "0 3px 6px rgba(0,0,0,0.4)",
   },
   pinUser: {
     // Slightly larger than a seller pin so the "you" marker reads as
@@ -555,6 +688,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: Radius.pill,
+  },
+  pinLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    marginTop: 2,
+  },
+  pinDistancePill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+    backgroundColor: "#CCFBF1",
+    borderWidth: 1,
+    borderColor: "#0F766E",
+  },
+  pinDistanceText: {
+    color: "#0F766E",
+    fontSize: 10,
+    fontWeight: "800",
   },
   pinStatusPillText: {
     fontSize: 9,

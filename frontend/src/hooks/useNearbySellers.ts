@@ -24,8 +24,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "../store/StoreContext";
 import { SellersApi } from "../api/endpoints";
+import { useCustomerLocation } from "./useCustomerLocation";
 import {
-  filterNearbySellers,
   NearbySeller,
   FilterOptions,
 } from "../utils/sellers";
@@ -51,20 +51,46 @@ export function useNearbySellers(
   const { session, sellers: storeSellers } = useStore();
   const customer = session?.user;
 
-  // Server-side filtered slice — populated whenever the customer has a
-  // saved location with coordinates. The backend has already filtered to
-  // the radius and sorted nearest-first.
+  // Live device GPS — preferred over the saved profile address when
+  // the customer hasn't set one. The backend's radius-filtered query
+  // is only useful if we have *some* coordinate pair to centre on;
+  // without one the hook used to fall through to a text-match over
+  // the whole store slice, which silently dropped every GPS-tagged
+  // seller and returned the no-nearby-sellers empty state. Customers
+  // who rely on device GPS (the typical case for a marketplace app)
+  // now see their real nearby list.
+  const { coords: deviceCoords } = useCustomerLocation();
+
+  // Server-side filtered slice — populated whenever the customer has
+  // a coordinate pair (saved profile OR live device GPS). The backend
+  // has already filtered to the radius and sorted nearest-first.
   const [serverSellers, setServerSellers] = useState<NearbySeller[] | null>(
     null,
   );
 
+  // Effective query centre — saved profile wins when available,
+  // otherwise live device GPS. The previous version required a saved
+  // profile, which silently produced the "No sellers nearby" empty
+  // state for every customer who skipped the profile location step.
+  const queryLat =
+    typeof customer?.lat === "number" && Number.isFinite(customer.lat)
+      ? customer.lat
+      : Number.isFinite(deviceCoords.lat)
+        ? deviceCoords.lat
+        : null;
+  const queryLng =
+    typeof customer?.lng === "number" && Number.isFinite(customer.lng)
+      ? customer.lng
+      : Number.isFinite(deviceCoords.lng)
+        ? deviceCoords.lng
+        : null;
   const hasCustomerGps =
-    typeof customer?.lat === "number" && typeof customer?.lng === "number";
+    queryLat !== null && queryLng !== null;
 
   useEffect(() => {
     if (!hasCustomerGps) {
-      // No saved coordinates → no server query, fall back to the store
-      // slice and the local text matcher below.
+      // No saved or device coordinates → no server query, fall back to
+      // the store slice and the local text matcher below.
       setServerSellers(null);
       return;
     }
@@ -72,8 +98,8 @@ export function useNearbySellers(
     (async () => {
       try {
         const rows = await SellersApi.list({
-          lat: customer!.lat,
-          lng: customer!.lng,
+          lat: queryLat!,
+          lng: queryLng!,
           radiusKm: NEARBY_RADIUS_KM,
         });
         if (cancelled) return;
@@ -102,7 +128,7 @@ export function useNearbySellers(
     return () => {
       cancelled = true;
     };
-  }, [hasCustomerGps, customer?.lat, customer?.lng]);
+  }, [hasCustomerGps, queryLat, queryLng]);
 
   // The customer's saved location. When they haven't set one, synthesize
   // one from the first available seller so the screen still has
@@ -178,10 +204,7 @@ export function useNearbySellers(
     // The store slice is not merged in either: it is the *unfiltered*
     // list, so merging it would smuggle out-of-radius sellers back onto
     // the screen and defeat the radius gate.
-    //
-    // An empty array here is a real answer ("nothing within the service
-    // radius"), so the home screen shows the no-nearby-sellers message.
-    if (serverSellers) {
+    if (serverSellers && serverSellers.length > 0) {
       const activeOnly = options?.activeOnly ?? true;
       const limit = options?.limit ?? 20;
       const pool = activeOnly
@@ -189,10 +212,104 @@ export function useNearbySellers(
         : serverSellers;
       return pool.slice(0, limit);
     }
-    // No saved coordinates (or the request failed) — fall back to the
-    // local text-matching heuristic over the store slice.
-    return filterNearbySellers(fallbackSellers, effectiveLocation, options);
-  }, [serverSellers, fallbackSellers, effectiveLocation, options]);
+    // Server query unavailable (network error / empty response) —
+    // fall back to the store slice directly. Previously this path
+    // routed through `filterNearbySellers`, which awards points for
+    // district / region string equality, then drops every row scoring
+    // 0. For a customer that has only device GPS (no saved profile
+    // address), `effectiveLocation.address` defaults to the first
+    // seller's location and `district` / `region` come back undefined
+    // from the API mapper, so the scorer would silently throw away
+    // every approved seller — exactly the symptom reported on the
+    // customer Home ("badge shows 2, but no markers appear"). The
+    // store slice itself is already pre-filtered server-side by the
+    // permit / active gate (`projectApprovedActive`), so we just need
+    // a sensible in-radius filter on top of it.
+    //
+    // The store slice comes from the no-filter `SellersApi.list()`
+    // boot call — it carries EVERY approved+active seller regardless
+    // of distance. Applying the 25 km radius gate again here would
+    // drop every seller far from the customer and produce an empty
+    // map. The radius gate belongs only on the server-side filtered
+    // path above. On the fallback path we keep every approved seller
+    // that has finite coords; sellers without coords are kept so the
+    // bottom-sheet card list can show their details — the map
+    // component drops them on its own with a clear `Number.isFinite`
+    // check.
+    const activeOnly = options?.activeOnly ?? true;
+    const limit = options?.limit ?? 20;
+    const activePool = activeOnly
+      ? fallbackSellers.filter((s) => s.status === "Active")
+      : fallbackSellers;
+    // Rank by Haversine when the customer has GPS so the closest
+    // sellers appear first, but do NOT drop out-of-radius rows — the
+    // store slice is the full approved list and the customer Home
+    // expects to see every approved seller's pin on the map. When GPS
+    // is unknown, preserve the store order (alphabetical from
+    // `GET /api/sellers`) so the list is stable across renders.
+    let pool: NearbySeller[];
+    if (queryLat !== null && queryLng !== null) {
+      const R = 6371;
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const distKm = (s: NearbySeller): number | null => {
+        if (
+          typeof s.lat !== "number" ||
+          typeof s.lng !== "number" ||
+          !Number.isFinite(s.lat) ||
+          !Number.isFinite(s.lng)
+        ) {
+          return null;
+        }
+        const dLat = toRad(s.lat - queryLat);
+        const dLng = toRad(s.lng - queryLng);
+        const a =
+          Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRad(queryLat)) *
+            Math.cos(toRad(s.lat)) *
+            Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+      };
+      const sorted = activePool
+        .slice()
+        .sort((a, b) => {
+          // Sort: known-distance first (asc), then unknown-distance
+          // (null). NO radius gate — every approved seller stays.
+          const ka = distKm(a);
+          const kb = distKm(b);
+          if (ka === null && kb === null) return 0;
+          if (ka === null) return 1;
+          if (kb === null) return -1;
+          return ka - kb;
+        });
+      pool = sorted;
+    } else {
+      pool = activePool;
+    }
+    const finalPool = pool.slice(0, limit);
+    if (typeof __DEV__ !== "undefined" && __DEV__) {
+      // Diagnostic: trace whether we served the server-filtered list
+      // or fell back to the store slice, and how many sellers made
+      // it through the final gate. Wrapped in __DEV__ so it never
+      // ships to production bundles.
+      console.info(
+        "[USE_NEARBY_SELLERS][RESULT]",
+        JSON.stringify({
+          path:
+            serverSellers && serverSellers.length > 0
+              ? "server"
+              : "store-fallback",
+          storeSellersCount: storeSellers.length,
+          serverSellersCount: serverSellers?.length ?? 0,
+          fallbackSellersCount: fallbackSellers.length,
+          finalCount: finalPool.length,
+          hasCustomerGps,
+          queryLat,
+          queryLng,
+        }),
+      );
+    }
+    return finalPool;
+  }, [serverSellers, fallbackSellers, options, queryLat, queryLng]);
 
   return {
     sellers,

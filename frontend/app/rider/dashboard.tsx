@@ -80,7 +80,7 @@ export default function RiderDashboard() {
           <View style={{ paddingHorizontal: Spacing.lg, marginTop: Spacing.sm }}>
             <RiderVerificationRequiredCard
               info={verification}
-              onOpenVerification={() => router.push("/rider/profile")}
+              onOpenVerification={() => router.push("/rider/licences")}
             />
           </View>
         ) : null}

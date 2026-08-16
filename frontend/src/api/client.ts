@@ -290,6 +290,37 @@ export class ApiClient {
         );
       }
 
+      // Diagnostic: trace the raw payload of the public seller
+      // list endpoint so we can see whether `lat`/`lng` reach the
+      // client, and what values they carry. Wrapped in __DEV__ so
+      // this never ships to production bundles.
+      const traceSellers =
+        typeof __DEV__ !== "undefined" &&
+        __DEV__ &&
+        method === "GET" &&
+        path === "/api/sellers";
+      if (traceSellers) {
+        console.info(
+          "[SELLERS_API][REQUEST]",
+          JSON.stringify({ method, url, hasToken: !!token }),
+        );
+      }
+
+      // Diagnostic: trace the seller profile upsert so we can see
+      // exactly what coordinates the seller profile page is sending
+      // to /api/sellers/me and what the server returns. Wrapped in
+      // __DEV__ so it never ships to production bundles.
+      const traceSellerProfile =
+        typeof __DEV__ !== "undefined" &&
+        __DEV__ &&
+        path === "/api/sellers/me";
+      if (traceSellerProfile) {
+        console.info(
+          "[SELLER_PROFILE_API][REQUEST]",
+          JSON.stringify({ method, url, hasToken: !!token, body }),
+        );
+      }
+
       const res = await fetch(url, {
         method,
         headers: {
@@ -322,6 +353,61 @@ export class ApiClient {
                 ? String((row as { id: unknown }).id)
                 : null,
             ),
+            exactJson: text,
+          }),
+        );
+      }
+
+      if (traceSellers) {
+        const rows = Array.isArray(data) ? data : [];
+        console.info(
+          "[SELLERS_API][RESPONSE]",
+          JSON.stringify({
+            method,
+            url,
+            status: res.status,
+            ok: res.ok,
+            elapsedMs: Date.now() - requestStartedAt,
+            responseBytes: text.length,
+            backendSellerCount: Array.isArray(data) ? data.length : null,
+            sellers: rows.map((row) => ({
+              sellerId:
+                row && typeof row === "object" && "sellerId" in row
+                  ? String((row as { sellerId: unknown }).sellerId)
+                  : null,
+              businessName:
+                row && typeof row === "object" && "businessName" in row
+                  ? String((row as { businessName: unknown }).businessName)
+                  : null,
+              lat:
+                row && typeof row === "object" && "lat" in row
+                  ? (row as { lat: unknown }).lat
+                  : null,
+              lng:
+                row && typeof row === "object" && "lng" in row
+                  ? (row as { lng: unknown }).lng
+                  : null,
+              openNow:
+                row && typeof row === "object" && "openNow" in row
+                  ? (row as { openNow: unknown }).openNow
+                  : null,
+            })),
+            exactJson: text,
+          }),
+        );
+      }
+
+      if (traceSellerProfile) {
+        console.info(
+          "[SELLER_PROFILE_API][RESPONSE]",
+          JSON.stringify({
+            method,
+            url,
+            status: res.status,
+            ok: res.ok,
+            elapsedMs: Date.now() - requestStartedAt,
+            responseBytes: text.length,
+            data,
             exactJson: text,
           }),
         );

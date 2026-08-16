@@ -2171,6 +2171,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               Number.isFinite(patch.deviceCoords.lng)
             ? patch.deviceCoords
             : null;
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        // Diagnostic: trace exactly what the seller profile page is
+        // sending to /api/sellers/me — the patch, the resolved
+        // coords source, and the body that goes on the wire. Helps
+        // catch "no coords sent → server geocodes" vs "pin sent but
+        // ignored" vs "lat/lng dropped client-side" cases.
+        console.info(
+          "[SAVE_SELLER_LOCATION][INPUT]",
+          JSON.stringify({
+            patchLocation: patch.location,
+            patchPinCoords: patch.pinCoords,
+            patchDeviceCoords: patch.deviceCoords,
+            resolvedCoords: coords,
+            pinChosen: !!patch.pinCoords,
+            willSendLat: coords ? coords.lat : null,
+            willSendLng: coords ? coords.lng : null,
+          }),
+        );
+      }
       // Stop sending `phone` on every location save — it was coupling
       // contact data to location writes. Callers that want to update
       // the phone should go through the dedicated contact endpoint.

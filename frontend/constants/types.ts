@@ -163,6 +163,7 @@ export interface GasProduct {
   size: string; // e.g. "6kg", "13kg", "22kg"
   price: number;
   stock: number;
+  lowStockThreshold?: number; // FR-05 — backend-driven threshold
   image?: string; // emoji placeholder
   description: string;
   category: "refill" | "new_cylinder" | "accessory";

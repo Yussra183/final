@@ -43,6 +43,21 @@ public class ProductEntity {
     @Column(name = "stock", nullable = false)
     private int stock;
 
+    /**
+     * Per-product low-stock alert threshold (FR-05). When stock falls at
+     * or below this value, the backend notifies the seller via the
+     * shared {@code NotificationService}; when stock hits {@code 0} the
+     * notification is upgraded to an out-of-stock alert.
+     *
+     * <p>Defaults to {@code 5} at the DB layer (V13) so existing rows
+     * pick up a sensible value without a backfill step.</p>
+     */
+    @Column(name = "low_stock_threshold", nullable = false)
+    private int lowStockThreshold = DEFAULT_LOW_STOCK_THRESHOLD;
+
+    /** DB default applied by V13 — also used when callers don't set it. */
+    public static final int DEFAULT_LOW_STOCK_THRESHOLD = 5;
+
     @Column(name = "category", nullable = false, length = 40)
     private String category = "refill";
 
@@ -66,11 +81,19 @@ public class ProductEntity {
 
     public ProductEntity(Long sellerId, String name, String size, BigDecimal price,
                          int stock, String category, String description, String image) {
+        this(sellerId, name, size, price, stock, DEFAULT_LOW_STOCK_THRESHOLD,
+             category, description, image);
+    }
+
+    public ProductEntity(Long sellerId, String name, String size, BigDecimal price,
+                         int stock, int lowStockThreshold,
+                         String category, String description, String image) {
         this.sellerId = sellerId;
         this.name = name;
         this.size = size;
         this.price = price;
         this.stock = stock;
+        this.lowStockThreshold = Math.max(0, lowStockThreshold);
         this.category = category == null ? "refill" : category;
         this.description = description;
         this.image = image;
@@ -133,6 +156,17 @@ public class ProductEntity {
 
     public void setStock(int stock) {
         this.stock = stock;
+    }
+
+    public int getLowStockThreshold() {
+        return lowStockThreshold;
+    }
+
+    public void setLowStockThreshold(int lowStockThreshold) {
+        // Constraint at the DB layer (V13) enforces >= 0; we mirror it
+        // here so callers in unit tests and seed code can't accidentally
+        // persist a negative value if validation is bypassed.
+        this.lowStockThreshold = Math.max(0, lowStockThreshold);
     }
 
     public String getCategory() {

@@ -16,6 +16,7 @@ import com.project.gas_delivery.order.repository.OrderRepository;
 import com.project.gas_delivery.order.service.OrderService;
 import com.project.gas_delivery.order.service.OrderStatusTransitions;
 import com.project.gas_delivery.order.service.OrderStatusTransitions.ActorRole;
+import com.project.gas_delivery.product.service.StockService;
 import com.project.gas_delivery.rider.repository.SellerRiderRepository;
 import com.project.gas_delivery.tracking.service.DeliveryTrackingService;
 import jakarta.persistence.EntityManager;
@@ -45,17 +46,20 @@ public class OrderServiceImpl implements OrderService {
     private final UserRepository userRepository;
     private final SellerRiderRepository sellerRiderRepository;
     private final DeliveryTrackingService deliveryTrackingService;
+    private final StockService stockService;
     private final EntityManager entityManager;
 
     public OrderServiceImpl(OrderRepository orderRepository,
                             UserRepository userRepository,
                             SellerRiderRepository sellerRiderRepository,
                             DeliveryTrackingService deliveryTrackingService,
+                            StockService stockService,
                             EntityManager entityManager) {
         this.orderRepository = orderRepository;
         this.userRepository = userRepository;
         this.sellerRiderRepository = sellerRiderRepository;
         this.deliveryTrackingService = deliveryTrackingService;
+        this.stockService = stockService;
         this.entityManager = entityManager;
     }
 
@@ -80,6 +84,34 @@ public class OrderServiceImpl implements OrderService {
         if (seller.getRole() != Role.SELLER || !seller.isActive()) {
             throw new NotAuthorizedException(
                     "This seller is not yet approved to accept orders.");
+        }
+
+        // ---- FR-05 stock reservation -----------------------------------
+        // Decrement each line item's stock atomically BEFORE we save the
+        // order. StockService.reserveForOrder runs in this same
+        // transaction (Propagation.MANDATORY); if any item fails
+        // (insufficient stock, inactive product), it throws
+        // InsufficientStockException and Spring rolls back the entire
+        // create(...) call, leaving the database untouched — no order
+        // row, no partial stock decrement.
+        //
+        // We process items in two passes:
+        //   1. validate every item's productId parses cleanly,
+        //   2. reserve stock per item.
+        // Items are already @NotEmpty + @Valid in CreateOrderRequest,
+        // so the list is non-null and each item's quantity is >= 1.
+        for (var item : req.items()) {
+            Long productId = parseId(item.productId(), "item.productId");
+            // Defensive: items with quantity <= 0 should already have
+            // failed bean validation, but the StockService double-checks
+            // and would throw IllegalArgumentException. Convert it to
+            // a friendly BadRequestException so the customer UI sees a
+            // consistent 400.
+            try {
+                stockService.reserveForOrder(productId, item.quantity());
+            } catch (IllegalArgumentException ex) {
+                throw new BadRequestException(ex.getMessage());
+            }
         }
 
         OrderEntity entity = new OrderEntity(

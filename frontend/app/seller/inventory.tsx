@@ -4,7 +4,12 @@
  * Lists every gas product owned by the current seller with its size,
  * price and available stock. Each card exposes Add Stock / Edit /
  * Delete actions and a low-stock warning fires automatically when
- * stock falls below 10 units.
+ * stock falls below the per-product threshold.
+ *
+ * FR-05 — the threshold comes from the backend (`product.lowStockThreshold`)
+ * so the warning matches the same number the server uses to trigger the
+ * in-app stock notification. We keep the local default below for legacy
+ * rows / mock data that don't carry the field yet.
  *
  * All mutations go through `useStore()` so wiring the real Spring Boot
  * REST API later is a drop-in.
@@ -33,7 +38,7 @@ import { useStore } from "../../src/store/StoreContext";
 import { formatCurrency } from "../../src/utils/format";
 import { GasProduct } from "../../constants/types";
 
-const LOW_STOCK_THRESHOLD = 10;
+const FALLBACK_LOW_STOCK_THRESHOLD = 10;
 
 type SizeFilter = "all" | "6kg" | "13kg" | "22kg";
 
@@ -56,11 +61,12 @@ function ProductCard({
   onEdit: (p: GasProduct) => void;
   onDelete: (p: GasProduct) => void;
 }) {
-  const isLow = product.stock < LOW_STOCK_THRESHOLD;
-  const stockPct = Math.min(100, (product.stock / 50) * 100);
+  const threshold = product.lowStockThreshold ?? FALLBACK_LOW_STOCK_THRESHOLD;
+  const isLow = product.stock <= threshold;
+  const stockPct = Math.min(100, (product.stock / Math.max(50, threshold * 10)) * 100);
   const barColor = isLow
     ? Colors.danger
-    : product.stock < 25
+    : product.stock < Math.max(threshold * 2, 25)
       ? Colors.warning
       : Colors.success;
 
@@ -325,7 +331,11 @@ export default function SellerInventory() {
   }, [myProducts, sizeFilter]);
 
   const lowCount = useMemo(
-    () => myProducts.filter((p) => p.stock < LOW_STOCK_THRESHOLD).length,
+    () =>
+      myProducts.filter(
+        (p) =>
+          p.stock <= (p.lowStockThreshold ?? FALLBACK_LOW_STOCK_THRESHOLD),
+      ).length,
     [myProducts],
   );
 

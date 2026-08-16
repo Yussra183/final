@@ -735,63 +735,6 @@ export function RiderVerificationSection() {
         ) : null}
       </Card>
 
-      {/* Application Summary — the brief requires this professional card
-          showing Application Number, Applicant Name, Submission Date
-          and Status in a single block (no National ID display). Rendered
-          once the lazy-created PENDING row has been fetched. */}
-      {application ? (
-        <Card style={styles.summaryCard}>
-          <View style={styles.summaryHeader}>
-            <View style={styles.summaryIconWrap}>
-              <Ionicons
-                name="document-text-outline"
-                size={22}
-                color={Colors.rider}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.summaryTitle}>Application Summary</Text>
-              <Text style={styles.summarySub}>
-                {formatApplicationNumber(application.id)}
-              </Text>
-            </View>
-            <StatusPill
-              label={permitStatusLabel(application.status)}
-              tone={permitStatusTone(application.status)}
-            />
-          </View>
-
-          <View style={styles.summaryDivider} />
-
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Application Number</Text>
-            <Text style={styles.summaryValue}>
-              {formatApplicationNumber(application.id)}
-            </Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Applicant Name</Text>
-            <Text style={styles.summaryValue}>
-              {application.applicantName ??
-                user?.fullName ??
-                "Rider"}
-            </Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Submission Date</Text>
-            <Text style={styles.summaryValue}>
-              {formatSubmissionDate(application.submittedAt)}
-            </Text>
-          </View>
-          <View style={[styles.summaryRow, { borderBottomWidth: 0 }]}>
-            <Text style={styles.summaryLabel}>Current Status</Text>
-            <Text style={styles.summaryValue}>
-              {permitStatusLabel(application.status)}
-            </Text>
-          </View>
-        </Card>
-      ) : null}
-
       {/* Step 1: Download the blank application form */}
       <Text style={styles.stepTitle}>Step 1 — Download the application form</Text>
       <Card>
@@ -1235,61 +1178,6 @@ const styles = StyleSheet.create({
   loadingText: {
     color: Colors.textSecondary,
     fontSize: FontSize.sm,
-  },
-  summaryCard: {
-    marginTop: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.rider + "33",
-  },
-  summaryHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-  },
-  summaryIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.rider + "22",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  summaryTitle: {
-    fontSize: FontSize.md,
-    fontWeight: "800",
-    color: Colors.text,
-  },
-  summarySub: {
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    marginTop: 2,
-    fontWeight: "700",
-  },
-  summaryDivider: {
-    height: 1,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.md,
-  },
-  summaryRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  summaryLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: "700",
-    color: Colors.textSecondary,
-    flex: 1,
-  },
-  summaryValue: {
-    fontSize: FontSize.sm,
-    fontWeight: "800",
-    color: Colors.text,
-    flex: 1,
-    textAlign: "right",
   },
   errorBox: {
     backgroundColor: "#FEE2E2",

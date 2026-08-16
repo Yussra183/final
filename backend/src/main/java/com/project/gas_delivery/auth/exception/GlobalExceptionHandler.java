@@ -152,6 +152,31 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Order Flow (FR-05): a customer requested more units of a product
+     * than the seller has on hand. 409 with
+     * {@code code=INSUFFICIENT_STOCK}; the {@code details} array carries
+     * {@code productId}, {@code productName}, {@code available} and
+     * {@code requested} so the customer UI can render "Only X left".
+     */
+    @ExceptionHandler(com.project.gas_delivery.order.exception.InsufficientStockException.class)
+    public ResponseEntity<Map<String, Object>> handleInsufficientStock(
+            com.project.gas_delivery.order.exception.InsufficientStockException ex
+    ) {
+        java.util.List<String> details = java.util.List.of(
+                "productId:" + ex.getProductId(),
+                "productName:" + ex.getProductName(),
+                "available:" + ex.getAvailable(),
+                "requested:" + ex.getRequested()
+        );
+        return ApiErrorBody.of(
+                HttpStatus.CONFLICT,
+                ex.getMessage(),
+                "INSUFFICIENT_STOCK",
+                details
+        );
+    }
+
+    /**
      * Tracking module: an actor attempted to read or write a tracking
      * channel they are not authorised for. 403 with
      * {@code code=TRACKING_FORBIDDEN}.

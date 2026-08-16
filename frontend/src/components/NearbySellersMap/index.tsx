@@ -82,6 +82,13 @@ export interface NearbySellersMapProps {
    * Defaults to true.
    */
   showUserPin?: boolean;
+  /**
+   * Fires when the user taps the map background (i.e. not a pin).
+   * Coordinates are derived from the projected bbox so they live in
+   * the same coordinate system the native renderer uses. Used by
+   * the seller picker so a seller can tap to drop a pin.
+   */
+  onMapTap?: (coords: { lat: number; lng: number }) => void;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -106,11 +113,22 @@ const UNGUJA_BOUNDS = {
   maxLng: 39.55,
 } as const;
 
+interface ProjectBbox {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+  latSpan: number;
+  lngSpan: number;
+  padX: number;
+  padY: number;
+}
+
 function project(
   markers: NearbySellerMarker[],
   center: { lat: number; lng: number },
-): Projected[] {
-  if (markers.length === 0) return [];
+): { projected: Projected[]; bbox: ProjectBbox | null } {
+  if (markers.length === 0) return { projected: [], bbox: null };
   const lats = markers.map((m) => m.lat);
   const lngs = markers.map((m) => m.lng);
   // Clamp the bbox to Unguja so the canvas projection stays on-island
@@ -127,7 +145,17 @@ function project(
   // 12% padding on each side, like the native fitToCoordinates call.
   const padX = 0.12;
   const padY = 0.18; // extra room at the bottom for the FAB
-  return markers.map((pin) => {
+  const bbox: ProjectBbox = {
+    minLat,
+    maxLat,
+    minLng,
+    maxLng,
+    latSpan,
+    lngSpan,
+    padX,
+    padY,
+  };
+  const projected = markers.map((pin) => {
     const x = padX + ((pin.lng - minLng) / lngSpan) * (1 - 2 * padX);
     const y =
       padY +
@@ -144,6 +172,39 @@ function project(
       markers.length === 1 && center ? 0.5 : cy;
     return { x: biasX, y: biasY, pin };
   });
+  return { projected, bbox };
+}
+
+/**
+ * `fixed`-mode projection: the camera stays anchored on the user, so
+ * each marker is projected relative to the user's centre rather than
+ * the bbox of every marker. Sellers still appear at their OWN
+ * lat/lng — they're just rendered relative to a fixed point instead
+ * of getting auto-framed into the canvas. Without this the `auto`
+ * `project()` helper would zoom the canvas out to fit every distant
+ * seller, defeating the customer-first behaviour.
+ */
+function projectFixed(
+  markers: NearbySellerMarker[],
+  center: { lat: number; lng: number },
+): { projected: Projected[] } {
+  if (markers.length === 0) return { projected: [] };
+  // Fixed canvas: ±0.05 deg around the user's centre (~5.5 km E-W at
+  // the equator). Matches the native map's `latitudeDelta = zoom`
+  // (default 12) so the two surfaces look consistent.
+  const latSpan = 0.05;
+  const lngSpan = 0.05;
+  const padX = 0.12;
+  const padY = 0.18;
+  const projected = markers.map((pin) => {
+    const x = padX + ((pin.lng - center.lng) / lngSpan) * (1 - 2 * padX);
+    const y =
+      padY +
+      (1 - 2 * padY) -
+      ((pin.lat - center.lat) / latSpan) * (1 - 2 * padY);
+    return { x, y, pin };
+  });
+  return { projected };
 }
 
 export function NearbySellersMap({
@@ -154,6 +215,7 @@ export function NearbySellersMap({
   fitMode = "auto",
   includeCenterInFit = true,
   showUserPin = true,
+  onMapTap,
   // recenterTo / recenterToken are accepted for API parity with the
   // native component but have no effect on web (no camera to drive).
   recenterTo: _recenterTo,
@@ -194,24 +256,59 @@ export function NearbySellersMap({
   }, [finiteMarkers, finiteCenter, includeCenterInFit]);
 
   // Projection gets every marker PLUS a synthetic user pin so the
-  // canvas frames the user alongside every nearby seller.
-  const projected = useMemo(() => {
-    if (fitMode !== "auto") return [];
-    const synthetic = showUserPin && includeCenterInFit && finiteCenter
+  // canvas frames the user alongside every nearby seller. We also
+  // stash the bbox so the `onMapTap` handler can convert a tap
+  // location back into a lat/lng pair.
+  //
+  // Two modes:
+  //   `auto`  — project all markers using a bbox that includes the
+  //             user so the canvas frames "user + every seller".
+  //   `fixed` — camera is anchored on the user; project each marker
+  //             individually relative to the user's centre so they
+  //             still appear at their OWN coordinates (no collapse
+  //             onto a single point), but the canvas doesn't auto-fit
+  //             around distant sellers.
+  const { projected, bbox } = useMemo(() => {
+    if (fitMode === "auto") {
+      const synthetic = showUserPin && includeCenterInFit && finiteCenter
+        ? [
+            {
+              id: "__user__",
+              lat: finiteCenter.lat,
+              lng: finiteCenter.lng,
+              // Synthetic pin is rendered too so the user always sees
+              // themselves on the canvas. `selected` stays false and
+              // the tap callback short-circuits for this id below.
+              label: "You",
+            },
+          ]
+        : [];
+      return project(
+        [...finiteMarkers, ...synthetic],
+        finiteCenter ?? center,
+      );
+    }
+    // `fixed` — each marker is positioned relative to the user's
+    // centre so it lands at its OWN lat/lng, but the canvas doesn't
+    // auto-zoom around the marker bbox. The user pin always renders
+    // at the canvas centre.
+    const origin = finiteCenter ?? center;
+    const synthetic = showUserPin && finiteCenter
       ? [
           {
             id: "__user__",
             lat: finiteCenter.lat,
             lng: finiteCenter.lng,
-            // Synthetic pin is rendered too so the user always sees
-            // themselves on the canvas. `selected` stays false and the
-            // tap callback short-circuits for this id below.
             label: "You",
           },
         ]
       : [];
-    return project([...finiteMarkers, ...synthetic], finiteCenter ?? center);
-  }, [finiteMarkers, finiteCenter, center, fitMode, includeCenterInFit, showUserPin]);
+    const { projected: fixedProjected } = projectFixed(
+      [...finiteMarkers, ...synthetic],
+      origin,
+    );
+    return { projected: fixedProjected, bbox: null };
+  }, [finiteMarkers, finiteCenter, center, fitMode, showUserPin]);
 
   // For the single-marker case (or no-marker case), project that one
   // marker (or the centre) so the user still sees *something* on the
@@ -301,36 +398,47 @@ export function NearbySellersMap({
               </Text>
             </View>
           ) : null}
-          {!isUserPin && (richName || richStatus) ? (
+          {!isUserPin && (richName || richStatus || Number.isFinite(p.pin.distanceKm)) ? (
             <View style={styles.pinLabel}>
               {richName ? (
                 <Text style={styles.pinLabelName} numberOfLines={1}>
                   {richName}
                 </Text>
               ) : null}
-              {richStatus ? (
-                <View
-                  style={[
-                    styles.pinStatusPill,
-                    {
-                      backgroundColor:
-                        richStatus === "Active"
-                          ? "#DCFCE7"
-                          : "#FEE2E2",
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.pinStatusPillText,
-                      {
-                        color:
-                          richStatus === "Active" ? "#047857" : "#B91C1C",
-                      },
-                    ]}
-                  >
-                    {richStatus === "Active" ? "Open" : "Closed"}
-                  </Text>
+              {(Number.isFinite(p.pin.distanceKm) || richStatus) ? (
+                <View style={styles.pinLabelRow}>
+                  {Number.isFinite(p.pin.distanceKm) ? (
+                    <View style={styles.pinDistancePill}>
+                      <Text style={styles.pinDistanceText} numberOfLines={1}>
+                        {p.pin.distanceKm!.toFixed(1)} km
+                      </Text>
+                    </View>
+                  ) : null}
+                  {richStatus ? (
+                    <View
+                      style={[
+                        styles.pinStatusPill,
+                        {
+                          backgroundColor:
+                            richStatus === "Active"
+                              ? "#DCFCE7"
+                              : "#FEE2E2",
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.pinStatusPillText,
+                          {
+                            color:
+                              richStatus === "Active" ? "#047857" : "#B91C1C",
+                          },
+                        ]}
+                      >
+                        {richStatus === "Active" ? "Open" : "Closed"}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
             </View>
@@ -339,6 +447,34 @@ export function NearbySellersMap({
       );
     },
     [onMarkerTap],
+  );
+
+  // Convert a tap on the empty grid into a lat/lng using the same
+  // bbox the projection uses. Lets the seller picker drop a pin via
+  // tap on web the same way the native renderer does.
+  const handleMapTap = useCallback(
+    (evt: { nativeEvent: { locationX: number; locationY: number } }) => {
+      if (!onMapTap) return;
+      const ref = bbox;
+      if (!ref) return;
+      const frameW = evt.nativeEvent.locationX;
+      const frameH = evt.nativeEvent.locationY;
+      // The projected bbox renders inside a padded canvas. Match the
+      // forward direction: undo `padX` / `padY`, undo `1 - 2*pad*`,
+      // then divide by the lat/lng span.
+      const drawW = 1 - 2 * ref.padX;
+      const drawH = 1 - 2 * ref.padY;
+      const nx = (frameW - ref.padX) / drawW;
+      const ny = 1 - (frameH - ref.padY) / drawH;
+      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+      const lng = ref.minLng + nx * ref.lngSpan;
+      const lat = ref.minLat + ny * ref.latSpan;
+      onMapTap({
+        lat: Math.min(Math.max(lat, UNGUJA_BOUNDS.minLat), UNGUJA_BOUNDS.maxLat),
+        lng: Math.min(Math.max(lng, UNGUJA_BOUNDS.minLng), UNGUJA_BOUNDS.maxLng),
+      });
+    },
+    [onMapTap, bbox],
   );
 
   return (
@@ -364,6 +500,19 @@ export function NearbySellersMap({
           />
         ))}
       </View>
+
+      {/* Tap-to-drop surface — sits beneath the pins so a marker
+          press still wins. Only mounts when an `onMapTap` consumer
+          is interested, so the customer Home (which never wires it)
+          keeps the existing pointer-events behaviour. */}
+      {onMapTap ? (
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={handleMapTap}
+          accessibilityRole="button"
+          accessibilityLabel="Tap to drop a pin here"
+        />
+      ) : null}
 
       {/* Pins */}
       {projected.map((p) =>
@@ -468,6 +617,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: Radius.pill,
+  },
+  pinLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    marginTop: 2,
+  },
+  pinDistancePill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+    backgroundColor: "#CCFBF1",
+    borderWidth: 1,
+    borderColor: "#0F766E",
+  },
+  pinDistanceText: {
+    color: "#0F766E",
+    fontSize: 9,
+    fontWeight: "800",
   },
   pinStatusPillText: {
     fontSize: 9,

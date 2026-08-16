@@ -55,7 +55,6 @@ import { StatusPill } from "../../src/components/StatusPill";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { LogoutButton } from "../../src/components/LogoutButton";
-import { RiderVerificationSection } from "../../src/components/RiderVerificationSection";
 import { ApiError } from "../../src/api/errors";
 import { API_CONFIG } from "../../src/api/config";
 import {
@@ -714,11 +713,76 @@ export default function RiderProfile() {
                 />
               ) : null}
 
-              {/* ============== Rider Verification Application ============== */}
-              <Text style={styles.sectionTitle}>
-                Rider Verification Application
-              </Text>
-              <RiderVerificationSection />
+              {/* ============== Rider Verification (compact entry-point) ============== */}
+              <Text style={styles.sectionTitle}>Rider Verification</Text>
+              <Card>
+                <View style={styles.verifHeaderRow}>
+                  <View style={styles.verifIconWrap}>
+                    <Ionicons
+                      name="shield-checkmark-outline"
+                      size={22}
+                      color={Colors.rider}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.verifTitle}>Rider Verification Application</Text>
+                    <Text style={styles.verifSub}>
+                      {verification.isApproved
+                        ? "Your application is approved and your account is active for deliveries."
+                        : verification.isRejected
+                          ? "Your application was rejected. Review the reason and re-submit."
+                          : verification.application?.submittedAt
+                            ? "Your application has been submitted and is awaiting administrator verification."
+                            : "Upload the required documents and submit for administrator verification."}
+                    </Text>
+                  </View>
+                  <StatusPill
+                    label={
+                      verification.isApproved
+                        ? "Approved"
+                        : verification.isRejected
+                          ? "Rejected"
+                          : verification.application?.submittedAt
+                            ? "Under Review"
+                            : "Pending"
+                    }
+                    tone={
+                      verification.isApproved
+                        ? "success"
+                        : verification.isRejected
+                          ? "danger"
+                          : "warning"
+                    }
+                  />
+                </View>
+
+                <AppButton
+                  title={
+                    verification.isApproved
+                      ? "View Application"
+                      : verification.isRejected
+                        ? "Re-submit Application"
+                        : verification.application?.submittedAt
+                          ? "View Application Status"
+                          : "Continue Application"
+                  }
+                  variant={verification.isApproved ? "outline" : "primary"}
+                  leftIcon={
+                    <Ionicons
+                      name={
+                        verification.isApproved
+                          ? "eye-outline"
+                          : "arrow-forward-outline"
+                      }
+                      size={16}
+                      color={verification.isApproved ? Colors.primary : "#FFF"}
+                    />
+                  }
+                  onPress={() => router.push("/rider/licences")}
+                  style={{ marginTop: Spacing.md }}
+                  fullWidth
+                />
+              </Card>
 
               {/* ============== Permit Certificate ============== */}
               <Text style={styles.sectionTitle}>Permit Certificate</Text>
@@ -1178,6 +1242,32 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     textAlign: "center",
     marginTop: 4,
+  },
+  // Verification compact card
+  verifHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+  verifIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.rider + "22",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  verifTitle: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+  },
+  verifSub: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 16,
+    flexShrink: 1,
   },
   // Edit Contact Modal
   sectionHeaderRow: {

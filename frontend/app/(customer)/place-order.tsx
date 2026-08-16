@@ -102,8 +102,42 @@ export default function PlaceOrderScreen() {
       });
     } catch (err) {
       setSubmitting(false);
-      const message =
+      // FR-05 — backend returns HTTP 409 + code=INSUFFICIENT_STOCK
+      // when the seller has fewer units than the customer asked for.
+      // Surface a clear, customer-friendly message rather than the raw
+      // server copy.
+      let message =
         err instanceof Error ? err.message : "Could not place the order.";
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code?: string }).code === "INSUFFICIENT_STOCK"
+      ) {
+        const apiErr = err as { details?: unknown; message?: string };
+        const detailList = Array.isArray(apiErr.details)
+          ? (apiErr.details as string[])
+          : [];
+        const availableDetail = detailList.find((d) =>
+          d.startsWith("available:"),
+        );
+        const requestedDetail = detailList.find((d) =>
+          d.startsWith("requested:"),
+        );
+        const available = availableDetail
+          ? availableDetail.replace("available:", "").trim()
+          : null;
+        const requested = requestedDetail
+          ? requestedDetail.replace("requested:", "").trim()
+          : null;
+        if (available !== null && requested !== null) {
+          message = `Only ${available} in stock — you asked for ${requested}. Reduce the quantity and try again.`;
+        } else if (apiErr.message) {
+          message = apiErr.message;
+        } else {
+          message = "Not enough stock for this order.";
+        }
+      }
       Alert.alert("Order failed", message);
       return;
     }

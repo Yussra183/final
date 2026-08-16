@@ -54,6 +54,7 @@ const RIDER_ROUTES: RiderRoute[] = [
   { key: "delivery-history", label: "Delivery History", icon: "time-outline", path: "/rider/delivery-history", requiresApproval: true },
   { key: "earnings", label: "Earnings", icon: "cash-outline", path: "/rider/earnings", requiresApproval: true },
   { key: "my-team", label: "My Team", icon: "people-outline", path: "/rider/my-team", requiresApproval: true },
+  { key: "licences", label: "Licences", icon: "shield-checkmark-outline", path: "/rider/licences" },
   { key: "safety-guidelines", label: "Safety Guidelines", icon: "shield-checkmark-outline", path: "/rider/safety-guidelines" },
   { key: "profile", label: "Profile", icon: "person-circle-outline", path: "/rider/profile" },
 ];
@@ -184,6 +185,7 @@ export default function RiderLayout() {
       <TypedDrawer.Screen name="earnings" />
       <TypedDrawer.Screen name="safety-guidelines" />
       <TypedDrawer.Screen name="my-team" />
+      <TypedDrawer.Screen name="licences" />
       <TypedDrawer.Screen name="profile" />
     </TypedDrawer>
   );

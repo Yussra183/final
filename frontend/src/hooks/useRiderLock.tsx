@@ -98,7 +98,7 @@ export function useRiderLock() {
   }, []);
 
   const openProfile = useCallback(() => {
-    router.push("/rider/profile");
+    router.push("/rider/licences");
   }, [router]);
 
   const banner = pickBanner(verification);
@@ -127,11 +127,11 @@ export function useRiderLock() {
           </View>
         </View>
         <AppButton
-          title="Go to Profile"
+          title="Go to Verification"
           variant="primary"
           leftIcon={
             <Ionicons
-              name="person-circle-outline"
+              name="shield-checkmark-outline"
               size={16}
               color="#FFF"
             />
@@ -210,11 +210,11 @@ export function useRiderLock() {
               style={[styles.modalButton, { backgroundColor: Colors.rider }]}
             >
               <Ionicons
-                name="person-circle-outline"
+                name="shield-checkmark-outline"
                 size={18}
                 color="#FFF"
               />
-              <Text style={styles.modalButtonText}>Go to Profile</Text>
+              <Text style={styles.modalButtonText}>Go to Verification</Text>
             </Pressable>
           </View>
         </Pressable>

@@ -67,7 +67,16 @@ public class ProductController {
         int stock = (raw instanceof Number n)
                 ? n.intValue()
                 : Integer.parseInt(raw.toString());
-        return productService.updateStock(id, stock);
+        // Optional lowStockThreshold — accept the field when the seller
+        // sets/updates it; null means leave the existing threshold alone.
+        Integer lowStockThreshold = null;
+        Object rawThreshold = body.get("lowStockThreshold");
+        if (rawThreshold != null) {
+            lowStockThreshold = (rawThreshold instanceof Number n)
+                    ? n.intValue()
+                    : Integer.parseInt(rawThreshold.toString());
+        }
+        return productService.updateStock(id, stock, lowStockThreshold);
     }
 
     @org.springframework.web.bind.annotation.PutMapping("/{id}")

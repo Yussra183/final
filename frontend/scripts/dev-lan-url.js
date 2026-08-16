@@ -46,6 +46,7 @@
  */
 
 const { spawn } = require("node:child_process");
+const dns = require("node:dns").promises;
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -116,6 +117,34 @@ function detectLanIp() {
   if (candidates.length === 0) return null;
   candidates.sort((x, y) => x.preferred - y.preferred);
   return candidates[0].address;
+}
+
+/**
+ * Quick "is the internet reachable from this laptop?" probe used to
+ * decide whether to pass `--offline` to `expo start`. We do a DNS
+ * lookup (not an HTTP fetch) because:
+ *   - DNS is the first thing that breaks when a captive portal / VPN /
+ *     airplane mode intercepts traffic, so it's the cleanest signal.
+ *   - It avoids depending on any specific Expo endpoint and never
+ *     touches the manifest-signing server (which `--offline` exists to
+ *     keep the dev server off of).
+ *   - It's cheap; one resolver call against a stable host.
+ *
+ * Returns `true` if the resolver answers, `false` on any failure or
+ * timeout. The launcher only needs the boolean — anything beyond that
+ * is over-engineering for "should dep validation run?".
+ */
+async function probeNetwork(timeoutMs = 2500) {
+  try {
+    const lookup = dns.lookup("expo.dev");
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("dns-timeout")), timeoutMs),
+    );
+    await Promise.race([lookup, timeout]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -238,11 +267,57 @@ async function main() {
   // makes "restart PC → npm run dev:lan → fresh IP, no manual edits"
   // actually work: even if a stale `.env.local` lingers, the child
   // process sees the right value and the new bundle picks it up.
-  const childEnv = { ...process.env, EXPO_PUBLIC_API_BASE_URL: url };
+  //
+  // EXPO_NO_TELEMETRY=1 is set because the CLI's startup pings its CDN
+  // for anonymous analytics; on offline machines those pings surface as
+  // `TypeError: fetch failed` and abort Metro before the QR prints.
+  const childEnv = {
+    ...process.env,
+    EXPO_PUBLIC_API_BASE_URL: url,
+    EXPO_NO_TELEMETRY: "1",
+  };
 
-  const expo = spawn("npx", ["expo", "start"], {
+  // Decide whether to launch Expo in offline mode. Per the Expo SDK 54
+  // docs, `--offline` (a) tells the dev server not to make manifest-
+  // signing network requests and (b) causes Expo to print
+  // "Skipping dependency validation in offline mode". It is intended
+  // for genuinely-offline machines; on online machines it silently
+  // disables a real check (dependency-version validation), which is why
+  // the original launcher was passing it unconditionally.
+  //
+  // We now probe the network first:
+  //   - If `expo.dev` resolves, run `expo start` with full validation
+  //     (no flags). Dependency validation runs as documented.
+  //   - If it does not resolve (timeout / DNS failure), launch with
+  //     `--offline` AND `EXPO_NO_DEPENDENCY_VALIDATION=1`. Both flags
+  //     are appropriate in that case: the dev server still starts
+  //     (manifest signing is skipped) and dep validation is skipped
+  //     too, since Expo can't reach the registry anyway.
+  //
+  // Note: with --offline, Expo emits the "Skipping dependency validation
+  // in offline mode" notice. We intentionally do NOT filter it: with
+  // stdio: "inherit" the QR code and interactive keymap only render
+  // when stdout is a real TTY, so any pipe/forward approach (stdio:
+  // "pipe" + a forwarder, or a stdout.write monkey-patch) costs the QR
+  // rendering in exchange for hiding one correct informational message.
+  // The current behaviour preserves the QR + keymap and shows that line
+  // exactly once.
+  const online = await probeNetwork();
+  const expoArgs = ["expo", "start"];
+  const expoEnv = { ...childEnv };
+  if (!online) {
+    expoArgs.push("--offline");
+    expoEnv.EXPO_NO_DEPENDENCY_VALIDATION = "1";
+    log(
+      "expo",
+      c.yellow(
+        "offline detected — launching Expo with --offline (dep validation skipped)",
+      ),
+    );
+  }
+  const expo = spawn("npx", expoArgs, {
     cwd: REPO_ROOT,
-    env: childEnv,
+    env: expoEnv,
     stdio: "inherit",
     shell: isWindows,
   });

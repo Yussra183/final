@@ -21,7 +21,7 @@
  * right. The drawer (and its hamburger) is gone; logout now lives
  * inside the Profile tab.
  */
-import React, { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   FlatList,
   Pressable,
@@ -63,7 +63,10 @@ export default function CustomerHome() {
   const { session, getNotificationsForUser, sellers: storeSellers } =
     useStore();
 
-  // Sourced from the live `GET /api/sellers` store slice.
+  // Sourced from the live `GET /api/sellers` store slice. The seller
+  // IDs, names, lat/lng, and open/closed status all come straight from
+  // the backend here — the map picks up the same data the next useMemo
+  // passes to the markers array.
   const apiSellers: NearbySeller[] = useMemo(() => {
     return storeSellers.map((s) => ({
       id: s.sellerId,
@@ -132,24 +135,46 @@ export default function CustomerHome() {
   // distance, and cylinder sizes through to the marker so the
   // `<NearbySellersMap>` can render richer pin labels.
   const { mappedMarkers, mappedSellers } = useMemo(() => {
-    const mapped: NearbySellerMarker[] = sellers
-      .filter((s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng))
-      .map((s) => {
-        const placeName = nearestPlaceName({ lat: s.lat!, lng: s.lng! });
-        return {
-          id: s.id,
-          lat: s.lat!,
-          lng: s.lng!,
-          // Legacy single-line label (used by callers / web fallback
-          // when no `name` is set).
-          label: placeName ?? `${s.distanceKm.toFixed(1)} km`,
-          // Richer Bolt-lite fields.
-          name: s.name,
-          status: s.status,
-          distanceKm: s.distanceKm,
-          cylinderSizes: s.cylinderSizes,
-        };
-      });
+    const filtered = sellers.filter(
+      (s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng),
+    );
+    const mapped: NearbySellerMarker[] = filtered.map((s) => {
+      const placeName = nearestPlaceName({ lat: s.lat!, lng: s.lng! });
+      return {
+        id: s.id,
+        lat: s.lat!,
+        lng: s.lng!,
+        // Legacy single-line label (used by callers / web fallback
+        // when no `name` is set).
+        label: placeName ?? `${s.distanceKm.toFixed(1)} km`,
+        // Richer Bolt-lite fields.
+        name: s.name,
+        status: s.status,
+        distanceKm: s.distanceKm,
+        cylinderSizes: s.cylinderSizes,
+      };
+    });
+    if (__DEV__) {
+      // Diagnostic: log every approved seller that reached the
+      // marker mapper so we can confirm each one carries its OWN
+      // lat/lng (and that all of them reach the map, not just one).
+      // Wrapped in __DEV__ so this never ships to production
+      // bundles.
+      console.info(
+        "[CUSTOMER_HOME][NEARBY_SELLERS_MARKERS]",
+        JSON.stringify({
+          totalSellersReturned: sellers.length,
+          sellersWithFiniteCoords: filtered.length,
+          markersGenerated: mapped.length,
+          markers: mapped.map((m) => ({
+            id: m.id,
+            name: m.name,
+            lat: m.lat,
+            lng: m.lng,
+          })),
+        }),
+      );
+    }
     return { mappedMarkers: mapped, mappedSellers: sellers };
   }, [sellers]);
 
@@ -171,12 +196,16 @@ export default function CustomerHome() {
   );
 
   // Handle a pin tap from the map: highlight the matching card and
-  // surface the bottom sheet so the customer can either inspect the
-  // card or continue to the seller-details screen.
-  const onPinTap = useCallback((id: string) => {
-    setSelectedSellerId(id);
-    setSheetOpen(true);
-  }, []);
+  // navigate directly to the seller-details screen so the customer
+  // sees the shop name, inventory, and distance without an extra
+  // sheet step. The bottom sheet remains reachable via the "List"
+  // FAB for customers who prefer the list view.
+  const onPinTap = useCallback(
+    (id: string) => {
+      openSeller(id);
+    },
+    [openSeller],
+  );
 
   // ---- Floating buttons ---------------------------------------------
   const onLocateMe = () => {
@@ -216,6 +245,35 @@ export default function CustomerHome() {
     // to the button tap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceCoords.lat, deviceCoords.lng, effectiveLocation, recenterToken]);
+
+  // Customer location summary for the top-left chip. Distinct from
+  // `effectiveLocation` (which falls back to the first seller when
+  // the customer has no profile address / GPS, so the "Nearby
+  // Sellers" hook still has a centre). Showing a seller's location
+  // here would be misleading — the chip must always read the
+  // customer's own area. Precedence: profile address → live GPS
+  // "city-ish" label → generic fallback.
+  const customerLocationLabel = useMemo(() => {
+    if (user?.address && user.address.trim().length > 0) {
+      return `Near ${user.address.trim()}`;
+    }
+    if (
+      isFiniteNumber(deviceCoords.lat) &&
+      isFiniteNumber(deviceCoords.lng)
+    ) {
+      // We have GPS but no profile address. Snap to the nearest known
+      // Unguja place so the chip shows a human-readable name instead
+      // of raw coordinates. `nearestPlaceName` returns null when the
+      // fix is outside Unguja, in which case we fall back to the
+      // generic copy.
+      const place = nearestPlaceName({
+        lat: deviceCoords.lat,
+        lng: deviceCoords.lng,
+      });
+      return place ? `Near ${place}` : "Using your live location";
+    }
+    return "Using default location";
+  }, [user?.address, deviceCoords.lat, deviceCoords.lng]);
 
   return (
     <SafeAreaView
@@ -313,11 +371,23 @@ export default function CustomerHome() {
           recenterToken={recenterToken}
           showUserPin={showUserPin}
           selectedId={selectedSellerId ?? undefined}
+          // `fixed` — camera stays anchored to the customer's
+          // location. The default `auto` would auto-fit every marker
+          // + the user, which on first paint drags the camera far
+          // away from the customer when sellers exist outside their
+          // immediate area. The customer Home expects the map to
+          // open on the customer first; sellers remain visible as
+          // individual pins but never re-anchor the camera away from
+          // the customer. "Locate me" still re-centres via
+          // `recenterToken`.
+          fitMode="fixed"
           style={StyleSheet.absoluteFill}
           onMarkerTap={onPinTap}
         />
 
-        {/* Top-left floating chip: location summary. */}
+        {/* Top-left floating chip: location summary. Always shows the
+            CUSTOMER's area (profile address or live GPS), never a
+            seller's — see `customerLocationLabel` above. */}
         <View style={styles.locationChip} pointerEvents="none">
           <Ionicons
             name={usingDefaultLocation ? "location-outline" : "navigate-outline"}
@@ -325,9 +395,7 @@ export default function CustomerHome() {
             color={Colors.primary}
           />
           <Text style={styles.locationChipText} numberOfLines={1}>
-            {effectiveLocation?.address
-              ? `Near ${effectiveLocation.address}`
-              : "Using default location"}
+            {customerLocationLabel}
           </Text>
         </View>
 
@@ -365,16 +433,16 @@ export default function CustomerHome() {
             accessibilityLabel="Open seller list"
           >
             <Ionicons name="list-outline" size={20} color="#FFF" />
-            {mappedSellers.length > 0 ? (
+            {mappedMarkers.length > 0 ? (
               <View style={styles.fabBadge}>
-                <Text style={styles.fabBadgeText}>{mappedSellers.length}</Text>
+                <Text style={styles.fabBadgeText}>{mappedMarkers.length}</Text>
               </View>
             ) : null}
           </PressableScale>
         </View>
 
         {/* Empty state overlay over the map. */}
-        {mappedSellers.length === 0 ? (
+        {mappedMarkers.length === 0 ? (
           <View style={styles.mapEmptyWrap} pointerEvents="box-none">
             <Card style={styles.mapEmptyCard}>
               <Ionicons
@@ -403,7 +471,7 @@ export default function CustomerHome() {
       <Sheet
         visible={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        title={`Nearby sellers (${mappedSellers.length})`}
+        title={`Nearby sellers (${mappedMarkers.length})`}
       >
         <FlatList
           data={mappedSellers}

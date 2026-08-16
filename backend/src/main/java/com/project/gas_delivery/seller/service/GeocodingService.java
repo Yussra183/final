@@ -110,19 +110,33 @@ public class GeocodingService {
 
     private static Map<String, Coordinates> buildDictionary() {
         // LinkedHashMap so iteration order matches declaration order.
+        //
+        // Order matters: lookup is a first-match substring scan, so we
+        // MUST list specific neighbourhoods BEFORE the generic city /
+        // region fallback. Otherwise "Stone Town, Zanzibar" matches
+        // "zanzibar" first and returns its (city-centre) coordinates
+        // instead of Stone Town's. Same rule for mainland districts:
+        // "Kinondoni, Dar es Salaam" must resolve to Kinondoni, not
+        // the Dar es Salaam anchor. See `resolveInternal` for the
+        // iteration rule.
         Map<String, Coordinates> m = new LinkedHashMap<>();
-        // Zanzibar — the demo dataset is set here, so this is the
-        // "anchor" cluster.
-        m.put("zanzibar",      new Coordinates(-6.1659, 39.2026));
+        // ---- Zanzibar: specific neighbourhoods first ----
         m.put("stone town",    new Coordinates(-6.1620, 39.1930));
         m.put("michenzani",    new Coordinates(-6.1650, 39.2050));
         m.put("malindi",       new Coordinates(-6.1610, 39.1950));
         m.put("amani",         new Coordinates(-6.1550, 39.2100));
-        // Mainland cities.
-        m.put("dar es salaam", new Coordinates(-6.7924, 39.2083));
+        // Zanzibar as a whole — only reached when no specific
+        // neighbourhood was mentioned.
+        m.put("zanzibar",      new Coordinates(-6.1659, 39.2026));
+        // ---- Mainland: specific districts first ----
         m.put("kinondoni",     new Coordinates(-6.7800, 39.2700));
         m.put("ilala",         new Coordinates(-6.8200, 39.2600));
         m.put("temeke",        new Coordinates(-6.8600, 39.2700));
+        m.put("mikocheni",     new Coordinates(-6.7600, 39.2600));
+        // Mainland city anchors — only reached when no specific
+        // district was mentioned.
+        m.put("dar es salaam", new Coordinates(-6.7924, 39.2083));
+        // ---- Other major cities ----
         m.put("arusha",        new Coordinates(-3.3869, 36.6829));
         m.put("dodoma",        new Coordinates(-6.1630, 35.7516));
         m.put("mwanza",        new Coordinates(-2.5164, 32.9175));

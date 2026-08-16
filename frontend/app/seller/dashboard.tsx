@@ -36,7 +36,7 @@ import {
 import { GasProduct, NotificationItem, Order } from "../../constants/types";
 import { PermitStatusBanner } from "../../src/components/PermitStatusBanner";
 
-const LOW_STOCK_THRESHOLD = 10;
+const FALLBACK_LOW_STOCK_THRESHOLD = 10;
 
 /** Reusable 2-column summary card used on the dashboard top row. */
 function SummaryCard(props: {
@@ -217,7 +217,9 @@ export default function SellerDashboard() {
   const recentOrders = sellerOrders.slice(0, 4);
   const recentNotifications = sellerNotifications.slice(0, 3);
   const lowStock: GasProduct[] = sellerProducts
-    .filter((p) => p.stock < LOW_STOCK_THRESHOLD)
+    .filter(
+      (p) => p.stock <= (p.lowStockThreshold ?? FALLBACK_LOW_STOCK_THRESHOLD),
+    )
     .sort((a, b) => a.stock - b.stock);
 
   const greeting = useMemo(() => {
@@ -344,7 +346,7 @@ export default function SellerDashboard() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.allGoodTitle}>All stock levels are healthy</Text>
                 <Text style={styles.allGoodMeta}>
-                  No products below {LOW_STOCK_THRESHOLD} units.
+                  No products below their low-stock threshold.
                 </Text>
               </View>
             </View>

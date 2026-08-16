@@ -25,10 +25,14 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
+    private final StockService stockService;
 
-    public ProductService(ProductRepository productRepository, UserRepository userRepository) {
+    public ProductService(ProductRepository productRepository,
+                          UserRepository userRepository,
+                          StockService stockService) {
         this.productRepository = productRepository;
         this.userRepository = userRepository;
+        this.stockService = stockService;
     }
 
     @Transactional(readOnly = true)
@@ -42,13 +46,17 @@ public class ProductService {
     }
 
     @Transactional
-    public ProductDto updateStock(Long productId, int newStock) {
+    public ProductDto updateStock(Long productId, int newStock, Integer newLowStockThreshold) {
         ProductEntity product = productRepository.findById(productId)
                 .orElseThrow(() -> new com.project.gas_delivery.auth.exception.ResourceNotFoundException(
                         "Product " + productId + " not found."));
         if (newStock < 0) {
             throw new com.project.gas_delivery.auth.exception.BadRequestException(
                     "Stock cannot be negative.");
+        }
+        if (newLowStockThreshold != null && newLowStockThreshold < 0) {
+            throw new com.project.gas_delivery.auth.exception.BadRequestException(
+                    "lowStockThreshold cannot be negative.");
         }
         // Permit gating: only active sellers (admin-approved) may update
         // stock. Pending / rejected sellers have is_active=false, so this
@@ -60,8 +68,22 @@ public class ProductService {
             throw new com.project.gas_delivery.order.exception.NotAuthorizedException(
                     "Your account is awaiting permit verification; stock updates are disabled.");
         }
-        product.setStock(newStock);
-        ProductEntity saved = productRepository.save(product);
+        if (newLowStockThreshold != null) {
+            product.setLowStockThreshold(newLowStockThreshold);
+        }
+        // Route through StockService so the threshold notification logic
+        // (low-stock / out-of-stock) still fires when the seller drops
+        // stock manually — previously it only fired on order-driven
+        // decrements.
+        int applied = stockService.applyManualStock(product.getId(), newStock);
+        ProductEntity saved = productRepository.findById(product.getId()).orElseThrow();
+        // applyManualStock uses the entity in-place but Hibernate may
+        // have a stale reference; reload to be safe.
+        saved.setStock(applied);
+        if (newLowStockThreshold != null) {
+            saved.setLowStockThreshold(newLowStockThreshold);
+        }
+        saved = productRepository.save(saved);
         String sellerName = userRepository.findById(saved.getSellerId())
                 .map(User::getFullName)
                 .orElse(null);

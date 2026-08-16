@@ -20,6 +20,7 @@ public record ProductDto(
         String size,
         BigDecimal price,
         int stock,
+        int lowStockThreshold,
         String image,
         String description,
         String category
@@ -34,6 +35,7 @@ public record ProductDto(
                 e.getSize(),
                 e.getPrice(),
                 e.getStock(),
+                e.getLowStockThreshold(),
                 e.getImage(),
                 e.getDescription(),
                 e.getCategory()

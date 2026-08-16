@@ -138,6 +138,32 @@ export default function SellerProfile() {
     const shopName =
       permit?.businessName?.trim() ||
       `${user.fullName}'s Shop`;
+    if (typeof __DEV__ !== "undefined" && __DEV__) {
+      // Diagnostic: log the resolved business + coords state so we
+      // can confirm whether `user.lat`/`user.lng` reached the session
+      // (and thus whether `ShopMapPreview` will render). Wrapped in
+      // __DEV__ so it never ships to production bundles.
+      console.info(
+        "[SELLER_PROFILE][BUSINESS_STATE]",
+        JSON.stringify({
+          userId: user.id,
+          userLat: user.lat ?? null,
+          userLng: user.lng ?? null,
+          userAddress: user.address ?? null,
+          userWard: user.ward ?? null,
+          userStreet: user.street ?? null,
+          userRegion: user.region ?? null,
+          userDistrict: user.district ?? null,
+          displayAddress,
+          shopName,
+          willRenderShopMapPreview:
+            typeof user.lat === "number" &&
+            Number.isFinite(user.lat) &&
+            typeof user.lng === "number" &&
+            Number.isFinite(user.lng),
+        }),
+      );
+    }
     return {
       name: shopName,
       address: displayAddress,

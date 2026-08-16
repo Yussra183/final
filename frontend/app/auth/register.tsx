@@ -35,6 +35,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppInput } from "../../src/components/AppInput";
 import { AppButton } from "../../src/components/AppButton";
+import { MapPickerSheet } from "../../src/components/MapPickerSheet";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import {
   AUTH_ACTIVE_OPACITY,
@@ -275,6 +276,14 @@ export default function RegisterScreen() {
   const businessLatRef = useRef<number | null>(null);
   const businessLngRef = useRef<number | null>(null);
 
+  // Drop-pin state for sellers — opens a native map picker so the
+  // seller can pin their shop instead of relying on backend
+  // geocoding. The picker is optional: when the seller skips it,
+  // the register() path falls back to device GPS, then backend
+  // geocoding. When they pick a pin, it wins.
+  const [mapPickerOpen, setMapPickerOpen] = useState(false);
+  const [pickedPin, setPickedPin] = useState<{ lat: number; lng: number } | null>(null);
+
   // Animation for step transitions
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const heroFade = useRef(new Animated.Value(0)).current;
@@ -376,9 +385,19 @@ export default function RegisterScreen() {
 
     setLoading(true);
     if (role === "seller") {
-      const fix = await resolveCurrentDeviceCoords();
-      businessLatRef.current = fix?.lat ?? null;
-      businessLngRef.current = fix?.lng ?? null;
+      // Pin precedence: explicit dropped pin (wins) > device GPS >
+      // backend geocoding (last resort). The picker is optional, so
+      // most sellers will fall through to device GPS; the dropped
+      // pin is for sellers who want exact control over their pin
+      // even when their address isn't in the geocoding dictionary.
+      if (pickedPin) {
+        businessLatRef.current = pickedPin.lat;
+        businessLngRef.current = pickedPin.lng;
+      } else {
+        const fix = await resolveCurrentDeviceCoords();
+        businessLatRef.current = fix?.lat ?? null;
+        businessLngRef.current = fix?.lng ?? null;
+      }
     }
 
     const user = await register({
@@ -641,6 +660,37 @@ export default function RegisterScreen() {
                       }
                     />
 
+                    {/* Shop Location pin. Sellers can drop an exact pin
+                        on the map so customers find them precisely —
+                        without one, the backend's address dictionary
+                        would put their pin on a city-centre anchor. */}
+                    <View style={styles.pinSection}>
+                      <Text style={styles.pinSectionLabel}>Shop Location</Text>
+                      {pickedPin ? (
+                        <Text style={styles.pinSummary}>
+                          📍 {pickedPin.lat.toFixed(6)}, {pickedPin.lng.toFixed(6)}
+                        </Text>
+                      ) : (
+                        <Text style={styles.pinEmpty}>
+                          📍 Not set — tap to choose your shop on the map.
+                        </Text>
+                      )}
+                      <TouchableOpacity
+                        style={styles.pinBtn}
+                        onPress={() => setMapPickerOpen(true)}
+                        activeOpacity={AUTH_ACTIVE_OPACITY}
+                      >
+                        <Ionicons
+                          name="map-outline"
+                          size={18}
+                          color={Colors.primary}
+                        />
+                        <Text style={styles.pinBtnText}>
+                          {pickedPin ? "Change pin" : "Set on map"}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
                     <View style={styles.gpsBadge}>
                       <Ionicons
                         name="location-outline"
@@ -648,8 +698,8 @@ export default function RegisterScreen() {
                         color={Colors.primary}
                       />
                       <Text style={styles.gpsText}>
-                        Your shop pin is set automatically from your address — no
-                        coordinates needed.
+                        Your shop pin is set automatically from your address —
+                        or pick an exact location on the map above.
                       </Text>
                     </View>
                   </View>
@@ -773,6 +823,19 @@ export default function RegisterScreen() {
           </TouchableOpacity>
         </Animated.View>
       </ScrollView>
+
+      {/* Drop-pin picker for sellers. Sits outside the ScrollView so
+          the native map can render full-screen when opened. */}
+      <MapPickerSheet
+        visible={mapPickerOpen}
+        onClose={() => setMapPickerOpen(false)}
+        initialLat={pickedPin?.lat ?? undefined}
+        initialLng={pickedPin?.lng ?? undefined}
+        onConfirm={(coords) => {
+          setPickedPin(coords);
+          setMapPickerOpen(false);
+        }}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -865,6 +928,50 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.primaryDark,
     lineHeight: 17,
+  },
+
+  // Shop Location pin section (sellers only). Mirrors the same block
+  // in the Edit Business Address modal so a seller sees the same UI
+  // shape whether they're registering or editing.
+  pinSection: {
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  pinSectionLabel: {
+    fontSize: FontSize.md,
+    fontWeight: "800",
+    color: Colors.text,
+    marginBottom: Spacing.sm,
+  },
+  pinSummary: {
+    fontSize: FontSize.sm,
+    color: Colors.primary,
+    fontWeight: "800",
+    marginBottom: Spacing.sm,
+  },
+  pinEmpty: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+    fontStyle: "italic",
+  },
+  pinBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    alignSelf: "flex-start",
+  },
+  pinBtnText: {
+    fontSize: FontSize.sm,
+    color: Colors.primary,
+    fontWeight: "800",
   },
 
   // Step 3 — summary chip
