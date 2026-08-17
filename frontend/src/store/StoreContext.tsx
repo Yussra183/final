@@ -2303,7 +2303,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               ...prev,
               user: {
                 ...prev.user,
+                businessName: text(saved.businessName) ?? prev.user.businessName,
                 address: text(saved.location) ?? prev.user.address,
+                phone: text(saved.phone) ?? prev.user.phone,
                 district: text(saved.district) ?? prev.user.district,
                 region: text(saved.region) ?? prev.user.region,
                 ward: text(saved.ward) ?? prev.user.ward,
@@ -2319,7 +2321,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           u.id === session.user.id
             ? {
                 ...u,
+                businessName: text(saved.businessName) ?? u.businessName,
                 address: text(saved.location) ?? u.address,
+                phone: text(saved.phone) ?? u.phone,
                 district: text(saved.district) ?? u.district,
                 region: text(saved.region) ?? u.region,
                 ward: text(saved.ward) ?? u.ward,

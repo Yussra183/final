@@ -11,6 +11,14 @@ import java.math.BigDecimal;
  * {@code constants/types.ts}. {@code sellerId} is the string form of the
  * user's numeric id — keeps the wire contract identical to the auth
  * {@code UserDto}.</p>
+ *
+ * <p><strong>locationStatus</strong> tells the caller whether the
+ * stored lat/lng came from a real source (pin / GPS / geocoder that
+ * matched a known place) or from the deterministic hash fallback.
+ * "MISSING" is reserved for rows that have <em>no</em> coords at all —
+ * the customer map renders those with a distinct pin so the seller is
+ * visible (with a "location unavailable" cue) instead of silently
+ * disappearing from the home screen.</p>
  */
 public record SellerProfileDto(
         String sellerId,
@@ -47,8 +55,38 @@ public record SellerProfileDto(
          *  so the values the seller types at registration round-trip
          *  through the backend instead of being silently dropped. */
         String ward,
-        String street
+        String street,
+        /**
+         * "OK" when the saved lat/lng is real, "MISSING" when the row
+         * has no coordinates at all. The customer map renders "MISSING"
+         * rows with a distinct grey pin at the island centroid so a
+         * seller who hasn't configured their location is still visible
+         * (with a clear "location unavailable" cue) instead of being
+         * silently dropped from the home screen.
+         */
+        String locationStatus
 ) {
+
+    public SellerProfileDto withDistanceKm(Double distanceKm) {
+        return new SellerProfileDto(
+                sellerId,
+                sellerName,
+                businessName,
+                location,
+                distanceKm,
+                phone,
+                rating,
+                availableSizes,
+                openNow,
+                lat,
+                lng,
+                region,
+                district,
+                ward,
+                street,
+                locationStatus
+        );
+    }
 
     public static SellerProfileDto from(SellerProfileEntity e, String sellerName, double distanceKm,
                                         String[] availableSizes) {
@@ -67,7 +105,8 @@ public record SellerProfileDto(
                 e.getRegion(),
                 e.getDistrict(),
                 e.getWard(),
-                e.getStreet()
+                e.getStreet(),
+                (e.getLat() == null || e.getLng() == null) ? "MISSING" : "OK"
         );
     }
 }

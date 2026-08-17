@@ -259,6 +259,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
+        log.error("Unhandled exception", ex);
         return ApiErrorBody.of(HttpStatus.INTERNAL_SERVER_ERROR,
                 "An unexpected error occurred", "INTERNAL_ERROR", null);
     }

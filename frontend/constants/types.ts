@@ -458,6 +458,15 @@ export interface SellerProfile {
   lat?: number;
   lng?: number;
   /**
+   * "OK" when the seller has saved real coordinates, "MISSING" when
+   * the row was lazily-created without a configured location. The
+   * customer map renders MISSING rows with a grey pin at the island
+   * centroid so the seller is still visible (with a clear "location
+   * unavailable" cue) instead of being silently dropped from the
+   * home screen.
+   */
+  locationStatus?: "OK" | "MISSING";
+  /**
    * Mirrors the backend `SellerProfileDto.region` / `.district` fields.
    * Populated by `GET /api/sellers` and `GET /api/sellers/me` so the
    * seller Profile screen can re-seed the "Region" / "District" inputs

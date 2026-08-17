@@ -21,40 +21,36 @@ import java.util.Optional;
  *       associated coordinates are returned. This means demo addresses
  *       such as "Stone Town, Zanzibar" resolve to real, distinct
  *       coordinates without any third-party API key.</li>
- *   <li>If no dictionary key matches, the address is hashed
- *       deterministically (FNV-1a 32-bit) and the resulting integer is
- *       mapped to a stable coordinate inside a Tanzanian city center
- *       area. The hash is salted by the same dictionary so different
- *       unknown addresses still land in distinguishable but
- *       realistic-looking spots.</li>
+ *   <li>If no dictionary key matches, the address is treated as
+ *       unresolved and the caller gets {@link Optional#empty()} so the
+ *       API can return a proper 4xx instead of silently persisting a
+ *       fake coordinate.</li>
  * </ol>
  *
- * <p>This service <strong>always</strong> returns a coordinate — it never
- * throws or returns {@code Optional.empty()}. That contract is what lets
- * {@link SellerProfileService} unconditionally persist a non-null
- * {@code lat}/{@code lng} on every upsert, which in turn keeps the
- * customer "Nearby Sellers" list sortable by distance.</p>
+ * <p>This service only returns coordinates for addresses it can resolve
+ * with confidence. Unknown addresses remain unresolved so seller-facing
+ * writes can fail fast instead of degrading into fake nearby markers.</p>
  */
 @Service
 public class GeocodingService {
 
     /**
      * Public API. Returns the geocoded coordinate for the given address,
-     * or {@link Optional#empty()} when the input is blank. Non-blank
-     * input is always resolved by {@link #resolveInternal(String)}.
+     * or {@link Optional#empty()} when the input is blank or doesn't
+     * match a known place.
      */
     public Optional<Coordinates> resolve(String address) {
         if (address == null) return Optional.empty();
         String trimmed = address.trim();
         if (trimmed.isEmpty()) return Optional.empty();
-        return Optional.of(resolveInternal(trimmed));
+        return resolveInternal(trimmed);
     }
 
     /**
-     * Internal resolution path. Always returns a non-null record so the
-     * seller upsert can save lat/lng unconditionally.
+     * Internal resolution path. Returns a coordinate only when the
+     * address matches a known dictionary entry.
      */
-    private Coordinates resolveInternal(String address) {
+    private Optional<Coordinates> resolveInternal(String address) {
         String lower = address.toLowerCase(Locale.ROOT);
 
         // 1. Dictionary lookup — first match wins. The dictionary is
@@ -62,41 +58,10 @@ public class GeocodingService {
         // tested before generic ones.
         for (Map.Entry<String, Coordinates> e : DICTIONARY.entrySet()) {
             if (lower.contains(e.getKey())) {
-                return e.getValue();
+                return Optional.of(e.getValue());
             }
         }
-
-        // 2. Deterministic hash fallback. The hash is salted with the
-        // first dictionary entry's latitude so unknown addresses in the
-        // same country cluster near the rest of the dataset rather than
-        // scattering to (0,0).
-        Coordinates anchor = DICTIONARY.values().iterator().next();
-        int hash = fnv1a32(lower);
-        // Two decimals ≈ ~1.1 km resolution, which keeps "nearby" math
-        // stable for the customer dashboard.
-        double latJitter = ((hash & 0xFF) / 255.0) * 0.4 - 0.2;
-        double lngJitter = (((hash >>> 8) & 0xFF) / 255.0) * 0.4 - 0.2;
-        return new Coordinates(
-                round4(anchor.lat + latJitter),
-                round4(anchor.lng + lngJitter)
-        );
-    }
-
-    /**
-     * Stable FNV-1a 32-bit hash. Public so tests can pin the output of a
-     * sample input.
-     */
-    static int fnv1a32(String s) {
-        int h = 0x811c9dc5;
-        for (int i = 0; i < s.length(); i++) {
-            h ^= Character.toLowerCase(s.charAt(i));
-            h *= 0x01000193;
-        }
-        return h;
-    }
-
-    private static double round4(double v) {
-        return Math.round(v * 10_000.0) / 10_000.0;
+        return Optional.empty();
     }
 
     /**

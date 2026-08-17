@@ -81,6 +81,7 @@ export default function CustomerHome() {
       phone: s.phone,
       lat: s.lat,
       lng: s.lng,
+      locationStatus: s.locationStatus ?? "OK",
     }));
   }, [storeSellers]);
 
@@ -124,37 +125,47 @@ export default function CustomerHome() {
     : 0;
 
   // ---- Markers derived from the recommendation list ------------------
-  // Sellers without finite coords are dropped from the map (the plan
-  // calls this out explicitly — they still appear in the bottom sheet).
+  // Sellers without finite coords are dropped from the map so the
+  // customer never sees an invented shop marker. They can still remain
+  // in the list flow when the current query path allows it.
   // Each marker is annotated with the nearest Unguja place name
-  // (resolved via `nearestPlaceName`); if the seller's coordinates
-  // fall within 1.5 km of a known place, the pin is also snapped to
-  // that place's centroid so two sellers on the same street don't
-  // overlap on the map.
+  // (resolved via `nearestPlaceName`).
   // Bolt-lite: also carry the business name, open/closed status,
   // distance, and cylinder sizes through to the marker so the
   // `<NearbySellersMap>` can render richer pin labels.
   const { mappedMarkers, mappedSellers } = useMemo(() => {
-    const filtered = sellers.filter(
-      (s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng),
-    );
-    const mapped: NearbySellerMarker[] = filtered.map((s) => {
-      const placeName = nearestPlaceName({ lat: s.lat!, lng: s.lng! });
-      return {
-        id: s.id,
-        lat: s.lat!,
-        lng: s.lng!,
-        // Legacy single-line label (used by callers / web fallback
-        // when no `name` is set).
-        label: placeName ?? `${s.distanceKm.toFixed(1)} km`,
-        // Richer Bolt-lite fields.
-        name: s.name,
-        status: s.status,
-        distanceKm: s.distanceKm,
-        cylinderSizes: s.cylinderSizes,
-      };
-    });
+    const mapped: NearbySellerMarker[] = sellers
+      .filter(
+        (s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng),
+      )
+      .map((s) => {
+        const lat = s.lat!;
+        const lng = s.lng!;
+        const placeName = nearestPlaceName({ lat, lng });
+        const distanceKm = isFiniteNumber(s.distanceKm) ? s.distanceKm : Number.NaN;
+        return {
+          id: s.id,
+          lat,
+          lng,
+          label: placeName ?? `${distanceKm.toFixed(1)} km`,
+          name: s.name,
+          status: s.status,
+          distanceKm,
+          cylinderSizes: s.cylinderSizes,
+          locationStatus: "OK",
+        };
+      });
     if (__DEV__) {
+      console.log(
+        "[SELLER_DEBUG][MARKERS]",
+        mapped.map((m) => ({
+          id: m.id,
+          name: m.name,
+          lat: m.lat,
+          lng: m.lng,
+          locationStatus: m.locationStatus ?? "OK",
+        })),
+      );
       // Diagnostic: log every approved seller that reached the
       // marker mapper so we can confirm each one carries its OWN
       // lat/lng (and that all of them reach the map, not just one).
@@ -164,19 +175,20 @@ export default function CustomerHome() {
         "[CUSTOMER_HOME][NEARBY_SELLERS_MARKERS]",
         JSON.stringify({
           totalSellersReturned: sellers.length,
-          sellersWithFiniteCoords: filtered.length,
           markersGenerated: mapped.length,
+          missingLocationSellers: sellers.length - mapped.length,
           markers: mapped.map((m) => ({
             id: m.id,
             name: m.name,
             lat: m.lat,
             lng: m.lng,
+            locationStatus: m.locationStatus,
           })),
         }),
       );
     }
     return { mappedMarkers: mapped, mappedSellers: sellers };
-  }, [sellers]);
+  }, [sellers, storeSellers]);
 
   // Open the seller-details screen with the tapped id. From the
   // sheet we close the bottom sheet first so the route push doesn't
@@ -439,7 +451,13 @@ export default function CustomerHome() {
           </PressableScale>
         </View>
 
-        {/* Empty state overlay over the map. */}
+        {/* Empty state overlay over the map. The previous
+            implementation showed "No sellers nearby" whenever the
+            marker array was empty, which conflated three distinct
+            failure modes. The copy now branches on the actual root
+            cause: no approved sellers at all, sellers exist but the
+            customer is outside the 25 km radius, or sellers exist but
+            are stuck with no GPS pin (the original symptom). */}
         {mappedMarkers.length === 0 ? (
           <View style={styles.mapEmptyWrap} pointerEvents="box-none">
             <Card style={styles.mapEmptyCard}>
@@ -448,17 +466,27 @@ export default function CustomerHome() {
                 size={36}
                 color={Colors.textMuted}
               />
-              <Text style={styles.mapEmptyTitle}>No sellers nearby</Text>
+              <Text style={styles.mapEmptyTitle}>
+                {usingDefaultLocation
+                  ? "Set a delivery address to see sellers"
+                  : mappedSellers.length === 0
+                  ? "No sellers yet"
+                  : "No sellers in your area"}
+              </Text>
               <Text style={styles.mapEmptyText}>
                 {usingDefaultLocation
                   ? "Set a delivery address on your profile to see sellers in your area."
-                  : "No nearby approved gas sellers found in your area."}
+                  : mappedSellers.length === 0
+                  ? "We're working on onboarding sellers across Zanzibar. Check back soon."
+                  : "The approved sellers we found are outside the 25 km service radius. Pull the list to see them anyway."}
               </Text>
               <PressableScale
-                onPress={() => router.push("/(customer)/profile" as any)}
+                onPress={() => setSheetOpen(true)}
                 style={styles.mapEmptyCta}
               >
-                <Text style={styles.mapEmptyCtaText}>Update delivery address</Text>
+                <Text style={styles.mapEmptyCtaText}>
+                  {mappedSellers.length > 0 ? "View full list" : "Update delivery address"}
+                </Text>
               </PressableScale>
             </Card>
           </View>
@@ -525,6 +553,7 @@ function SheetSellerRow({
     .map((p) => p[0]?.toUpperCase())
     .join("");
   const hasNoCoords = !isFiniteNumber(seller.lat) || !isFiniteNumber(seller.lng);
+  const hasFiniteDistance = isFiniteNumber(seller.distanceKm);
   const sizes = seller.cylinderSizes ?? [];
   return (
     <Pressable
@@ -563,7 +592,7 @@ function SheetSellerRow({
         <View style={styles.sheetRowMeta}>
           <Ionicons name="navigate-outline" size={12} color={Colors.primary} />
           <Text style={styles.sheetRowMetaText}>
-            {seller.distanceKm.toFixed(1)} km
+            {hasFiniteDistance ? `${seller.distanceKm.toFixed(1)} km` : "—"}
           </Text>
           {hasNoCoords ? (
             <View style={styles.sheetRowNoCoords}>

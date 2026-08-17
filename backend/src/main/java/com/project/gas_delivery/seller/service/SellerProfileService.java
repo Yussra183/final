@@ -11,6 +11,8 @@ import com.project.gas_delivery.product.repository.ProductRepository;
 import com.project.gas_delivery.seller.dto.SellerProfileDto;
 import com.project.gas_delivery.seller.entity.SellerProfileEntity;
 import com.project.gas_delivery.seller.repository.SellerProfileRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,15 +41,21 @@ import java.util.Set;
 @Service
 public class SellerProfileService {
 
+    /**
+     * Diagnostic logger. One INFO line per dropped row per request —
+     * support can grep `dropped-for-null-coords` / `out-of-radius` to
+     * confirm which gate is biting without a SQL query.
+     */
+    private static final Logger log = LoggerFactory.getLogger(SellerProfileService.class);
+
     private final SellerProfileRepository sellerProfileRepository;
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
     private final PermitService permitService;
     /**
      * Resolves a free-form Business Address into lat/lng whenever the
-     * seller doesn't supply coordinates on the upsert payload. Wired in
-     * so every saved seller profile carries real, non-null coordinates
-     * that the customer "Nearby Sellers" pipeline can sort against.
+     * seller doesn't supply coordinates on the upsert payload. Unknown
+     * addresses are rejected rather than silently mapped to a fake pin.
      */
     private final GeocodingService geocodingService;
 
@@ -141,38 +149,73 @@ public class SellerProfileService {
         if (!hasCustomerGps) {
             return base;
         }
-        return base.stream()
-                // A seller with no coordinates cannot have a real distance
-                // computed, so it cannot be shown to be inside the service
-                // radius. Previously such rows kept the placeholder
-                // distance of 0.0 and therefore sorted to the very top —
-                // the least-located seller appeared to be the nearest.
-                // Drop them from the GPS path instead; they still appear
-                // on the unfiltered listAll() path used by admin screens.
-                .filter(dto -> dto.lat() != null && dto.lng() != null)
-                .map(dto -> {
-                    double km = haversineKm(customerLat, customerLng, dto.lat(), dto.lng());
-                    return new SellerProfileDto(
+        List<SellerProfileDto> inRange = base.stream()
+                .filter(dto -> {
+                    if (dto.lat() == null || dto.lng() == null) {
+                        log.info(
+                                "[SELLER_MAP_DEBUG] sellerId={} sellerName={} sellerLat={} sellerLng={} customerLat={} customerLng={} radiusKm={} result=DROPPED reason=NULL_COORDS",
+                                dto.sellerId(),
+                                dto.businessName(),
+                                dto.lat(),
+                                dto.lng(),
+                                customerLat,
+                                customerLng,
+                                radius
+                        );
+                        return false;
+                    }
+                    double distanceKm = round1(haversineKm(customerLat, customerLng, dto.lat(), dto.lng()));
+                    boolean included = distanceKm <= radius;
+                    log.info(
+                            "[SELLER_MAP_DEBUG] sellerId={} sellerName={} sellerLat={} sellerLng={} customerLat={} customerLng={} distanceKm={} radiusKm={} result={} reason={}",
                             dto.sellerId(),
-                            dto.sellerName(),
                             dto.businessName(),
-                            dto.location(),
-                            round1(km),
-                            dto.phone(),
-                            dto.rating(),
-                            dto.availableSizes(),
-                            dto.openNow(),
                             dto.lat(),
                             dto.lng(),
-                            dto.region(),
-                            dto.district(),
-                            dto.ward(),
-                            dto.street()
+                            customerLat,
+                            customerLng,
+                            distanceKm,
+                            radius,
+                            included ? "INCLUDED" : "DROPPED",
+                            included ? "IN_RADIUS" : "OUTSIDE_RADIUS"
                     );
+                    return included;
                 })
-                .filter(dto -> dto.distanceKm() <= radius)
-                .sorted(java.util.Comparator.comparingDouble(SellerProfileDto::distanceKm))
+                .map(dto -> withComputedDistance(dto, customerLat, customerLng))
+                .sorted((a, b) -> {
+                    if (a.distanceKm() == null && b.distanceKm() == null) return 0;
+                    if (a.distanceKm() == null) return 1;
+                    if (b.distanceKm() == null) return -1;
+                    return Double.compare(a.distanceKm(), b.distanceKm());
+                })
                 .toList();
+
+        log.info(
+                "[SELLER_MAP_DEBUG] customerLat={} customerLng={} radiusKm={} approvedCandidates={} returned={}",
+                customerLat,
+                customerLng,
+                radius,
+                base.size(),
+                inRange.size()
+        );
+        return inRange;
+    }
+
+    /**
+     * Produce a copy of {@code dto} with {@code distanceKm} populated
+     * from the Haversine formula (or {@code null} when either side
+     * lacks coords). Extracted from {@link #listAllNear} so both the
+     * GPS path and any future fallback path can share the math.
+     */
+    private static SellerProfileDto withComputedDistance(SellerProfileDto dto,
+                                                         Double customerLat,
+                                                         Double customerLng) {
+        if (dto.lat() == null || dto.lng() == null
+                || customerLat == null || customerLng == null) {
+            return dto.withDistanceKm(null);
+        }
+        double km = haversineKm(customerLat, customerLng, dto.lat(), dto.lng());
+        return dto.withDistanceKm(round1(km));
     }
 
     /**
@@ -259,15 +302,6 @@ public class SellerProfileService {
                 .orElseThrow(() -> new ResourceNotFoundException("Seller " + actorId + " not found."));
         SellerProfileEntity entity = sellerProfileRepository.findById(actorId)
                 .orElseGet(() -> {
-                    // Lazily-created rows carry null lat/lng on purpose. A
-                    // never-configured seller must NOT appear at the
-                    // hardcoded Stone Town coordinates — the customer
-                    // "Nearby Sellers" pipeline (and the admin directory
-                    // distance column) would otherwise rank them as
-                    // "right next to every customer", which is a real
-                    // compliance / trust issue for a permit-gated market.
-                    // `listAllNear` already filters null coordinates; the
-                    // seller can populate them by saving their address.
                     SellerProfileEntity created = new SellerProfileEntity(
                             actorId,
                             user.getFullName() + "'s Shop",
@@ -294,10 +328,9 @@ public class SellerProfileService {
      * alongside, but separately from, the permit application).
      *
      * <p><strong>Geocoding:</strong> when the patch omits lat/lng (or
-     * supplies them as null) we delegate to {@link GeocodingService} so
-     * every saved profile carries real, non-null coordinates. When the
-     * patch supplies explicit coordinates we trust them — the seller is
-     * the authority on their own location.</p>
+     * supplies them as null) we delegate to {@link GeocodingService}.
+     * When the patch supplies explicit coordinates we trust them — the
+     * seller is the authority on their own location.</p>
      *
      * <p><strong>Optional fields:</strong> Region / District / Ward / Street
      * use {@code null} as "no change" and {@code ""} as "clear". A save
@@ -383,28 +416,16 @@ public class SellerProfileService {
         // The patch is null on the Save-location path; an unconditional
         // set would clear the stored phone on every address save.
         if (patch.phone() != null) entity.setPhone(patch.phone());
-        // 1. Resolve coordinates. Three cases:
-        //   a. Patch carries explicit lat/lng → trust the seller.
-        //   b. Patch omits coords AND the row has no coords yet →
-        //      geocode the address (the create branch above already
-        //      did this; here we cover the rare path where a row was
-        //      seeded with null coords).
-        //   c. Patch omits coords AND the row already has coords →
-        //      KEEP the stored coordinates. Re-geocoding the typed
-        //      address on every address-only save would silently move
-        //      a seller whose real pin is somewhere other than where
-        //      the geocoder puts the typed address. The seller is the
-        //      authority on their own shop location; only an explicit
-        //      pin / GPS fix from this request overwrites it.
+        // 1. Resolve coordinates. Explicit lat/lng wins; otherwise we
+        // geocode the submitted business address for this save. That
+        // keeps address-only updates and seller GPS/address edits in
+        // sync instead of leaving stale coordinates behind.
         Double newLat;
         Double newLng;
         if (patch.lat() != null && patch.lng() != null) {
             validateLatLng(patch.lat(), patch.lng());
             newLat = patch.lat();
             newLng = patch.lng();
-        } else if (entity.getLat() != null && entity.getLng() != null) {
-            newLat = entity.getLat();
-            newLng = entity.getLng();
         } else {
             GeocodingService.Coordinates c = geocodingService.resolve(newAddress)
                     .orElseThrow(() -> new com.project.gas_delivery.auth.exception.BadRequestException(

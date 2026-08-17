@@ -136,6 +136,12 @@ public class AuthServiceImpl implements AuthService {
      * typed address into one. The whole operation runs inside the
      * {@link #register} transaction — if anything throws, the user row
      * rolls back too, so we never end up with a half-registered seller.
+     *
+     * <p>If the registration payload includes an address but we cannot
+     * resolve it, the request fails with 4xx. When the seller skips the
+     * business-address fields entirely, the row is created without
+     * coordinates and can be completed later through the existing seller
+     * profile save flow.</p>
      */
     private void createSellerProfile(User user, RegisterRequest r) {
         Double lat = r.businessLat();
@@ -152,10 +158,10 @@ public class AuthServiceImpl implements AuthService {
         } else if (notBlank(r.businessAddress())) {
             Optional<GeocodingService.Coordinates> resolved =
                     geocodingService.resolve(r.businessAddress().trim());
-            if (resolved.isPresent()) {
-                lat = resolved.get().lat();
-                lng = resolved.get().lng();
-            }
+            GeocodingService.Coordinates coords = resolved.orElseThrow(() ->
+                    new BadRequestException("Could not resolve business address to coordinates."));
+            lat = coords.lat();
+            lng = coords.lng();
         }
 
         SellerProfileEntity profile = new SellerProfileEntity(

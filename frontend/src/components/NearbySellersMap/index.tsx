@@ -49,6 +49,15 @@ export interface NearbySellerMarker {
    * (e.g. the seller's most recent order).
    */
   color?: string;
+  /**
+   * "MISSING" markers come from seller rows whose saved coords are
+   * missing (e.g. a freshly-registered seller who hasn't configured
+   * their address yet). The renderer pins these to the Unguja
+   * centroid so the seller is still visible — they would otherwise
+   * be silently dropped from the home screen, which was the
+   * dominant cause of the "I can see myself but no sellers" report.
+   */
+  locationStatus?: "OK" | "MISSING";
 }
 
 export interface NearbySellersMapProps {
@@ -331,6 +340,12 @@ export function NearbySellersMap({
       const left = `${(p.x * 100).toFixed(2)}%` as `${number}%`;
       const top = `${(p.y * 100).toFixed(2)}%` as `${number}%`;
       const isUserPin = p.pin.id === "__user__";
+      // MISSING-location sellers (no saved coords) get a distinct
+      // grey pin so the customer can still see them — they would
+      // otherwise be silently dropped from the home screen. The pin
+      // shape stays identical so the layout doesn't shift; only the
+      // colour and label change.
+      const isMissing = !isUserPin && p.pin.locationStatus === "MISSING";
       // Bolt-lite richer label: business name + open/closed pill.
       // Falls back to the legacy single-line `label` when richer fields
       // are absent so older callers keep their place-name text.
@@ -338,12 +353,16 @@ export function NearbySellersMap({
       const richStatus = !isUserPin ? p.pin.status : null;
       // Per-seller identity color (overridable via `pin.color`).
       const pinColor = !isUserPin
-        ? p.pin.color ?? identityColor(p.pin.id)
+        ? isMissing
+          ? "#94A3B8" // slate-400 — distinct, neutral "location missing" cue
+          : p.pin.color ?? identityColor(p.pin.id)
         : Colors.accent;
       // Status halo: success for open, border for closed, self-tinted
       // when no status reported. 2 px normal, 3 px when selected.
       const haloColor =
-        richStatus === "Active"
+        isMissing
+          ? Colors.border
+          : richStatus === "Active"
           ? Colors.success
           : richStatus === "Closed"
           ? Colors.border
@@ -360,6 +379,8 @@ export function NearbySellersMap({
           accessibilityLabel={
             isUserPin
               ? "Your current location"
+              : isMissing
+              ? `${richName ?? "Seller"} — location not yet set`
               : richName
               ? `Open seller ${richName}`
               : "Open seller"
@@ -385,7 +406,13 @@ export function NearbySellersMap({
               ]}
             >
               <Ionicons
-                name={isUserPin ? "navigate" : "storefront"}
+                name={
+                  isUserPin
+                    ? "navigate"
+                    : isMissing
+                    ? "help-outline"
+                    : "storefront"
+                }
                 size={14}
                 color="#FFF"
               />
@@ -398,14 +425,20 @@ export function NearbySellersMap({
               </Text>
             </View>
           ) : null}
-          {!isUserPin && (richName || richStatus || Number.isFinite(p.pin.distanceKm)) ? (
+          {!isUserPin && (richName || richStatus || Number.isFinite(p.pin.distanceKm) || isMissing) ? (
             <View style={styles.pinLabel}>
               {richName ? (
                 <Text style={styles.pinLabelName} numberOfLines={1}>
                   {richName}
                 </Text>
               ) : null}
-              {(Number.isFinite(p.pin.distanceKm) || richStatus) ? (
+              {isMissing ? (
+                <View style={styles.pinMissingPill}>
+                  <Text style={styles.pinMissingPillText} numberOfLines={1}>
+                    Location not set
+                  </Text>
+                </View>
+              ) : (Number.isFinite(p.pin.distanceKm) || richStatus) ? (
                 <View style={styles.pinLabelRow}>
                   {Number.isFinite(p.pin.distanceKm) ? (
                     <View style={styles.pinDistancePill}>
@@ -641,6 +674,25 @@ const styles = StyleSheet.create({
   pinStatusPillText: {
     fontSize: 9,
     fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  // MISSING-location pill — distinct from the open/closed status
+  // pills so the customer sees the cue without misreading it as a
+  // "closed shop" message. Same dimensions, slate-on-white scheme.
+  pinMissingPill: {
+    marginTop: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+    backgroundColor: "#F1F5F9", // slate-100
+    borderWidth: 1,
+    borderColor: "#94A3B8",
+  },
+  pinMissingPillText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#475569", // slate-600
     textTransform: "uppercase",
     letterSpacing: 0.3,
   },

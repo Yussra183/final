@@ -43,6 +43,13 @@ export interface NearbySeller extends Record<string, unknown> {
   phone: string;
   lat?: number;
   lng?: number;
+  /**
+   * Mirrors {@link SellerProfile.locationStatus}. "MISSING" rows are
+   * sellers whose address hasn't been geocoded — the customer map
+   * renders them with a grey pin at the island centroid and the
+   * bottom-sheet row shows a "Location not set" pill.
+   */
+  locationStatus?: "OK" | "MISSING";
 }
 
 /**

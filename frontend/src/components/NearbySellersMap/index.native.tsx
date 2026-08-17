@@ -29,7 +29,6 @@ import { Ionicons } from "@expo/vector-icons";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { Colors, FontSize, Radius } from "../../../constants/colors";
 import { regionForPoints } from "../LiveTrackingMap/region";
-import { identityColor } from "../../lib/identityColor";
 import type { StyleProp, ViewStyle } from "react-native";
 
 /**
@@ -214,6 +213,41 @@ export function NearbySellersMap({
   style,
 }: NearbySellersMapProps) {
   const mapRef = useRef<MapView | null>(null);
+
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    console.log("[SELLER_DEBUG][MAP]", {
+      mapCenterLat: center.lat,
+      mapCenterLng: center.lng,
+      sellerLat: markers[0]?.lat ?? null,
+      sellerLng: markers[0]?.lng ?? null,
+      markerCount: markers.length,
+    });
+    console.log("[MAP_CAMERA_DEBUG]", {
+      mapCenterLat: center.lat,
+      mapCenterLng: center.lng,
+      sellerLat: markers[0]?.lat ?? null,
+      sellerLng: markers[0]?.lng ?? null,
+      markerCount: markers.length,
+    });
+  }, [center.lat, center.lng, markers]);
+
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    markers.forEach((seller) => {
+      const latitude = Number(seller.lat);
+      const longitude = Number(seller.lng);
+      console.log("[SELLER_DEBUG][COORDINATES]", {
+        id: seller.id,
+        latitude,
+        longitude,
+        latitudeFinite: Number.isFinite(latitude),
+        longitudeFinite: Number.isFinite(longitude),
+        locationStatus: (seller as NearbySellerMarker & { locationStatus?: "OK" | "MISSING" })
+          .locationStatus ?? "OK",
+      });
+    });
+  }, [markers]);
 
   // Filter once. The Home page already filters out non-finite coords,
   // but we double-check here so the bbox/fit math never chokes.
@@ -545,142 +579,41 @@ export function NearbySellersMap({
         maxDelta={0.6}
       >
         {clusteredMarkers.map((m) => {
-          const isSelected = selectedId === m.id || m.selected;
-          // Bolt-lite richer label: business name on top, open/closed
-          // pill underneath. Falls back to the legacy single-line
-          // `label` string when richer fields are absent so older
-          // callers keep their place-name text.
           const richName = m.name ?? m.label;
-          const richStatus = m.status;
-          // Snap out-of-bounds markers (e.g. legacy Dar es Salaam
-          // seed rows) onto Unguja so the pin is visible on the map
-          // instead of hanging in the ocean. The clamp uses the same
-          // helper the tap-to-drop surface relies on. We use the
-          // offset render coord when one was assigned by the cluster
-          // helper so two sellers sharing the same GPS point render
-          // side-by-side instead of stacking into a single invisible
-          // pin.
-          const renderCoord = m._renderCoord ?? { lat: m.lat, lng: m.lng };
-          const pinCoord = clampCoordToUnguja({
-            latitude: renderCoord.lat,
-            longitude: renderCoord.lng,
-          });
-          // Per-seller identity color, hashed from id when no explicit
-          // override. Same seller → same color on every map surface.
-          const pinColor = m.color ?? identityColor(m.id);
-          // Status halo: green ring for open sellers, grey for closed,
-          // and a thin self-tinted ring when no status is reported.
-          const haloColor =
-            richStatus === "Active"
-              ? Colors.success
-              : richStatus === "Closed"
-              ? Colors.border
-              : pinColor;
-          const haloWidth = isSelected ? 3 : 2;
+          const latitude = Number(m.lat);
+          const longitude = Number(m.lng);
+          const locationStatus = (
+            m as NearbySellerMarker & { locationStatus?: "OK" | "MISSING" }
+          ).locationStatus ?? "OK";
+          if (typeof __DEV__ !== "undefined" && __DEV__) {
+            console.log("[SELLER_MARKER_DEBUG]", {
+                sellerId: m.id,
+                sellerName: richName ?? null,
+                latitude,
+                longitude,
+                locationStatus,
+                markerCount: clusteredMarkers.length,
+            });
+          }
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+            return null;
+          }
           return (
             <Marker
-              key={m.id}
-              coordinate={{ latitude: pinCoord.lat, longitude: pinCoord.lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
+              key={`seller-${m.id}`}
+              coordinate={{ latitude, longitude }}
+              anchor={{ x: 0.5, y: 1 }}
               tracksViewChanges={false}
               tracksInfoWindowChanges={false}
-              // `stopPropagation` keeps the marker's own tap from
-              // reaching the MapView's `onPress` (which fires
-              // `onMapTap` — used by the seller picker to drop a pin
-              // by tapping empty map space).
               onPress={(e) => {
                 e?.stopPropagation?.();
                 onMarkerTap?.(m.id);
               }}
-              // Native Google-Maps `title` shows as a tooltip label when
-              // the marker is tapped — keeps the pin discoverable even
-              // when the custom storefront bubble is hidden behind a
-              // POI label or the location chip.
               title={richName ?? "Seller"}
               description={
-                Number.isFinite(m.distanceKm)
-                  ? `${m.distanceKm!.toFixed(1)} km`
-                  : richStatus ?? undefined
+                Number.isFinite(m.distanceKm) ? `${m.distanceKm!.toFixed(1)} km` : undefined
               }
-              // Pin tint: the default red marker is hard to miss on the
-              // map and renders reliably across iOS / Android / Expo Go.
-              // The custom storefront bubble stays as the visible
-              // element; tint is just a safety net so the marker is
-              // never invisible.
-              pinColor={pinColor as any}
-            >
-              <View
-                style={[
-                  styles.pinWrap,
-                  isSelected && styles.pinWrapSelected,
-                ]}
-                pointerEvents="none"
-              >
-                <View
-                  style={[
-                    styles.pinHalo,
-                    {
-                      borderColor: haloColor,
-                      borderWidth: haloWidth,
-                      opacity: isSelected ? 1 : 0.55,
-                    },
-                    isSelected && { transform: [{ scale: 1.15 }] },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.pin,
-                      { backgroundColor: pinColor },
-                    ]}
-                  >
-                    <Ionicons name="storefront" size={14} color="#FFF" />
-                  </View>
-                </View>
-                {(richName || richStatus || Number.isFinite(m.distanceKm)) ? (
-                  <View style={styles.pinLabel}>
-                    {richName ? (
-                      <Text style={styles.pinLabelName} numberOfLines={1}>
-                        {richName}
-                      </Text>
-                    ) : null}
-                    {(Number.isFinite(m.distanceKm) || richStatus) ? (
-                      <View style={styles.pinLabelRow}>
-                        {Number.isFinite(m.distanceKm) ? (
-                          <View style={styles.pinDistancePill}>
-                            <Text style={styles.pinDistanceText} numberOfLines={1}>
-                              {m.distanceKm!.toFixed(1)} km
-                            </Text>
-                          </View>
-                        ) : null}
-                        {richStatus ? (
-                          <View
-                            style={[
-                              styles.pinStatusPill,
-                              {
-                                backgroundColor:
-                                  richStatus === "Active" ? "#DCFCE7" : "#FEE2E2",
-                              },
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.pinStatusPillText,
-                                {
-                                  color:
-                                    richStatus === "Active" ? "#047857" : "#B91C1C",
-                                },
-                              ]}
-                            >
-                              {richStatus === "Active" ? "Open" : "Closed"}
-                            </Text>
-                          </View>
-                        ) : null}
-                      </View>
-                    ) : null}
-                  </View>
-                ) : null}
-              </View>
-            </Marker>
+            />
           );
         })}
 
@@ -703,6 +636,7 @@ export function NearbySellersMap({
             <View
               style={[styles.pinWrap, styles.pinWrapUser]}
               pointerEvents="none"
+              collapsable={false}
             >
               <View style={[styles.pin, styles.pinUser]}>
                 <Ionicons name="navigate" size={16} color="#FFF" />

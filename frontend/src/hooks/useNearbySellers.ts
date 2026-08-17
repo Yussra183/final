@@ -102,23 +102,50 @@ export function useNearbySellers(
           lng: queryLng!,
           radiusKm: NEARBY_RADIUS_KM,
         });
+        if (typeof __DEV__ !== "undefined" && __DEV__) {
+          console.log(
+            "[SELLER_DEBUG][API_RESPONSE]",
+            JSON.stringify(rows, null, 2),
+          );
+          rows.forEach((seller) => {
+            console.log("[SELLER_DEBUG]", {
+              id: seller.sellerId,
+              name: seller.businessName,
+              lat: seller.lat,
+              lng: seller.lng,
+              locationStatus: seller.locationStatus ?? "OK",
+            });
+          });
+        }
         if (cancelled) return;
-        setServerSellers(
-          rows.map((s) => ({
-            id: s.sellerId,
-            name: s.businessName,
-            status: s.openNow ? ("Active" as const) : ("Closed" as const),
-            distanceKm: s.distanceKm,
-            location: s.location,
-            district: undefined,
-            region: undefined,
-            gasTypes: ["LPG"],
-            cylinderSizes: s.availableSizes,
-            phone: s.phone,
-            lat: s.lat,
-            lng: s.lng,
-          })),
-        );
+        const mapped = rows.map((s) => ({
+          id: s.sellerId,
+          name: s.businessName,
+          status: s.openNow ? ("Active" as const) : ("Closed" as const),
+          distanceKm: s.distanceKm,
+          location: s.location,
+          district: undefined,
+          region: undefined,
+          gasTypes: ["LPG"],
+          cylinderSizes: s.availableSizes,
+          phone: s.phone,
+          lat: s.lat,
+          lng: s.lng,
+          locationStatus: s.locationStatus ?? "OK",
+        }));
+        if (typeof __DEV__ !== "undefined" && __DEV__) {
+          console.log(
+            "[SELLER_DEBUG][USE_NEARBY_SELLERS]",
+            mapped.map((s) => ({
+              id: s.id,
+              name: s.name,
+              lat: s.lat,
+              lng: s.lng,
+              locationStatus: s.locationStatus ?? "OK",
+            })),
+          );
+        }
+        setServerSellers(mapped);
       } catch {
         // Network / server errors: fall through to the store-based
         // fallback so the home screen still renders *something*.
@@ -145,6 +172,7 @@ export function useNearbySellers(
       phone: s.phone,
       lat: s.lat,
       lng: s.lng,
+      locationStatus: s.locationStatus ?? "OK",
     }));
     // De-dup by id, preferring the store response.
     const map = new Map<string, NearbySeller>();
@@ -210,6 +238,18 @@ export function useNearbySellers(
       const pool = activeOnly
         ? serverSellers.filter((s) => s.status === "Active")
         : serverSellers;
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log(
+          "[SELLER_DEBUG][USE_NEARBY_SELLERS]",
+          pool.slice(0, limit).map((s) => ({
+            id: s.id,
+            name: s.name,
+            lat: s.lat,
+            lng: s.lng,
+            locationStatus: s.locationStatus ?? "OK",
+          })),
+        );
+      }
       return pool.slice(0, limit);
     }
     // Server query unavailable (network error / empty response) —
@@ -305,6 +345,14 @@ export function useNearbySellers(
           hasCustomerGps,
           queryLat,
           queryLng,
+          sellers: finalPool.map((s) => ({
+            id: s.id,
+            name: s.name,
+            lat: s.lat,
+            lng: s.lng,
+            distanceKm: s.distanceKm,
+            locationStatus: s.locationStatus,
+          })),
         }),
       );
     }
