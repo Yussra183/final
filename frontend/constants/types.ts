@@ -211,6 +211,71 @@ export interface Order {
   rejectReason?: string;
 }
 
+// =========================================================================
+// Payment Flow (FR-04: Payment & Order Completion)
+// =========================================================================
+// Simulated payment flow that mirrors the diagram in the project's flow
+// chart: "Make Payment to Rider → Order Completed". The backend exposes
+// `POST /api/payments/pay` for the customer-initiated action, and the
+// order flow auto-completes the active payment when the rider marks
+// the order DELIVERED.
+//
+// The wire shape mirrors the backend's `PaymentResponse` record. The
+// `derivePaymentStatus` helper in `src/lib/payment.ts` still derives a
+// status from the order status for screens that haven't been wired to
+// the live endpoint yet, but every new screen should consume
+// `paymentStatus` directly off the order's payment (see
+// `Order.paymentStatus`).
+// -----------------------------------------------------------------------------
+
+/**
+ * Lifecycle of a payment row. Mirrors the backend's `PaymentStatus`
+ * enum — kept in lowercase wire form so it round-trips through JSON
+ * without conversion.
+ */
+export type PaymentStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "refunded";
+
+/**
+ * Payment methods accepted by the simulated gateway. CASH is the
+ * default — the rider collects on delivery and the backend auto-
+ * completes the payment on the DELIVERED transition. MPESA / CARD /
+ * BANK complete immediately and surface a synthetic `transactionRef`
+ * so the customer sees a confirmation badge.
+ */
+export type PaymentMethod = "cash" | "mpesa" | "card" | "bank";
+
+/**
+ * A single payment attempt for one order. Wire shape from the
+ * backend's `PaymentResponse` record. `id`, `customerId`, `sellerId`,
+ * `orderId` are numeric but formatted as strings on the wire to stay
+ * symmetric with `Order.id` and the rest of the API.
+ */
+export interface Payment {
+  id: string;
+  orderId: string;
+  customerId: string;
+  sellerId: string;
+  /** Amount captured in TZS (no fractional cents; matches Order.total). */
+  amount: number;
+  method: PaymentMethod;
+  status: PaymentStatus;
+  /** Synthetic confirmation ref like `TXN-MPESA-A1B2C3` — mimics a gateway. */
+  transactionRef?: string;
+  /** M-Pesa phone number captured at pay time. Required for MPESA. */
+  phone?: string;
+  notes?: string;
+  /** ISO-8601 — set when status flips to COMPLETED. */
+  paidAt?: string;
+  /** ISO-8601 — set when status flips to REFUNDED. */
+  refundedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RestockRequest {
   id: string;
   sellerId: string;
@@ -220,8 +285,104 @@ export interface RestockRequest {
   productName: string;
   size: string;
   quantity: number;
-  status: "pending" | "approved" | "rejected" | "in_transit" | "delivered";
+  /**
+   * Lifecycle status (FR-06 backend):
+   *   pending    → raised by seller, awaiting supplier action
+   *   accepted   → supplier accepted, not yet preparing
+   *   preparing  → supplier is preparing the cylinders
+   *   dispatched → supplier dispatched, in transit
+   *   delivered  → supplier marked delivered, awaiting seller receipt
+   *   received   → seller confirmed receipt, stock replenished
+   *   rejected   → supplier declined (with rejectReason)
+   *   cancelled  → either party cancelled mid-flight (with cancelledByRole)
+   *
+   * Legacy statuses (`approved`, `in_transit`) remain accepted for
+   * backwards compatibility with screens that still display the old
+   * copy; {@link normalizeRestockStatus} maps them to the new lifecycle.
+   */
+  status:
+    | "pending"
+    | "accepted"
+    | "preparing"
+    | "dispatched"
+    | "delivered"
+    | "received"
+    | "rejected"
+    | "cancelled"
+    | "approved"
+    | "in_transit";
+  notes?: string;
+  rejectReason?: string;
+  productId?: string;
   createdAt: string;
+  updatedAt?: string;
+}
+
+/**
+ * Normalise a wire-shape {@code status} to the canonical 8-value FR-06
+ * lifecycle. The legacy {@code approved} → {@code accepted} (the new
+ * lifecycle calls supplier-accept "accepted" — `approved` was the
+ * older term); {@code in_transit} → {@code dispatched}. Use this in
+ * any component that branches on the status.
+ */
+export function normalizeRestockStatus(
+  raw: RestockRequest["status"] | string | null | undefined
+): RestockRequest["status"] {
+  switch (raw) {
+    case "approved":
+    case "accepted":
+      return "accepted";
+    case "preparing":
+      return "preparing";
+    case "in_transit":
+    case "dispatched":
+      return "dispatched";
+    case "delivered":
+      return "delivered";
+    case "received":
+      return "received";
+    case "rejected":
+      return "rejected";
+    case "cancelled":
+      return "cancelled";
+    case "pending":
+      return "pending";
+    default:
+      return "pending";
+  }
+}
+
+/**
+ * Display copy for the 8 lifecycle states. Centralised so screens don't
+ * each invent their own labels and the supplier + seller dashboards
+ * agree on wording.
+ */
+export const RESTOCK_STATUS_LABELS: Record<RestockRequest["status"], string> = {
+  pending: "Awaiting supplier",
+  accepted: "Accepted",
+  preparing: "Being prepared",
+  dispatched: "On the way",
+  delivered: "Delivered — confirm receipt",
+  received: "Received",
+  rejected: "Rejected",
+  cancelled: "Cancelled",
+  // Legacy aliases — kept so any screen still reading the old strings
+  // doesn't render a blank label.
+  approved: "Accepted",
+  in_transit: "On the way",
+};
+
+/**
+ * Suppliers that are eligible to be picked on the restock form (FR-06).
+ * Populated by {@code GET /api/suppliers/approved}.
+ */
+export interface ApprovedSupplier {
+  id: string;
+  fullName: string;
+  email?: string;
+  phone?: string;
+  certificateNumber?: string;
+  approvedAt?: string;
 }
 
 export interface PermitApplication {

@@ -324,23 +324,6 @@ public class SellerProfileService {
         }
         String newAddress = patch.location().trim();
 
-        // 1. Resolve coordinates. The patch wins when it supplies both;
-        // otherwise we always geocode (re-geocoding on every save is
-        // intentional so an updated address gets fresh coordinates).
-        Double newLat;
-        Double newLng;
-        if (patch.lat() != null && patch.lng() != null) {
-            validateLatLng(patch.lat(), patch.lng());
-            newLat = patch.lat();
-            newLng = patch.lng();
-        } else {
-            GeocodingService.Coordinates c = geocodingService.resolve(newAddress)
-                    .orElseThrow(() -> new com.project.gas_delivery.auth.exception.BadRequestException(
-                            "Could not resolve business address to coordinates."));
-            newLat = c.lat();
-            newLng = c.lng();
-        }
-
         // Optional admin-level fields. `blankToNull` distinguishes
         // "field not in patch" (leave stored value alone) from "field
         // explicitly cleared" (write null). The previous code only
@@ -353,6 +336,24 @@ public class SellerProfileService {
 
         SellerProfileEntity entity = sellerProfileRepository.findById(actorId)
                 .orElseGet(() -> {
+                    // First-time create — the seller has no saved
+                    // coordinates yet. Resolve them now from the typed
+                    // address (or the patch's explicit pin) so the row
+                    // is born with real coordinates, never `null` and
+                    // never a hardcoded fallback.
+                    Double createLat;
+                    Double createLng;
+                    if (patch.lat() != null && patch.lng() != null) {
+                        validateLatLng(patch.lat(), patch.lng());
+                        createLat = patch.lat();
+                        createLng = patch.lng();
+                    } else {
+                        GeocodingService.Coordinates c = geocodingService.resolve(newAddress)
+                                .orElseThrow(() -> new com.project.gas_delivery.auth.exception.BadRequestException(
+                                        "Could not resolve business address to coordinates."));
+                        createLat = c.lat();
+                        createLng = c.lng();
+                    }
                     // First-time create. Carry the user's phone
                     // (already on `User`) — the patch payload
                     // typically strips it on the Save-location path,
@@ -368,8 +369,8 @@ public class SellerProfileService {
                             newRegion,
                             newWard,
                             newStreet,
-                            newLat,
-                            newLng,
+                            createLat,
+                            createLng,
                             user.getPhone(),
                             java.math.BigDecimal.ZERO,
                             true
@@ -382,6 +383,35 @@ public class SellerProfileService {
         // The patch is null on the Save-location path; an unconditional
         // set would clear the stored phone on every address save.
         if (patch.phone() != null) entity.setPhone(patch.phone());
+        // 1. Resolve coordinates. Three cases:
+        //   a. Patch carries explicit lat/lng → trust the seller.
+        //   b. Patch omits coords AND the row has no coords yet →
+        //      geocode the address (the create branch above already
+        //      did this; here we cover the rare path where a row was
+        //      seeded with null coords).
+        //   c. Patch omits coords AND the row already has coords →
+        //      KEEP the stored coordinates. Re-geocoding the typed
+        //      address on every address-only save would silently move
+        //      a seller whose real pin is somewhere other than where
+        //      the geocoder puts the typed address. The seller is the
+        //      authority on their own shop location; only an explicit
+        //      pin / GPS fix from this request overwrites it.
+        Double newLat;
+        Double newLng;
+        if (patch.lat() != null && patch.lng() != null) {
+            validateLatLng(patch.lat(), patch.lng());
+            newLat = patch.lat();
+            newLng = patch.lng();
+        } else if (entity.getLat() != null && entity.getLng() != null) {
+            newLat = entity.getLat();
+            newLng = entity.getLng();
+        } else {
+            GeocodingService.Coordinates c = geocodingService.resolve(newAddress)
+                    .orElseThrow(() -> new com.project.gas_delivery.auth.exception.BadRequestException(
+                            "Could not resolve business address to coordinates."));
+            newLat = c.lat();
+            newLng = c.lng();
+        }
         entity.setLat(newLat);
         entity.setLng(newLng);
         // Apply the optional admin fields only when the patch carried a

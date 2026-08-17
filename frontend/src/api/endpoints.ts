@@ -18,6 +18,7 @@ import {
   AdminSeller,
   AdminStats,
   AdminUser,
+  ApprovedSupplier,
   Complaint,
   CustomerLocation,
   DeliveryRoute,
@@ -25,6 +26,8 @@ import {
   NotificationItem,
   Order,
   OrderStatus,
+  Payment,
+  PaymentMethod,
   PermitApplication,
   PermitDocument,
   PermitDocumentType,
@@ -590,12 +593,41 @@ export const OrdersApi = {
 
 // ---- Restock -----------------------------------------------------------
 
+/**
+ * Body for {@code POST /api/restock} (FR-06 seller raises a supply
+ * request). Mirrors the backend's {@code CreateSupplyOrderRequest};
+ * `rejectReason` and `updatedAt` are server-set so they're omitted.
+ */
+export type CreateRestockBody = Omit<
+  RestockRequest,
+  "id" | "createdAt" | "updatedAt" | "status" | "rejectReason"
+>;
+
+/**
+ * Body for {@code PATCH /api/restock/{id}/status}. {@code reason} is
+ * only required for transitions into `rejected` or `cancelled`, but
+ * is accepted (and ignored) for any other transition.
+ */
+export interface UpdateRestockStatusBody {
+  status: RestockRequest["status"];
+  reason?: string;
+}
+
 export const RestockApi = {
   list: () => api.get<RestockRequest[]>("/api/restock"),
-  create: (body: Omit<RestockRequest, "id" | "createdAt" | "status">) =>
+  create: (body: CreateRestockBody) =>
     api.post<RestockRequest>("/api/restock", body),
-  updateStatus: (id: string, status: RestockRequest["status"]) =>
-    api.patch<RestockRequest>(`/api/restock/${id}/status`, { status }),
+  updateStatus: (id: string, body: UpdateRestockStatusBody) =>
+    api.patch<RestockRequest>(`/api/restock/${id}/status`, body),
+  unclaimed: () =>
+    api.get<RestockRequest[]>("/api/restock/unclaimed"),
+};
+
+// ---- Approved suppliers (FR-06 picker) ---------------------------------
+
+export const SuppliersApi = {
+  /** Every supplier whose application is currently APPROVED. */
+  approved: () => api.get<ApprovedSupplier[]>("/api/suppliers/approved"),
 };
 
 // ---- Permits -----------------------------------------------------------
@@ -979,4 +1011,65 @@ export const TrackingApi = {
   /** Customer / seller → server: bootstrap the rider marker. */
   latest: (orderId: string) =>
     api.get<LocationUpdateMessage>(`/api/orders/${orderId}/tracking/latest`),
+};
+
+// ---- Payments ----------------------------------------------------------
+// Simulated payment flow (FR-04: Payment & Order Completion). The
+// backend exposes:
+//
+//   POST /api/payments/pay            — customer-initiated payment (idempotent)
+//   POST /api/payments/{id}/refund    — refund a COMPLETED payment
+//   GET  /api/payments/mine           — the caller's payment history (customer)
+//   GET  /api/payments/seller         — the caller's payment history (seller)
+//   GET  /api/payments/order?orderId= — every payment for an order
+//   GET  /api/payments/order/latest?orderId= — latest payment for an order
+//
+// The auto-completion hook fires server-side when the order transitions
+// to DELIVERED (the rider collecting CASH on delivery); the auto-refund
+// hook fires on customer cancel / seller reject. The endpoints below
+// cover the customer-driven path: pay-now, list, and refund.
+
+export interface PayPayload {
+  orderId: string;
+  method: PaymentMethod;
+  /** Required when `method === "mpesa"`; ignored otherwise. */
+  phone?: string;
+  /** Optional free-text note. */
+  notes?: string;
+}
+
+export const PaymentsApi = {
+  /**
+   * Customer-initiated payment. Idempotent: a second call for the same
+   * order returns the existing active payment (PENDING or COMPLETED)
+   * rather than failing or duplicating.
+   */
+  pay: (body: PayPayload) =>
+    api.post<Payment>("/api/payments/pay", body),
+
+  /** Customer / admin refund a COMPLETED payment. */
+  refund: (id: string, reason?: string) =>
+    api.post<Payment>(`/api/payments/${encodeURIComponent(id)}/refund`, {
+      reason: reason ?? null,
+    }),
+
+  /** Every payment belonging to the signed-in customer, newest first. */
+  mine: () => api.get<Payment[]>("/api/payments/mine"),
+
+  /** Every payment belonging to the signed-in seller, newest first. */
+  sellerPayments: () => api.get<Payment[]>("/api/payments/seller"),
+
+  /** Latest payment for an order (used by the order detail view). */
+  latestForOrder: async (orderId: string): Promise<Payment | null> => {
+    try {
+      return await api.get<Payment>(
+        `/api/payments/order/latest?orderId=${encodeURIComponent(orderId)}`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 204) {
+        return null;
+      }
+      throw err;
+    }
+  },
 };

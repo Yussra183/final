@@ -346,6 +346,18 @@ public class SupplierApplicationService {
                 applicationRepository.findSupplierIdsByStatus(PermitStatus.APPROVED));
     }
 
+    /**
+     * FR-06: every approved supplier's {@link SupplierApplicationEntity},
+     * newest approval first. Joined to the {@code users} table by the
+     * caller so it can render display names. The admin approval stamp
+     * (reviewedAt / reviewedBy) is preserved on the entity so the
+     * frontend can show "Approved by … on …".
+     */
+    @Transactional(readOnly = true)
+    public List<SupplierApplicationEntity> findApprovedApplications() {
+        return applicationRepository.findApprovedApplications(PermitStatus.APPROVED);
+    }
+
     // =====================================================================
     // Document streaming (admin or owning supplier)
     // =====================================================================

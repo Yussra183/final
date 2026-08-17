@@ -16,6 +16,7 @@ import com.project.gas_delivery.order.repository.OrderRepository;
 import com.project.gas_delivery.order.service.OrderService;
 import com.project.gas_delivery.order.service.OrderStatusTransitions;
 import com.project.gas_delivery.order.service.OrderStatusTransitions.ActorRole;
+import com.project.gas_delivery.payment.service.PaymentService;
 import com.project.gas_delivery.product.service.StockService;
 import com.project.gas_delivery.rider.repository.SellerRiderRepository;
 import com.project.gas_delivery.tracking.service.DeliveryTrackingService;
@@ -47,6 +48,7 @@ public class OrderServiceImpl implements OrderService {
     private final SellerRiderRepository sellerRiderRepository;
     private final DeliveryTrackingService deliveryTrackingService;
     private final StockService stockService;
+    private final PaymentService paymentService;
     private final EntityManager entityManager;
 
     public OrderServiceImpl(OrderRepository orderRepository,
@@ -54,12 +56,14 @@ public class OrderServiceImpl implements OrderService {
                             SellerRiderRepository sellerRiderRepository,
                             DeliveryTrackingService deliveryTrackingService,
                             StockService stockService,
+                            PaymentService paymentService,
                             EntityManager entityManager) {
         this.orderRepository = orderRepository;
         this.userRepository = userRepository;
         this.sellerRiderRepository = sellerRiderRepository;
         this.deliveryTrackingService = deliveryTrackingService;
         this.stockService = stockService;
+        this.paymentService = paymentService;
         this.entityManager = entityManager;
     }
 
@@ -150,7 +154,11 @@ public class OrderServiceImpl implements OrderService {
         OrderEntity order = loadOrder(orderId);
         requireOwnership(order, actorId, ActorRole.SELLER, OrderStatus.REJECTED);
         order.setRejectReason(reason);
-        return setStatus(order, OrderStatus.REJECTED);
+        OrderResponse response = setStatus(order, OrderStatus.REJECTED);
+        // If the customer had already paid, refund the active payment so
+        // they see a REFUNDED row in their payment history.
+        paymentService.autoRefundForOrder(orderId, "Seller rejected the order" + (reason == null ? "." : ": " + reason));
+        return response;
     }
 
     // ---- customer cancel -----------------------------------------------
@@ -162,7 +170,11 @@ public class OrderServiceImpl implements OrderService {
         OrderEntity order = loadOrder(orderId);
         requireOwnership(order, actorId, ActorRole.CUSTOMER, OrderStatus.CANCELLED);
         order.setRejectReason(reason);
-        return setStatus(order, OrderStatus.CANCELLED);
+        OrderResponse response = setStatus(order, OrderStatus.CANCELLED);
+        // Same refund semantic as seller rejection — any captured payment
+        // is reversed.
+        paymentService.autoRefundForOrder(orderId, "Customer cancelled the order" + (reason == null ? "." : ": " + reason));
+        return response;
     }
 
     // ---- rider claim ----------------------------------------------------
@@ -389,6 +401,14 @@ public class OrderServiceImpl implements OrderService {
         // out to customer/seller subscribers.
         if (OrderStatusTransitions.isTerminal(next)) {
             deliveryTrackingService.clearOnDelivery(saved.getId());
+            // When the rider marks the order DELIVERED, auto-complete
+            // any pending payment (typically the CASH payment the rider
+            // collected on delivery). Other terminal states (CANCELLED,
+            // REJECTED) are handled at the call site by the
+            // `autoRefundForOrder` hook so we can pass a reason.
+            if (next == OrderStatus.DELIVERED) {
+                paymentService.markAutoCompletedOnDelivery(saved.getId());
+            }
         }
         return OrderResponse.from(saved);
     }

@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import {
   AuthSession,
+  ApprovedSupplier,
   Complaint,
   EmergencyContact,
   GasProduct,
@@ -41,6 +42,7 @@ import {
   AdminSupplierApplicationsApi,
   AuthApi,
   ComplaintsApi,
+  CreateRestockBody,
   CustomersApi,
   NotificationsApi,
   OrdersApi,
@@ -52,6 +54,8 @@ import {
   RoutesApi,
   SellersApi,
   SupplierApplicationsApi,
+  SuppliersApi,
+  UpdateRestockStatusBody,
   UsersApi,
   VehiclesApi,
 } from "../api/endpoints";
@@ -94,6 +98,12 @@ interface StoreShape {
   products: GasProduct[];
   orders: Order[];
   restockRequests: RestockRequest[];
+  /**
+   * FR-06: every supplier whose application is APPROVED. Drives the
+   * supplier picker on the seller's restock form. Empty for non-seller
+   * roles — they have no reason to display it.
+   */
+  approvedSuppliers: ApprovedSupplier[];
   permits: PermitApplication[];
   /**
    * Live-API permits keyed by seller id. The legacy `permits` slice above
@@ -189,7 +199,7 @@ interface StoreShape {
   ) => Promise<void>;
   updateRestockStatus: (
     id: string,
-    status: RestockRequest["status"],
+    body: RestockRequest["status"] | UpdateRestockStatusBody,
   ) => Promise<void>;
   submitPermit: (
     p: Omit<PermitApplication, "id" | "submittedAt" | "status">,
@@ -541,6 +551,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [products, setProducts] = useState<GasProduct[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [restockRequests, setRestockRequests] = useState<RestockRequest[]>([]);
+  /**
+   * Suppliers whose application is currently APPROVED — drives the
+   * supplier picker on the seller's restock form (FR-06). Refreshed
+   * on every login / refresh.
+   */
+  const [approvedSuppliers, setApprovedSuppliers] = useState<ApprovedSupplier[]>([]);
   const [permits, setPermits] = useState<PermitApplication[]>([]);
   /**
    * Live-API permits keyed by seller id. Empty in mock mode — the mock
@@ -628,15 +644,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       OrdersApi.list(),
       SellersApi.list(),
       RidersApi.list(),
-      RestockApi.list(),
       PermitsApi.list(),
       NotificationsApi.list(),
       ComplaintsApi.list(),
+      // FR-06: approved-supplier picker. Cheap single SELECT; included
+      // here so a seller's restock form has the picker populated the
+      // moment they reach the screen. Riders/customers don't need it
+      // but the endpoint is open to any authenticated seller/supplier/
+      // admin and the result is harmless to keep in memory.
+      SuppliersApi.approved(),
     ]);
     const value = <T,>(r: PromiseSettledResult<T>, fallback: T): T =>
       r.status === "fulfilled" ? r.value : fallback;
-    setUsers(value(results[0], []));
-    setProducts(value(results[1], []));
+    setUsers(value<User[]>(results[0], []));
+    setProducts(value<GasProduct[]>(results[1], []));
 
     // Supplier logistics: routes and vehicles are scoped server-side to
     // the signed-in supplier. Only fetch them when the actor is a
@@ -712,12 +733,40 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return merged.slice().sort(sortByUpdatedDesc);
     });
 
-    setSellers(value(results[3], []));
-    setRiders(value(results[4], []));
-    setRestockRequests(value(results[5], []));
-    setPermits(value(results[6], []));
-    setNotifications(value(results[7], []));
-    setComplaints(value(results[8], []));
+    setSellers(value<SellerProfile[]>(results[3], []));
+    setRiders(value<Rider[]>(results[4], []));
+    setPermits(value<PermitApplication[]>(results[5], []));
+    setNotifications(value<NotificationItem[]>(results[6], []));
+    setComplaints(value<Complaint[]>(results[7], []));
+    setApprovedSuppliers(value<ApprovedSupplier[]>(results[8], []));
+
+    // Restock requests are server-side gated to SELLER / SUPPLIER /
+    // ADMIN. Keep this out of the unconditional `Promise.allSettled`
+    // above so a customer / rider session doesn't trigger the
+    // "Unknown role for /api/restock" rejection — that rejection
+    // would otherwise surface as the first failure of `refresh()`
+    // and taint the post-registration screen with a misleading
+    // "Registration failed" alert even though signup itself succeeded.
+    if (
+      actorAtStart?.role === "seller" ||
+      actorAtStart?.role === "supplier" ||
+      actorAtStart?.role === "admin"
+    ) {
+      try {
+        const restock = await RestockApi.list();
+        setRestockRequests(restock);
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(
+            "[RESTOCK][REFRESH_FAILED]",
+            (err as Error)?.message,
+          );
+        }
+        setRestockRequests([]);
+      }
+    } else {
+      setRestockRequests([]);
+    }
 
     // Seller / admin permit bootstrapping (live API only).
     // We don't make this part of the parallel `Promise.allSettled` above
@@ -1446,7 +1495,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const requestRestock = useCallback(
-    async (r: Omit<RestockRequest, "id" | "createdAt" | "status">) => {
+    async (r: Omit<RestockRequest, "id" | "createdAt" | "updatedAt" | "status" | "rejectReason">) => {
       if (USE_MOCK) {
         const req: RestockRequest = {
           ...r,
@@ -1457,21 +1506,42 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setRestockRequests((prev) => [req, ...prev]);
         return;
       }
-      const created = await RestockApi.create(r);
+      // FR-06: strip server-controlled fields (rejectReason, updatedAt)
+      // before sending so a stale UI state can't poison the request.
+      const body: CreateRestockBody = {
+        sellerId: r.sellerId,
+        sellerName: r.sellerName,
+        supplierId: r.supplierId,
+        supplierName: r.supplierName,
+        productName: r.productName,
+        size: r.size,
+        quantity: r.quantity,
+        productId: r.productId,
+        notes: r.notes,
+      };
+      const created = await RestockApi.create(body);
       setRestockRequests((prev) => [created, ...prev]);
     },
     [],
   );
 
   const updateRestockStatus = useCallback(
-    async (id: string, status: RestockRequest["status"]) => {
+    async (
+      id: string,
+      body: RestockRequest["status"] | UpdateRestockStatusBody,
+    ) => {
+      // Tolerate both the legacy bare-string call shape (still used by
+      // a couple of screens) and the new FR-06 body. Normalise to the
+      // canonical body so the wire call always sends `{ status, reason? }`.
+      const payload: UpdateRestockStatusBody =
+        typeof body === "string" ? { status: body } : body;
       if (USE_MOCK) {
         setRestockRequests((prev) =>
-          prev.map((r) => (r.id === id ? { ...r, status } : r)),
+          prev.map((r) => (r.id === id ? { ...r, status: payload.status } : r)),
         );
         return;
       }
-      const updated = await RestockApi.updateStatus(id, status);
+      const updated = await RestockApi.updateStatus(id, payload);
       setRestockRequests((prev) =>
         prev.map((r) => (r.id === id ? updated : r)),
       );
@@ -2193,8 +2263,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // Stop sending `phone` on every location save — it was coupling
       // contact data to location writes. Callers that want to update
       // the phone should go through the dedicated contact endpoint.
+      //
+      // `businessName` is also preserved when the modal field is
+      // blank: the previous code silently overwrote the saved shop
+      // name with the seller's personal full name whenever they
+      // edited only the address, which clobbered the business name
+      // captured at permit-submission time. The backend already
+      // requires a non-blank businessName, so we re-use the existing
+      // session value (or the explicit patch value when present).
+      const existingBusinessName =
+        typeof session.user.businessName === "string" &&
+        session.user.businessName.trim().length > 0
+          ? session.user.businessName
+          : session.user.fullName;
+      const businessName =
+        patch.businessName !== undefined && patch.businessName.trim().length > 0
+          ? patch.businessName.trim()
+          : existingBusinessName;
       const saved = await SellersApi.updateMe({
-        businessName: patch.businessName ?? session.user.fullName,
+        businessName,
         location: patch.location,
         ...(patch.phone !== undefined ? { phone: patch.phone } : {}),
         region: patch.region ?? undefined,
@@ -2664,6 +2751,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       products,
       orders,
       restockRequests,
+      approvedSuppliers,
       permits,
       sellerPermits,
       riderPermits,
@@ -2756,6 +2844,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       products,
       orders,
       restockRequests,
+      approvedSuppliers,
       permits,
       sellerPermits,
       riderPermits,

@@ -20,6 +20,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -36,7 +37,7 @@ import { AppButton } from "../../src/components/AppButton";
 import { EmptyState } from "../../src/components/EmptyState";
 import { formatDate } from "../../src/utils/format";
 import { SupplierApprovalGate } from "../../src/components/SupplierApprovalGate";
-import { RestockRequest } from "../../constants/types";
+import { RestockRequest, RESTOCK_STATUS_LABELS, normalizeRestockStatus } from "../../constants/types";
 
 type RestockTab = "home" | "requests" | "deliveries";
 const ACCENT = "#6366F1";
@@ -116,53 +117,98 @@ function RestockHomeSection() {
   const user = session?.user!;
   const requests = getRestockForSupplier(user.id);
 
-  const pendingCount = requests.filter((r) => r.status === "pending").length;
-  const approvedCount = requests.filter((r) => r.status === "approved").length;
+  // FR-06 lifecycle counters. Legacy values (`approved`, `in_transit`)
+  // are normalised so screens still receiving the old wire shape keep
+  // counting correctly.
+  const pendingCount = requests.filter(
+    (r) => normalizeRestockStatus(r.status) === "pending",
+  ).length;
+  const acceptedCount = requests.filter(
+    (r) => normalizeRestockStatus(r.status) === "accepted",
+  ).length;
   const inTransitCount = requests.filter(
-    (r) => r.status === "in_transit",
+    (r) => normalizeRestockStatus(r.status) === "dispatched",
   ).length;
   const deliveredCount = requests.filter(
-    (r) => r.status === "delivered",
+    (r) => normalizeRestockStatus(r.status) === "delivered",
   ).length;
 
   const awaiting = useMemo(
-    () => requests.filter((r) => r.status === "pending"),
+    () =>
+      requests.filter(
+        (r) => normalizeRestockStatus(r.status) === "pending",
+      ),
     [requests],
   );
 
   const dispatching = useMemo(
     () =>
-      requests.filter(
-        (r) => r.status === "approved" || r.status === "in_transit",
-      ),
+      requests.filter((r) => {
+        const s = normalizeRestockStatus(r.status);
+        return s === "accepted" || s === "preparing" || s === "dispatched";
+      }),
     [requests],
   );
 
   const handleAccept = (r: RestockRequest) => {
-    updateRestockStatus(r.id, "approved");
-    Alert.alert("Request accepted", `${r.sellerName}'s request approved.`);
+    updateRestockStatus(r.id, { status: "accepted" });
+    Alert.alert("Request accepted", `${r.sellerName}'s request accepted.`);
   };
 
+  /**
+   * Reject a request with a free-text reason. The backend's state
+   * machine rejects transitions into REJECTED without a reason, so we
+   * prompt the supplier inline rather than via the legacy bare-Alert
+   * which had no input.
+   */
   const handleReject = (r: RestockRequest) => {
-    Alert.alert("Reject request?", `${r.sellerName} will be notified.`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Reject",
-        style: "destructive",
-        onPress: () => updateRestockStatus(r.id, "rejected"),
-      },
-    ]);
+    Alert.prompt(
+      "Reject request?",
+      `${r.sellerName} will be notified. Add a reason (required).`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reject",
+          style: "destructive",
+          onPress: (reason) => {
+            const trimmed = (reason ?? "").trim();
+            if (!trimmed) {
+              Alert.alert("Reason required", "Please enter a reason.");
+              return;
+            }
+            updateRestockStatus(r.id, { status: "rejected", reason: trimmed });
+          },
+        },
+      ],
+      "plain-text",
+    );
+  };
+
+  const handleStartPreparing = (r: RestockRequest) => {
+    updateRestockStatus(r.id, { status: "preparing" });
+  };
+
+  const handleDispatch = (r: RestockRequest) => {
+    updateRestockStatus(r.id, { status: "dispatched" });
+  };
+
+  const handleMarkDelivered = (r: RestockRequest) => {
+    updateRestockStatus(r.id, { status: "delivered" });
   };
 
   const statusPillTone = (s: RestockRequest["status"]) => {
-    switch (s) {
+    const norm = normalizeRestockStatus(s);
+    switch (norm) {
       case "delivered":
+      case "received":
         return "success" as const;
       case "rejected":
+      case "cancelled":
         return "danger" as const;
-      case "in_transit":
+      case "preparing":
+      case "dispatched":
         return "info" as const;
-      case "approved":
+      case "accepted":
         return "primary" as const;
       default:
         return "warning" as const;
@@ -189,8 +235,8 @@ function RestockHomeSection() {
           style={{ marginRight: Spacing.sm }}
         />
         <StatCard
-          label="Approved"
-          value={approvedCount}
+          label="Accepted"
+          value={acceptedCount}
           icon="✅"
           tone="primary"
           style={{ marginRight: Spacing.sm }}
@@ -198,7 +244,7 @@ function RestockHomeSection() {
       </View>
       <View style={[styles.statsRow, { marginTop: Spacing.sm }]}>
         <StatCard
-          label="In transit"
+          label="Dispatched"
           value={inTransitCount}
           icon="🚚"
           tone="info"
@@ -278,48 +324,59 @@ function RestockHomeSection() {
           <EmptyState
             icon="🚛"
             title="Nothing on the road"
-            message="Approved and in-transit requests will appear here."
+            message="Accepted and dispatched requests will appear here."
           />
         </View>
       ) : (
-        dispatching.slice(0, 4).map((r) => (
-          <Card
-            key={r.id}
-            style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
-          >
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.itemTitle}>
-                  {r.productName} ({r.size}) ×{r.quantity}
-                </Text>
-                <Text style={styles.itemMeta}>
-                  To {r.sellerName} • {formatDate(r.createdAt)}
-                </Text>
+        dispatching.slice(0, 4).map((r) => {
+          const s = normalizeRestockStatus(r.status);
+          return (
+            <Card
+              key={r.id}
+              style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
+            >
+              <View style={styles.row}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.itemTitle}>
+                    {r.productName} ({r.size}) ×{r.quantity}
+                  </Text>
+                  <Text style={styles.itemMeta}>
+                    To {r.sellerName} • {formatDate(r.createdAt)}
+                  </Text>
+                </View>
+                <StatusPill
+                  label={RESTOCK_STATUS_LABELS[s]}
+                  tone={statusPillTone(s)}
+                />
               </View>
-              <StatusPill
-                label={r.status === "in_transit" ? "In transit" : "Approved"}
-                tone={statusPillTone(r.status)}
-              />
-            </View>
-            {r.status === "approved" ? (
-              <AppButton
-                title="Mark in transit"
-                variant="secondary"
-                fullWidth
-                style={{ marginTop: Spacing.sm }}
-                onPress={() => updateRestockStatus(r.id, "in_transit")}
-              />
-            ) : (
-              <AppButton
-                title="Confirm delivery"
-                variant="primary"
-                fullWidth
-                style={{ marginTop: Spacing.sm }}
-                onPress={() => updateRestockStatus(r.id, "delivered")}
-              />
-            )}
-          </Card>
-        ))
+              {s === "accepted" ? (
+                <AppButton
+                  title="Start preparing"
+                  variant="secondary"
+                  fullWidth
+                  style={{ marginTop: Spacing.sm }}
+                  onPress={() => handleStartPreparing(r)}
+                />
+              ) : s === "preparing" ? (
+                <AppButton
+                  title="Dispatch"
+                  variant="secondary"
+                  fullWidth
+                  style={{ marginTop: Spacing.sm }}
+                  onPress={() => handleDispatch(r)}
+                />
+              ) : (
+                <AppButton
+                  title="Confirm delivery"
+                  variant="primary"
+                  fullWidth
+                  style={{ marginTop: Spacing.sm }}
+                  onPress={() => handleMarkDelivered(r)}
+                />
+              )}
+            </Card>
+          );
+        })
       )}
 
       {/* Quick actions */}
@@ -351,9 +408,13 @@ function RestockHomeSection() {
 type RequestFilter =
   | "all"
   | "pending"
-  | "approved"
-  | "in_transit"
-  | "delivered";
+  | "accepted"
+  | "preparing"
+  | "dispatched"
+  | "delivered"
+  | "received"
+  | "rejected"
+  | "cancelled";
 
 function RestockRequestsSection() {
   const { session, getRestockForSupplier, updateRestockStatus } = useStore();
@@ -364,19 +425,45 @@ function RestockRequestsSection() {
   const filtered =
     filter === "all"
       ? requests
-      : requests.filter((r) => r.status === filter);
+      : requests.filter((r) => normalizeRestockStatus(r.status) === filter);
 
   const setSupplier = (r: RestockRequest) => {
-    updateRestockStatus(r.id, "approved");
+    updateRestockStatus(r.id, { status: "accepted" });
     Alert.alert("Request accepted", `You accepted ${r.sellerName}'s request.`);
   };
+
+  const handleRejectInline = (r: RestockRequest) => {
+    Alert.prompt(
+      "Reject request?",
+      `Notify ${r.sellerName}. Add a reason (required).`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reject",
+          style: "destructive",
+          onPress: (reason?: string) => {
+            const trimmed = (reason ?? "").trim();
+            if (!trimmed) {
+              Alert.alert("Reason required", "Please enter a reason.");
+              return;
+            }
+            updateRestockStatus(r.id, { status: "rejected", reason: trimmed });
+          },
+        },
+      ],
+      "plain-text",
+    );
+  };
+
+  const filters: RequestFilter[] = [
+    "all", "pending", "accepted", "preparing", "dispatched",
+    "delivered", "received", "rejected", "cancelled",
+  ];
 
   return (
     <>
       <View style={styles.tabRow}>
-        {(
-          ["all", "pending", "approved", "in_transit", "delivered"] as const
-        ).map((f) => {
+        {filters.map((f) => {
           const active = filter === f;
           return (
             <TouchableOpacity
@@ -387,7 +474,7 @@ function RestockRequestsSection() {
               <Text
                 style={[styles.subTabText, active && styles.subTabTextActive]}
               >
-                {f.replace("_", " ")}
+                {RESTOCK_STATUS_LABELS[f]}
               </Text>
             </TouchableOpacity>
           );
@@ -406,69 +493,81 @@ function RestockRequestsSection() {
             message="Restock requests from sellers will appear here."
           />
         }
-        renderItem={({ item }) => (
-          <Card>
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.itemTitle}>
-                  {item.productName} ({item.size})
-                </Text>
-                <Text style={styles.itemMeta}>
-                  {item.sellerName} • {formatDate(item.createdAt)}
-                </Text>
+        renderItem={({ item }) => {
+          const s = normalizeRestockStatus(item.status);
+          return (
+            <Card>
+              <View style={styles.row}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.itemTitle}>
+                    {item.productName} ({item.size})
+                  </Text>
+                  <Text style={styles.itemMeta}>
+                    {item.sellerName} • {formatDate(item.createdAt)}
+                  </Text>
+                </View>
+                <StatusPill
+                  label={RESTOCK_STATUS_LABELS[s]}
+                  tone={
+                    s === "delivered" || s === "received"
+                      ? "success"
+                      : s === "rejected" || s === "cancelled"
+                        ? "danger"
+                        : s === "dispatched" || s === "preparing"
+                          ? "info"
+                          : s === "accepted"
+                            ? "primary"
+                            : "warning"
+                  }
+                />
               </View>
-              <StatusPill
-                label={item.status.replace("_", " ")}
-                tone={
-                  item.status === "delivered"
-                    ? "success"
-                    : item.status === "rejected"
-                      ? "danger"
-                      : item.status === "in_transit"
-                        ? "info"
-                        : item.status === "approved"
-                          ? "primary"
-                          : "warning"
-                }
-              />
-            </View>
-            <Text style={styles.qty}>Quantity: {item.quantity} units</Text>
-            {item.status === "pending" ? (
-              <View style={styles.actionRow}>
+              <Text style={styles.qty}>Quantity: {item.quantity} units</Text>
+              {s === "pending" ? (
+                <View style={styles.actionRow}>
+                  <AppButton
+                    title="Accept"
+                    variant="primary"
+                    onPress={() => setSupplier(item)}
+                    style={{ flex: 1, marginRight: 6 }}
+                  />
+                  <AppButton
+                    title="Reject"
+                    variant="danger"
+                    onPress={() => handleRejectInline(item)}
+                    style={{ flex: 1, marginLeft: 6 }}
+                  />
+                </View>
+              ) : null}
+              {s === "accepted" ? (
                 <AppButton
-                  title="Accept"
+                  title="Start preparing"
+                  variant="secondary"
+                  onPress={() => updateRestockStatus(item.id, { status: "preparing" })}
+                  fullWidth
+                  style={{ marginTop: Spacing.sm }}
+                />
+              ) : null}
+              {s === "preparing" ? (
+                <AppButton
+                  title="Dispatch"
+                  variant="secondary"
+                  onPress={() => updateRestockStatus(item.id, { status: "dispatched" })}
+                  fullWidth
+                  style={{ marginTop: Spacing.sm }}
+                />
+              ) : null}
+              {s === "dispatched" ? (
+                <AppButton
+                  title="Confirm delivery"
                   variant="primary"
-                  onPress={() => setSupplier(item)}
-                  style={{ flex: 1, marginRight: 6 }}
+                  onPress={() => updateRestockStatus(item.id, { status: "delivered" })}
+                  fullWidth
+                  style={{ marginTop: Spacing.sm }}
                 />
-                <AppButton
-                  title="Reject"
-                  variant="danger"
-                  onPress={() => updateRestockStatus(item.id, "rejected")}
-                  style={{ flex: 1, marginLeft: 6 }}
-                />
-              </View>
-            ) : null}
-            {item.status === "approved" ? (
-              <AppButton
-                title="Mark in transit"
-                variant="secondary"
-                onPress={() => updateRestockStatus(item.id, "in_transit")}
-                fullWidth
-                style={{ marginTop: Spacing.sm }}
-              />
-            ) : null}
-            {item.status === "in_transit" ? (
-              <AppButton
-                title="Confirm delivery"
-                variant="primary"
-                onPress={() => updateRestockStatus(item.id, "delivered")}
-                fullWidth
-                style={{ marginTop: Spacing.sm }}
-              />
-            ) : null}
-          </Card>
-        )}
+              ) : null}
+            </Card>
+          );
+        }}
       />
     </>
   );

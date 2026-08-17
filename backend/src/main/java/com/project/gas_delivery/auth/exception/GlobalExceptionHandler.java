@@ -222,6 +222,41 @@ public class GlobalExceptionHandler {
         return ApiErrorBody.of(HttpStatus.CONFLICT, ex.getMessage(), "PERMIT_STATE", null);
     }
 
+    /**
+     * FR-06 supply-order module: maps {@link com.project.gas_delivery.supply.exception.SupplyOrderException}
+     * to a stable HTTP status + {@code code} combo so the frontend can
+     * switch on the {@code code} field without parsing messages.
+     *
+     * <ul>
+     *   <li>{@code NOT_FOUND} → 404 / {@code SUPPLY_NOT_FOUND}</li>
+     *   <li>{@code FORBIDDEN} → 403 / {@code SUPPLY_FORBIDDEN}</li>
+     *   <li>{@code ILLEGAL_TRANSITION} → 409 / {@code SUPPLY_ILLEGAL_TRANSITION}</li>
+     *   <li>{@code REASON_REQUIRED} → 400 / {@code SUPPLY_REASON_REQUIRED}</li>
+     *   <li>{@code SUPPLIER_NOT_APPROVED} → 403 / {@code SUPPLY_SUPPLIER_NOT_APPROVED}</li>
+     *   <li>{@code SELF_REQUEST} → 400 / {@code SUPPLY_SELF_REQUEST}</li>
+     * </ul>
+     */
+    @ExceptionHandler(com.project.gas_delivery.supply.exception.SupplyOrderException.class)
+    public ResponseEntity<Map<String, Object>> handleSupplyOrder(
+            com.project.gas_delivery.supply.exception.SupplyOrderException ex
+    ) {
+        com.project.gas_delivery.supply.exception.SupplyOrderException.Kind kind = ex.getKind();
+        return switch (kind) {
+            case NOT_FOUND            -> ApiErrorBody.of(HttpStatus.NOT_FOUND,
+                    ex.getMessage(), "SUPPLY_NOT_FOUND", null);
+            case FORBIDDEN            -> ApiErrorBody.of(HttpStatus.FORBIDDEN,
+                    ex.getMessage(), "SUPPLY_FORBIDDEN", null);
+            case ILLEGAL_TRANSITION   -> ApiErrorBody.of(HttpStatus.CONFLICT,
+                    ex.getMessage(), "SUPPLY_ILLEGAL_TRANSITION", null);
+            case REASON_REQUIRED      -> ApiErrorBody.of(HttpStatus.BAD_REQUEST,
+                    ex.getMessage(), "SUPPLY_REASON_REQUIRED", null);
+            case SUPPLIER_NOT_APPROVED -> ApiErrorBody.of(HttpStatus.FORBIDDEN,
+                    ex.getMessage(), "SUPPLY_SUPPLIER_NOT_APPROVED", null);
+            case SELF_REQUEST         -> ApiErrorBody.of(HttpStatus.BAD_REQUEST,
+                    ex.getMessage(), "SUPPLY_SELF_REQUEST", null);
+        };
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
         return ApiErrorBody.of(HttpStatus.INTERNAL_SERVER_ERROR,

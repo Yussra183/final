@@ -67,6 +67,16 @@ interface UseCustomerLocationOptions {
  * Thin customer-side wrapper: layer `session.user.lat/lng` on top
  * of the device-fallback chain so the customer Home can show the
  * saved address when no device fix is available yet.
+ *
+ * The wrapper deliberately disables the underlying
+ * `watchPositionAsync` subscription. The customer Home only needs a
+ * single foreground fix to (a) draw the "You" pin and (b) seed the
+ * radius-filtered seller query. A continuous watch would jitter the
+ * pin on every GPS update and trigger pointless React re-renders
+ * even when the device hasn't actually moved (the underlying hook's
+ * 5 m deadband doesn't help when the customer's first paint hasn't
+ * settled yet). "Locate me" still calls `refresh()` to re-resolve
+ * a fresh fix on demand.
  */
 export function useCustomerLocation(
   options: UseCustomerLocationOptions = {},
@@ -93,6 +103,9 @@ export function useCustomerLocation(
   const device: UseDeviceLocationResult = useDeviceLocation({
     timeoutMs: options.timeoutMs,
     fallback,
+    // Customer side never needs a continuous GPS stream — see the
+    // file header. Seller / rider hooks still opt in by default.
+    enableWatch: false,
   });
 
   // Translate the underlying "device" / "fallback" source into the

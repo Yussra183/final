@@ -36,4 +36,19 @@ public interface SupplierApplicationRepository
      */
     @Query("SELECT s.supplierId FROM SupplierApplicationEntity s WHERE s.status = :status")
     List<Long> findSupplierIdsByStatus(@Param("status") PermitStatus status);
+
+    /**
+     * FR-06: full approved-supplier applications joined to their
+     * supplier {@code users} records, newest approval first. Drives
+     * {@code GET /api/suppliers/approved} so the seller's restock UI
+     * can populate the supplier picker with currently-eligible names
+     * (rather than letting the seller raise an order against a
+     * supplier whose application is still PENDING).
+     */
+    @Query("""
+            SELECT s FROM SupplierApplicationEntity s
+             WHERE s.status = :status
+             ORDER BY s.reviewedAt DESC
+            """)
+    List<SupplierApplicationEntity> findApprovedApplications(@Param("status") PermitStatus status);
 }

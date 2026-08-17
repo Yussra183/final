@@ -10,6 +10,7 @@ import com.project.gas_delivery.order.dto.OrderItemDto;
 import com.project.gas_delivery.order.exception.InsufficientStockException;
 import com.project.gas_delivery.order.repository.OrderRepository;
 import com.project.gas_delivery.order.service.impl.OrderServiceImpl;
+import com.project.gas_delivery.payment.service.PaymentService;
 import com.project.gas_delivery.product.service.StockService;
 import com.project.gas_delivery.rider.repository.SellerRiderRepository;
 import com.project.gas_delivery.tracking.service.DeliveryTrackingService;
@@ -60,6 +61,9 @@ class OrderServiceStockIntegrationTest {
     private OrderRepository orderRepository;
 
     @Mock
+    private PaymentService paymentService;
+
+    @Mock
     private UserRepository userRepository;
 
     @Mock
@@ -80,7 +84,7 @@ class OrderServiceStockIntegrationTest {
     void setUp() {
         orderService = new OrderServiceImpl(
                 orderRepository, userRepository, sellerRiderRepository,
-                deliveryTrackingService, stockService, entityManager
+                deliveryTrackingService, stockService, paymentService, entityManager
         );
     }
 

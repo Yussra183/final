@@ -245,6 +245,40 @@ export default function OrdersScreen() {
                 <Text style={styles.cancelLinkText}>Cancel this order</Text>
               </Pressable>
             ) : null}
+
+            {/* ----- Pay Now shortcut -----
+                Visible once the seller has accepted the order (or it's
+                still pending) — i.e. there's a payment-eligible moment
+                in the customer journey. Cash on delivery is fine; the
+                Pay Now screen lets the customer switch to M-Pesa / Card
+                if they prefer not to pay the rider in cash. */}
+            {(item.status === "pending" ||
+              item.status === "accepted" ||
+              item.status === "assigned" ||
+              item.status === "picked_up" ||
+              item.status === "in_transit" ||
+              item.status === "delivered") &&
+            payStatus !== "completed" &&
+            payStatus !== "refunded" ? (
+              <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: "/(customer)/pay",
+                    params: { id: item.id },
+                  } as any)
+                }
+                style={styles.payLinkWrap}
+                accessibilityRole="button"
+                accessibilityLabel="Pay for this order"
+              >
+                <Ionicons
+                  name="card-outline"
+                  size={14}
+                  color={Colors.primary}
+                />
+                <Text style={styles.payLinkText}>Pay for this order</Text>
+              </Pressable>
+            ) : null}
           </Card>
         </Pressable>
       </FadeIn>
@@ -258,10 +292,25 @@ export default function OrdersScreen() {
     >
       {/* ---------------- Header ---------------- */}
       <View style={styles.header}>
-        <Text style={styles.title}>My Orders</Text>
-        <Text style={styles.subtitle}>
-          {myOrders.length} {myOrders.length === 1 ? "order" : "orders"} total
-        </Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>My Orders</Text>
+          <Text style={styles.subtitle}>
+            {myOrders.length} {myOrders.length === 1 ? "order" : "orders"} total
+          </Text>
+        </View>
+        <Pressable
+          onPress={() => router.push("/(customer)/payments" as any)}
+          style={styles.paymentsLinkWrap}
+          accessibilityRole="button"
+          accessibilityLabel="My Payments"
+        >
+          <Ionicons
+            name="card-outline"
+            size={16}
+            color={Colors.primary}
+          />
+          <Text style={styles.paymentsLinkText}>Payments</Text>
+        </Pressable>
       </View>
 
       {/* ---------------- Segmented control ---------------- */}
@@ -529,5 +578,39 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontSize: FontSize.sm,
     textDecorationLine: "underline",
+  },
+
+  /* ----- Pay Now link (per-order) ----- */
+  payLinkWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+    alignSelf: "center",
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    backgroundColor: Colors.primarySoft,
+    borderRadius: 999,
+    marginTop: Spacing.sm,
+  },
+  payLinkText: {
+    color: Colors.primary,
+    fontSize: FontSize.sm,
+    fontWeight: "700",
+  },
+
+  /* ----- Header: My Payments shortcut ----- */
+  paymentsLinkWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: 999,
+    backgroundColor: Colors.primarySoft,
+  },
+  paymentsLinkText: {
+    color: Colors.primary,
+    fontSize: FontSize.sm,
+    fontWeight: "700",
   },
 });

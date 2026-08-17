@@ -371,16 +371,14 @@ export default function CustomerHome() {
           recenterToken={recenterToken}
           showUserPin={showUserPin}
           selectedId={selectedSellerId ?? undefined}
-          // `fixed` — camera stays anchored to the customer's
-          // location. The default `auto` would auto-fit every marker
-          // + the user, which on first paint drags the camera far
-          // away from the customer when sellers exist outside their
-          // immediate area. The customer Home expects the map to
-          // open on the customer first; sellers remain visible as
-          // individual pins but never re-anchor the camera away from
-          // the customer. "Locate me" still re-centres via
-          // `recenterToken`.
-          fitMode="fixed"
+          // `auto` — first paint frames the user together with every
+          // nearby seller so the customer sees both themselves and the
+          // surrounding service area at a glance. When sellers sit far
+          // from the customer the bbox widens (still clamped to
+          // Unguja); when they cluster tightly, the camera zooms in
+          // to street level. "Locate me" still re-centres via
+          // `recenterToken` and uses a tighter street-level delta.
+          fitMode="auto"
           style={StyleSheet.absoluteFill}
           onMarkerTap={onPinTap}
         />

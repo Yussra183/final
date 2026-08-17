@@ -75,6 +75,19 @@ export interface UseDeviceLocationOptions {
   timeoutMs?: number;
   /** Override the fallback centre. Defaults to `ZANZIBAR_CENTRE`. */
   fallback?: { lat: number; lng: number };
+  /**
+   * If true, subscribe to `watchPositionAsync` after the initial fix
+   * resolves so the coordinate keeps moving with the user. Defaults
+   * to true (preserves existing seller-side behaviour).
+   *
+   * Pass `false` for callers that only need a single foreground
+   * fix — e.g. the customer Home, which uses the resolved coord
+   * only to draw a "you are here" pin and to seed seller discovery.
+   * A continuous watcher would jitter the pin on every GPS update
+   * (and re-render the React tree for no behavioural gain), so we
+   * opt out of it here.
+   */
+  enableWatch?: boolean;
 }
 
 /** Match `useRiderGps` cadence so the UI cadence stays consistent. */
@@ -115,6 +128,7 @@ export function useDeviceLocation(
 ): UseDeviceLocationResult {
   const timeoutMs = options.timeoutMs;
   const fallback = options.fallback ?? ZANZIBAR_CENTRE;
+  const enableWatch = options.enableWatch ?? true;
 
   const [device, setDevice] = useState<ResolvedDeviceCoords | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -197,7 +211,10 @@ export function useDeviceLocation(
   }, []);
 
   // Mount: run the first fix. On resolution, either arm the watch
-  // (if we got real device coords) or just settle into the fallback.
+  // (if we got real device coords AND the caller wants live updates)
+  // or just settle into the resolved fix. Callers that only need a
+  // single foreground fix (e.g. the customer Home) pass
+  // `enableWatch: false` so the coordinate stays stable on the map.
   useEffect(() => {
     return runInitialFix(
       timeoutMs,
@@ -205,15 +222,18 @@ export function useDeviceLocation(
         setDevice(coords);
         if (coords) {
           lastEmittedRef.current = coords;
-          // Fire-and-forget — the loading state has already settled.
-          void startWatch();
+          if (enableWatch) {
+            // Fire-and-forget — the loading state has already settled.
+            void startWatch();
+          }
         }
       },
       () => setLoading(false),
     );
-    // `startWatch` is stable; relying on `timeoutMs` is enough.
+    // `startWatch` is stable; relying on `timeoutMs` + `enableWatch`
+    // is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeoutMs]);
+  }, [timeoutMs, enableWatch]);
 
   // `refresh()` — explicit re-resolve from the Home "Locate me" FAB.
   // Clears any cached device state, drops the watch subscription,
@@ -239,13 +259,15 @@ export function useDeviceLocation(
         setDevice(coords);
         if (coords) {
           lastEmittedRef.current = coords;
-          void startWatch();
+          if (enableWatch) {
+            void startWatch();
+          }
         }
       },
       () => setLoading(false),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTick, timeoutMs]);
+  }, [refreshTick, timeoutMs, enableWatch]);
 
   // Clean up the watch on unmount.
   useEffect(() => {

@@ -149,6 +149,53 @@ public class StockService {
         return newStock;
     }
 
+    /**
+     * FR-06 — credit {@code quantity} units back to a product when the
+     * seller confirms receipt of a supply order. Atomic single UPDATE so
+     * a fast double-click cannot credit the same cylinders twice.
+     *
+     * <p>Re-arms the low-stock alert when the post-credit value rises
+     * above the threshold (recovery case), then fires a fresh
+     * {@code stock} notification only when the resulting value is still
+     * at or below the threshold — a normal "restocked" path is silent
+     * to avoid spamming the seller with the same healthy-state message
+     * they already get when they manually raise stock.</p>
+     *
+     * @return the new stock value (sum of previous + credited quantity)
+     * @throws IllegalArgumentException when the product no longer exists
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public int replenishForSupplyReceipt(Long productId, int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("quantity must be > 0");
+        }
+        ProductEntity product = productRepository.findById(productId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Product " + productId + " not found."));
+        int previousStock = product.getStock();
+        int updated = productRepository.incrementStock(productId, quantity);
+        if (updated == 0) {
+            throw new IllegalArgumentException(
+                    "Product " + productId + " could not be incremented; it may have been deleted.");
+        }
+        int newStock = previousStock + quantity;
+        int threshold = product.getLowStockThreshold();
+
+        // Re-arm: if the receipt pulled us out of the low-stock zone,
+        // allow the next dip to fire a fresh alert. Otherwise check
+        // whether the receipt still left us at/below threshold — rare
+        // (a giant restock on a tiny product) but worth handling.
+        Object dedupeKey = product.getId() != null ? product.getId() : fallbackDedupeKey(product);
+        if (previousStock <= threshold && newStock > threshold) {
+            recentlyNotified.remove(dedupeKey);
+        } else if (newStock <= threshold) {
+            // Use a refreshed entity for the notification payload.
+            ProductEntity refreshed = productRepository.findById(productId).orElse(product);
+            checkThresholdAndNotify(refreshed, newStock);
+        }
+        return newStock;
+    }
+
     // ---- Threshold / notification wiring --------------------------------
 
     private void checkThresholdAndNotify(ProductEntity product, int newStock) {

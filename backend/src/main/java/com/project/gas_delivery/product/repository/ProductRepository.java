@@ -60,4 +60,25 @@ public interface ProductRepository extends JpaRepository<ProductEntity, Long> {
                AND p.stock >= :qty
             """)
     int reserveStock(@Param("id") Long productId, @Param("qty") int quantity);
+
+    /**
+     * Atomic unconditional increment — used by FR-06 when a seller
+     * confirms receipt of a supply order. No upper bound check: the
+     * receipt quantity is server-computed from {@code supply_orders.quantity}
+     * and validated upstream.
+     *
+     * <p>Mirrors {@link #reserveStock}'s locking semantics: two
+     * concurrent receipts serialise on the row so a fast double-click
+     * never credits the same cylinders twice. Returns {@code 0} when
+     * the row no longer exists, which the caller surfaces as a
+     * {@code ProductNotFoundException} so the seller sees a real error
+     * rather than a silent no-op.</p>
+     */
+    @Modifying
+    @Query("""
+            UPDATE ProductEntity p
+               SET p.stock = p.stock + :qty
+             WHERE p.id = :id
+            """)
+    int incrementStock(@Param("id") Long productId, @Param("qty") int quantity);
 }

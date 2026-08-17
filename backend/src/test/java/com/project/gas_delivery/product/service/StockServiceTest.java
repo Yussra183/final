@@ -289,4 +289,62 @@ class StockServiceTest {
                     assertThat(ise.getRequested()).isEqualTo(1);
                 });
     }
+
+    // =====================================================================
+    // FR-06 — replenishForSupplyReceipt
+    // =====================================================================
+
+    @Test
+    void replenishForSupplyReceipt_incrementsStockAndReturnsNewValue() {
+        ProductEntity product = product(20L, 2L, 3, 5);
+        stubFind(20L, product);
+        when(productRepository.incrementStock(20L, 7)).thenReturn(1);
+
+        int newStock = stockService.replenishForSupplyReceipt(20L, 7);
+
+        assertThat(newStock).isEqualTo(10); // 3 + 7
+        verify(productRepository).incrementStock(20L, 7);
+    }
+
+    @Test
+    void replenishForSupplyReceipt_rearmsDedupWhenRisingAboveThreshold() {
+        ProductEntity product = product(21L, 2L, 2, 5);  // below threshold (5)
+        stubFind(21L, product);
+        when(productRepository.incrementStock(21L, 7)).thenReturn(1);
+
+        // The replenishment itself is what re-arms: it should silently
+        // succeed and not fire a low-stock notification when the result
+        // rises above threshold.
+        int newStock = stockService.replenishForSupplyReceipt(21L, 7);
+        assertThat(newStock).isEqualTo(9); // 2 + 7
+        verify(notificationService, never()).notify(
+                anyLong(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void replenishForSupplyReceipt_throwsWhenProductMissing() {
+        stubMissing(99L);
+
+        assertThatThrownBy(() -> stockService.replenishForSupplyReceipt(99L, 5))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void replenishForSupplyReceipt_throwsOnNonPositiveQuantity() {
+        assertThatThrownBy(() -> stockService.replenishForSupplyReceipt(1L, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(productRepository, never()).incrementStock(anyLong(), anyInt());
+    }
+
+    @Test
+    void replenishForSupplyReceipt_throwsWhenIncrementReturnedZero() {
+        ProductEntity product = product(22L, 2L, 3, 5);
+        stubFind(22L, product);
+        // incrementStock returns 0 → row no longer exists.
+        when(productRepository.incrementStock(22L, 5)).thenReturn(0);
+
+        assertThatThrownBy(() -> stockService.replenishForSupplyReceipt(22L, 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("could not be incremented");
+    }
 }

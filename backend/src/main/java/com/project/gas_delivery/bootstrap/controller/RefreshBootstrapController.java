@@ -12,12 +12,17 @@ import java.util.List;
  * returns HTTP 500 makes the store surface "Couldn't refresh data".
  *
  * <p>The Order Flow / Permit / Seller / Rider / Notification modules
- * all have full CRUD already. The three list endpoints below (Users,
- * Restock requests, Complaints) are not yet implemented as full flows
- * — they exist so the bulk refresh completes cleanly. Each endpoint
- * returns an empty list with a stable JSON shape that matches the
- * frontend's TypeScript interface, and a {@code 200 OK} so the
- * refresh pipeline treats it as a successful empty payload.</p>
+ * all have full CRUD already. The two list endpoints below (Users,
+ * Complaints) are not yet implemented as full flows — they exist so
+ * the bulk refresh completes cleanly. Each endpoint returns an empty
+ * list with a stable JSON shape that matches the frontend's
+ * TypeScript interface, and a {@code 200 OK} so the refresh pipeline
+ * treats it as a successful empty payload.</p>
+ *
+ * <p>{@code /api/restock} used to live here too but now lives in
+ * {@code SupplyOrderController} (FR-06 — full CRUD including the
+ * state machine). This class still owns the stub endpoints for the
+ * slices not yet migrated.</p>
  *
  * <p>The shape is intentionally minimal — every writable flow (create /
  * update / status transitions) is still routed through the existing
@@ -36,18 +41,6 @@ public class RefreshBootstrapController {
      */
     @GetMapping("/api/users")
     public List<UserSummaryDto> listUsers() {
-        return List.of();
-    }
-
-    /**
-     * Lists every restock request. The Order Flow does not yet persist
-     * restock requests (the seed migration ships a few rows that the
-     * frontend mock branch reads from), so the live API returns an
-     * empty list. The endpoint shape matches
-     * {@code constants/types.ts} → {@code RestockRequest}.
-     */
-    @GetMapping("/api/restock")
-    public List<RestockSummaryDto> listRestock() {
         return List.of();
     }
 
@@ -75,23 +68,6 @@ public class RefreshBootstrapController {
             String email,
             String phone,
             String role,
-            String createdAt
-    ) {}
-
-    /**
-     * Wire shape for {@code GET /api/restock}. Field set matches
-     * {@code constants/types.ts} → {@code RestockRequest}.
-     */
-    public record RestockSummaryDto(
-            String id,
-            String sellerId,
-            String sellerName,
-            String supplierId,
-            String supplierName,
-            String productName,
-            String size,
-            Integer quantity,
-            String status,
             String createdAt
     ) {}
 

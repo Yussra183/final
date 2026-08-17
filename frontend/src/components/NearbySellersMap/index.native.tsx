@@ -129,6 +129,13 @@ export interface NearbySellerMarker {
    * (e.g. the seller's most recent order).
    */
   color?: string;
+  /**
+   * Internal: a tiny offset applied to the rendered pin position
+   * when two sellers share the same GPS point (a common case for
+   * shops registered to the same building). Internal use only —
+   * not part of the public props contract.
+   */
+  _renderCoord?: { lat: number; lng: number };
 }
 
 /** Props for `<NearbySellersMap>`. */
@@ -218,6 +225,45 @@ export function NearbySellersMap({
     [markers],
   );
 
+  // Group markers by exact coordinate so two sellers sharing the same
+  // GPS point (a common case for shops registered to the same
+  // building / geocoded to the same centroid) don't stack on top of
+  // each other and become invisible. We assign each clustered marker
+  // a small angular offset (≈ 40 m) so all pins stay readable.
+  // Markers keep their original lat/lng — the offset only affects
+  // the rendered pin position so the bbox math still reflects the
+  // true store coordinates.
+  const clusteredMarkers = useMemo(() => {
+    const groups = new Map<string, NearbySellerMarker[]>();
+    finiteMarkers.forEach((m) => {
+      const key = `${m.lat.toFixed(5)}:${m.lng.toFixed(5)}`;
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(m);
+      else groups.set(key, [m]);
+    });
+    const out: Array<NearbySellerMarker & { _renderCoord: { lat: number; lng: number } }> = [];
+    const OFFSET_DEG = 0.0004; // ≈ 40 m at the equator — small enough to read as the same shop
+    groups.forEach((bucket) => {
+      if (bucket.length === 1) {
+        const m = bucket[0];
+        out.push({ ...m, _renderCoord: { lat: m.lat, lng: m.lng } });
+        return;
+      }
+      const step = (Math.PI * 2) / bucket.length;
+      bucket.forEach((m, i) => {
+        const angle = i * step;
+        out.push({
+          ...m,
+          _renderCoord: {
+            lat: m.lat + Math.sin(angle) * OFFSET_DEG,
+            lng: m.lng + Math.cos(angle) * OFFSET_DEG,
+          },
+        });
+      });
+    });
+    return out;
+  }, [finiteMarkers]);
+
   // Combined point list used for the bbox: every marker PLUS the
   // user's resolved centre (when finite + opted in). This means the
   // initial frame shows "me + every nearby seller", even when there
@@ -251,28 +297,41 @@ export function NearbySellersMap({
   //   `fixed` — centre the camera on the user's resolved location at
   //             a tight street-level zoom. Sellers are still rendered
   //             as individual pins at their own coordinates but the
-  //             camera never auto-zooms away from the customer. This
-  //             is the customer Home's behaviour: open the map on
-  //             "you are here", then surface every approved seller as
-  //             a pin in its own location without re-anchoring the
-  //             camera.
+  //             camera never auto-zooms away from the customer.
   //
-  // The truly empty (no markers, no center) case falls back to the
+  // When the auto-fit would degenerate to a single point (the user
+  // alone, no nearby sellers), we still centre on the user but use
+  // a moderate delta so they can see the surrounding area instead
+  // of a street-level dot. The truly empty case falls back to the
   // Unguja-wide region.
   const initialRegion = useMemo(() => {
-    if (fitMode === "auto" && fitPoints.length >= 1) {
-      const r = regionForPoints(fitPoints, 1.4);
+    if (fitMode === "auto" && fitPoints.length >= 2) {
+      // `pad` (1.8) leaves ~40% padding on each side — generous
+      // enough that no seller or user pin is hidden under the FAB
+      // cluster, bottom sheet, or location chip on the first paint.
+      // The same padding is applied in `fitToCoordinates` via
+      // `edgePadding`, so the two paths agree about what the camera
+      // should show.
+      const r = regionForPoints(fitPoints, 1.8);
       if (r) return clampRegionToUnguja(r);
+    }
+    if (fitMode === "auto" && fitPoints.length === 1 && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
+      // Single-point fit (user only, no sellers in range) — centre on
+      // the user at a context-providing zoom (~16 km around) so the
+      // customer still sees their surrounding area, not street level.
+      const CONTEXT_DELTA = 0.15;
+      return clampRegionToUnguja({
+        latitude: center.lat,
+        longitude: center.lng,
+        latitudeDelta: CONTEXT_DELTA,
+        longitudeDelta: CONTEXT_DELTA,
+      });
     }
     if (fitMode === "fixed" && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
       // `zoom` is treated as the desired delta in degrees. Default
       // `12` would be ~1,300 km of viewport (the whole island);
       // callers that want a tighter street-level zoom pass a smaller
-      // value (e.g. 0.02 for ~2.2 km around the customer). The
-      // customer Home relies on the default to keep the user pin
-      // front-and-centre while still showing nearby sellers within a
-      // few kilometres; when a seller sits outside that viewport the
-      // user can pan to it or tap "Locate me".
+      // value (e.g. 0.02 for ~2.2 km around the customer).
       const delta = zoom;
       return clampRegionToUnguja({
         latitude: center.lat,
@@ -305,44 +364,83 @@ export function NearbySellersMap({
   const fitToMarkers = useCallback(() => {
     if (!mapRef.current) return;
     if (fitMode !== "auto" || fitPoints.length < 1) return;
+    // Single-point case (user only, no sellers): animate to a
+    // user-centred context region instead of calling fitToCoordinates
+    // with one point (which would collapse to a meaningless zoom).
+    if (fitPoints.length === 1 && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
+      const r = clampRegionToUnguja({
+        latitude: center.lat,
+        longitude: center.lng,
+        latitudeDelta: 0.15,
+        longitudeDelta: 0.15,
+      });
+      try {
+        mapRef.current.animateToRegion(r, 600);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     const points = fitPoints.map((p) => ({
       latitude: p.lat,
       longitude: p.lng,
     }));
     try {
+      // `animated: false` on the first fit — the camera should land
+      // on the requested bbox synchronously so the seller pins are
+      // visible on the very first paint. Animated fits can be
+      // cancelled mid-flight by `onMapReady` re-firing or by the map
+      // settling on a default region before our value arrives, which
+      // was the symptom reported on the customer Home ("markers
+      // exist but the camera is showing the whole island"). The
+      // bottom padding leaves room for the FAB cluster and bottom
+      // sheet so no pin is hidden under chrome.
       mapRef.current.fitToCoordinates(points, {
-        edgePadding: { top: 64, right: 48, bottom: 96, left: 48 },
-        animated: true,
+        edgePadding: { top: 64, right: 48, bottom: 220, left: 48 },
+        animated: false,
       });
     } catch {
       /* ignore — the map ref is stale during fast unmount */
     }
-  }, [fitPoints, fitMode]);
+  }, [fitPoints, fitMode, center.lat, center.lng]);
 
   useEffect(() => {
     // Small delay so the first fit lands after the map's tile layer
     // has a chance to start drawing — otherwise the camera can settle
-    // before the world is ready and the result looks clipped.
-    const timer = setTimeout(fitToMarkers, 120);
+    // before the world is ready and the result looks clipped. The
+    // `onMapReady` handler below also runs `fitToMarkers` once tiles
+    // are ready, so this delay is mainly a backstop for the case
+    // where `onMapReady` has already fired (e.g. on a fast re-mount).
+    const timer = setTimeout(fitToMarkers, 500);
     return () => clearTimeout(timer);
   }, [fitToMarkers, markerKey]);
 
   // Recentre on the user's location. Parent bumps `recenterToken`
-  // when the "Locate me" button is tapped. The dep list keeps this
-  // re-firing only on token change, not on every centre prop update.
+  // when the "Locate me" button is tapped. With the customer Home
+  // now in `auto` fit mode, "Locate me" re-runs the same bbox fit
+  // (`fitToMarkers`) so the camera lands on the user together with
+  // every nearby seller — matching first-paint behaviour. Falls
+  // back to a tight street-level recentre when there are no markers
+  // to frame.
   useEffect(() => {
     if (!mapRef.current) return;
     if (recenterToken <= 0) return;
-    const r = clampRegionToUnguja({
-      latitude: center.lat,
-      longitude: center.lng,
-      latitudeDelta: 0.05,
-      longitudeDelta: 0.05,
-    });
-    try {
-      mapRef.current.animateToRegion(r, 600);
-    } catch {
-      /* ignore */
+    if (fitPoints.length >= 1) {
+      fitToMarkers();
+      return;
+    }
+    if (Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
+      const r = clampRegionToUnguja({
+        latitude: center.lat,
+        longitude: center.lng,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
+      try {
+        mapRef.current.animateToRegion(r, 600);
+      } catch {
+        /* ignore */
+      }
     }
     // We intentionally ignore `center` to keep the effect tied to the
     // tap signal, not to upstream location churn. The Home screen
@@ -374,11 +472,33 @@ export function NearbySellersMap({
   return (
     <View style={[styles.frame, style]}>
       <MapView
+        // `key` ties the map's mount lifetime to the *seller set
+        // cardinality* so the MapView remounts the first time any
+        // seller data arrives. Before any sellers are present, the
+        // only `initialRegion` we can compute is the Unguja-wide
+        // fallback — once the seller set resolves (length ≥ 1), the
+        // key changes and the MapView remounts with a fresh
+        // `initialRegion` centred on user + sellers, so the camera
+        // lands on the requested bbox instead of falling back to the
+        // Google Maps default (which is what was hiding the seller
+        // pins on the customer Home). Using `markerKey` directly
+        // would be a no-op for stable seller IDs, so we key on the
+        // bucket the map is currently displaying: `0` = no sellers
+        // yet, `>0` = sellers present.
+        key={`map-${fitPoints.length > 0 ? markerKey : "empty"}`}
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         style={StyleSheet.absoluteFill}
         initialRegion={initialRegion}
         onLayout={fitToMarkers}
+        // Re-fit once the map's tile layer is ready. `onMapReady`
+        // fires after `initialRegion` has been consumed, so this is
+        // the safest place to run `fitToCoordinates` — by then the
+        // map ref is alive and tiles are painted, so the camera lands
+        // on the requested bbox instead of falling back to the
+        // Google Maps default (which is what was hiding the seller
+        // pins on the customer Home).
+        onMapReady={fitToMarkers}
         // Tap-to-drop pin for the seller picker. Marker taps go
         // through the per-Marker `onPress` and never reach this
         // handler (react-native-maps swallows the event when a
@@ -424,7 +544,7 @@ export function NearbySellersMap({
         minDelta={0.01}
         maxDelta={0.6}
       >
-        {finiteMarkers.map((m) => {
+        {clusteredMarkers.map((m) => {
           const isSelected = selectedId === m.id || m.selected;
           // Bolt-lite richer label: business name on top, open/closed
           // pill underneath. Falls back to the legacy single-line
@@ -435,10 +555,15 @@ export function NearbySellersMap({
           // Snap out-of-bounds markers (e.g. legacy Dar es Salaam
           // seed rows) onto Unguja so the pin is visible on the map
           // instead of hanging in the ocean. The clamp uses the same
-          // helper the tap-to-drop surface relies on.
+          // helper the tap-to-drop surface relies on. We use the
+          // offset render coord when one was assigned by the cluster
+          // helper so two sellers sharing the same GPS point render
+          // side-by-side instead of stacking into a single invisible
+          // pin.
+          const renderCoord = m._renderCoord ?? { lat: m.lat, lng: m.lng };
           const pinCoord = clampCoordToUnguja({
-            latitude: m.lat,
-            longitude: m.lng,
+            latitude: renderCoord.lat,
+            longitude: renderCoord.lng,
           });
           // Per-seller identity color, hashed from id when no explicit
           // override. Same seller → same color on every map surface.
