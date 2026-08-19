@@ -209,8 +209,8 @@ function seededOrderBody(customer, seller, note) {
     items: [
       {
         productId: "1",
-        productName: "LPG Cylinder Refill",
-        size: "6kg",
+        productName: "Oryx Gas",
+        size: "6 kg",
         quantity: 1,
         unitPrice: 18000,
       },
@@ -346,17 +346,17 @@ async function main() {
   assert(gaspro.sellerId === "2",
     `GasPro sellerId is "2" (got: ${gaspro && gaspro.sellerId})`);
   assert(gaspro.openNow === true, "GasPro is openNow");
-  assert(Array.isArray(gaspro.availableSizes) && gaspro.availableSizes.includes("6kg"),
-    "GasPro availableSizes includes 6kg");
+  assert(Array.isArray(gaspro.availableSizes) && gaspro.availableSizes.includes("6 kg"),
+    "GasPro availableSizes includes 6 kg");
 
   const products = (await http("GET", "/api/products")).data;
   assert(Array.isArray(products) && products.length >= 5,
     `GET /api/products returns ≥5 products (got: ${products.length})`);
   const sixKg = products.find(
-    (p) => p.sellerId === "2" && p.size === "6kg" && p.category === "refill",
+    (p) => p.sellerId === "2" && p.size === "6 kg" && p.category === "refill",
   );
-  assert(!!sixKg && sixKg.id === "1", "GasPro 6kg refill is product id 1");
-  assert(sixKg.stock > 0, "GasPro 6kg refill has stock > 0");
+  assert(!!sixKg && sixKg.id === "1", "GasPro 6 kg refill is product id 1");
+  assert(sixKg.stock > 0, "GasPro 6 kg refill has stock > 0");
 
   const productsForGaspro = (await http("GET", "/api/products?sellerId=2")).data;
   assert(productsForGaspro.every((p) => p.sellerId === "2"),
@@ -463,13 +463,13 @@ async function main() {
       items: [
         {
           productId: "p1",
-          productName: "LPG 6kg Refill",
-          size: "6kg",
+          productName: "Oryx Gas",
+          size: "6 kg",
           quantity: 1,
-          unitPrice: 3000,
+          unitPrice: 18000,
         },
       ],
-      total: 3000,
+      total: 18000,
       phone: "+255700000001",
       deliveryLocation: { address: "1 Main St", lat: -1.286, lng: 36.817 },
       notes: "E2E test order",
@@ -516,9 +516,9 @@ async function main() {
         sellerId: seller.user.id,
         sellerName: seller.user.fullName,
         items: [
-          { productId: "p1", productName: "LPG 6kg", size: "6kg", quantity: 1, unitPrice: 3000 },
+          { productId: "p1", productName: "Oryx Gas", size: "6 kg", quantity: 1, unitPrice: 18000 },
         ],
-        total: 3000,
+        total: 18000,
         phone: "+255700000001",
         deliveryLocation: { address: "1 Main St" },
       },
@@ -720,9 +720,9 @@ async function main() {
       sellerId: seller.user.id,
       sellerName: seller.user.fullName,
       items: [
-        { productId: "p1", productName: "LPG 6kg", size: "6kg", quantity: 1, unitPrice: 3000 },
+        { productId: "p1", productName: "Oryx Gas", size: "6 kg", quantity: 1, unitPrice: 18000 },
       ],
-      total: 3000,
+      total: 18000,
       phone: "+255700000001",
       deliveryLocation: { address: "1 Main St" },
     },
@@ -749,9 +749,9 @@ async function main() {
       sellerId: seller.user.id,
       sellerName: seller.user.fullName,
       items: [
-        { productId: "p1", productName: "LPG 6kg", size: "6kg", quantity: 1, unitPrice: 3000 },
+        { productId: "p1", productName: "Oryx Gas", size: "6 kg", quantity: 1, unitPrice: 18000 },
       ],
-      total: 3000,
+      total: 18000,
       phone: "+255700000001",
       deliveryLocation: { address: "1 Main St" },
     },
@@ -797,7 +797,7 @@ async function main() {
       sellerId: "2",
       sellerName: gasproLogin.user.fullName,
       items: [
-        { productId: "1", productName: "LPG Cylinder Refill", size: "6kg", quantity: 1, unitPrice: 18000 },
+        { productId: "1", productName: "Oryx Gas", size: "6 kg", quantity: 1, unitPrice: 18000 },
       ],
       total: 18000,
       phone: "+255700000001",

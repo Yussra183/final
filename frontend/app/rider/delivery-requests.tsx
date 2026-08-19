@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -8,6 +8,7 @@ import {
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useStore } from "../../src/store/StoreContext";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
@@ -20,6 +21,8 @@ import { EmptyState } from "../../src/components/EmptyState";
 import { AppButton } from "../../src/components/AppButton";
 import { useRiderVerificationStatus } from "../../src/hooks/useRiderVerificationStatus";
 import { useRiderLock } from "../../src/hooks/useRiderLock";
+import { OrdersApi } from "../../src/api/endpoints";
+import { ApiError } from "../../src/api/errors";
 import {
   formatCurrency,
   orderStatusLabel,
@@ -28,6 +31,8 @@ import {
 import { OrderServiceError } from "../../src/services/orderErrors";
 
 type Tab = "available" | "accepted" | "active";
+
+const AVAILABLE_REFRESH_MS = 15000;
 
 export default function DeliveryRequests() {
   // Single page — no wrapper. The lock banner is rendered inline at the
@@ -38,7 +43,6 @@ export default function DeliveryRequests() {
     session,
     orders,
     getOrdersForUser,
-    availableOrdersForUser,
     claimOrder,
   } = useStore();
   const user = session!.user;
@@ -46,24 +50,59 @@ export default function DeliveryRequests() {
   const { Banner, Modal, onLockedAction, isApproved } = useRiderLock();
 
   const [tab, setTab] = useState<Tab>("available");
+  const [available, setAvailable] = useState<typeof orders>([]);
+  const [availableError, setAvailableError] = useState<string | null>(null);
 
-  // Orders accepted by sellers, awaiting a rider. The store layer
-  // already filters out anything the actor can't claim (e.g. orders
-  // already assigned to someone else).
-  const available = useMemo(() => {
-    if (!verification.isApproved) return [];
-    const next = availableOrdersForUser();
+  const refreshAvailable = useCallback(async () => {
+    if (!verification.isApproved) {
+      setAvailable([]);
+      setAvailableError(null);
+      return;
+    }
+    try {
+      setAvailable(await OrdersApi.availableForRiders());
+      setAvailableError(null);
+    } catch (err) {
+      setAvailable([]);
+      setAvailableError(
+        err instanceof ApiError
+          ? err.message
+          : (err as Error)?.message ?? "Could not load available deliveries.",
+      );
+    }
+  }, [verification.isApproved]);
+
+  useEffect(() => {
+    refreshAvailable();
+  }, [refreshAvailable]);
+
+  useEffect(() => {
+    if (!verification.isApproved) return;
+    const timer = setInterval(() => {
+      refreshAvailable().catch(() => {
+        /* surfaced in local state */
+      });
+    }, AVAILABLE_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [refreshAvailable, verification.isApproved]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshAvailable().catch(() => {
+        /* surfaced in local state */
+      });
+    }, [refreshAvailable]),
+  );
+
+  const availableList = useMemo(() => {
     if (__DEV__) {
       console.info(
         "[RIDER_ORDERS][MEMO_AVAILABLE]",
-        JSON.stringify({ count: next.length, orderIds: next.map((o) => o.id) }),
+        JSON.stringify({ count: available.length, orderIds: available.map((o) => o.id) }),
       );
     }
-    return next;
-    // `availableOrdersForUser` is stable per-render via `useCallback`,
-    // but we list its dep so React's lint sees the relationship.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableOrdersForUser, session, verification.isApproved /* re-derive on store refresh */]);
+    return available;
+  }, [available]);
 
   // Orders already assigned to this rider but not yet picked up.
   const accepted = useMemo(() => {
@@ -101,7 +140,7 @@ export default function DeliveryRequests() {
   }, [user.id, getOrdersForUser]);
 
   const listData =
-    tab === "available" ? available : tab === "accepted" ? accepted : active;
+    tab === "available" ? availableList : tab === "accepted" ? accepted : active;
 
   if (__DEV__) {
     console.info(
@@ -119,7 +158,7 @@ export default function DeliveryRequests() {
   }
 
   function countForTab(k: Tab): number {
-    if (k === "available") return available.length;
+    if (k === "available") return availableList.length;
     if (k === "accepted") return accepted.length;
     return active.length;
   }
@@ -175,7 +214,10 @@ export default function DeliveryRequests() {
               <EmptyState
                 icon="📭"
                 title="No available orders"
-                message="When a seller accepts an order, it will appear here. Closest riders see it first."
+                message={
+                  availableError ??
+                  "When a seller marks an order ready for pickup, it will appear here for available riders."
+                }
               />
             ) : tab === "accepted" ? (
               <EmptyState
@@ -237,6 +279,7 @@ export default function DeliveryRequests() {
                         }
                         try {
                           await claimOrder(item.id);
+                          await refreshAvailable();
                           Alert.alert(
                             "Accepted",
                             `Order #${item.id.slice(-4)} added to your list.`,
@@ -248,7 +291,7 @@ export default function DeliveryRequests() {
                               : undefined;
                           const message =
                             code === "RIDER_BUSY"
-                              ? "Another rider got there first."
+                              ? "This order has already been taken by another rider."
                               : code === "RIDER_OFFLINE"
                                 ? "You're not marked as available right now."
                                 : (err as Error)?.message ??

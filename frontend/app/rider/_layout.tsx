@@ -53,7 +53,6 @@ const RIDER_ROUTES: RiderRoute[] = [
   { key: "active-delivery", label: "Active Delivery", icon: "navigate-outline", path: "/rider/active-delivery", requiresApproval: true },
   { key: "delivery-history", label: "Delivery History", icon: "time-outline", path: "/rider/delivery-history", requiresApproval: true },
   { key: "earnings", label: "Earnings", icon: "cash-outline", path: "/rider/earnings", requiresApproval: true },
-  { key: "my-team", label: "My Team", icon: "people-outline", path: "/rider/my-team", requiresApproval: true },
   { key: "licences", label: "Licences", icon: "shield-checkmark-outline", path: "/rider/licences" },
   { key: "safety-guidelines", label: "Safety Guidelines", icon: "shield-checkmark-outline", path: "/rider/safety-guidelines" },
   { key: "profile", label: "Profile", icon: "person-circle-outline", path: "/rider/profile" },
@@ -65,7 +64,6 @@ const ICON_MAP: Record<string, keyof typeof Ionicons.glyphMap> = {
   "navigate-outline": "navigate-outline",
   "time-outline": "time-outline",
   "cash-outline": "cash-outline",
-  "people-outline": "people-outline",
   "shield-checkmark-outline": "shield-checkmark-outline",
   "person-circle-outline": "person-circle-outline",
 };

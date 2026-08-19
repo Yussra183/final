@@ -410,8 +410,8 @@ export default function SellerDelivery() {
       return {
         order,
         customer,
-        gasType: order.items[0]?.productName ?? "LPG Refill",
-        cylinderSize: order.items[0]?.size ?? "13kg",
+        gasType: order.items[0]?.productName ?? "Gas Order",
+        cylinderSize: order.items[0]?.size ?? "6 kg",
         quantity: order.items[0]?.quantity ?? 1,
       };
     });

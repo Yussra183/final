@@ -9,10 +9,11 @@
  *   2. In flight   — every row currently in PENDING / ACCEPTED /
  *      PREPARING / DISPATCHED, with a "Cancel" action while still
  *      cancellable.
- *   3. Awaiting receipt — every DELIVERED row that needs the seller
+ *   3. Awaiting receipt — every DISPATCHED row that needs the seller
  *      to tap "Confirm receipt". The backend transitions the row to
- *      RECEIVED and replenishes the matching product stock in the
- *      same transaction (see {@code SupplyOrderService.updateStatus}).
+ *      DELIVERED (terminal) and replenishes the matching product
+ *      stock in the same transaction (see
+ *      {@code SupplyOrderService.updateStatus}).
  *
  * Cancelled + rejected rows collapse into a history list at the bottom.
  */
@@ -323,8 +324,12 @@ function RestockRow({
 }
 
 function AwaitingReceiptSection() {
+  // The supplier marks the order DISPATCHED when it leaves their
+  // warehouse; the seller then confirms physical receipt, which
+  // transitions the row to DELIVERED and credits inventory in one
+  // server-side transaction.
   const items = useMyRestock().filter(
-    (r) => normalizeRestockStatus(r.status) === "delivered",
+    (r) => normalizeRestockStatus(r.status) === "dispatched",
   );
   const { updateRestockStatus } = useStore();
 
@@ -337,7 +342,7 @@ function AwaitingReceiptSection() {
         { text: "Cancel", style: "cancel" },
         {
           text: "Confirm",
-          onPress: () => updateRestockStatus(r.id, { status: "received" }),
+          onPress: () => updateRestockStatus(r.id, { status: "delivered" }),
         },
       ],
     );
@@ -372,8 +377,9 @@ function InFlightSection() {
     return (
       s === "pending" ||
       s === "accepted" ||
-      s === "preparing" ||
-      s === "dispatched"
+      s === "preparing"
+      // DISPATCHED is shown in the "Awaiting your receipt" section
+      // above so the seller can confirm receipt with one tap.
     );
   });
   const { updateRestockStatus } = useStore();
@@ -430,7 +436,7 @@ function InFlightSection() {
 function HistorySection() {
   const items = useMyRestock().filter((r) => {
     const s = normalizeRestockStatus(r.status);
-    return s === "received" || s === "rejected" || s === "cancelled";
+    return s === "delivered" || s === "received" || s === "rejected" || s === "cancelled";
   });
 
   if (items.length === 0) {
@@ -441,7 +447,7 @@ function HistorySection() {
           <EmptyState
             icon="📜"
             title="No history yet"
-            message="Completed, rejected, and cancelled requests appear here."
+            message="Delivered, rejected, and cancelled requests appear here."
           />
         </View>
       </View>

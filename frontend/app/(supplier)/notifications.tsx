@@ -2,9 +2,20 @@
  * Notifications — supplier-side feed. Combines notifications that the
  * logistics module generated (trip started, seller alerted, near your
  * shop, trip completed) with any admin/system alerts.
+ *
+ * Tapping a notification:
+ *   1. Marks it read (so the dashboard chrome drops the red dot).
+ *   2. If `type === "supply"` AND the row still belongs to this
+ *      supplier, deep-links to the supply-order details screen
+ *      (`/(supplier)/restock/[id]`) using `data.supplyOrderId`. This
+ *      is the critical path that turns the supplier notification into
+ *      an actionable next step — without it the flow stops at the
+ *      notification feed and the supplier cannot accept/reject the
+ *      order without first hunting for it in the Restock list.
  */
-import React from "react";
+import React, { useCallback } from "react";
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useStore } from "../../src/store/StoreContext";
@@ -15,10 +26,60 @@ import { SidebarLayout } from "../../src/components/SidebarLayout";
 import { EmptyState } from "../../src/components/EmptyState";
 import { NotificationItem } from "../../constants/types";
 
+/**
+ * Parse a notification's `data` JSON envelope and return the
+ * supply-order id, if the notification is actionable on a supply
+ * order. Returns `null` for anything else so the caller can fall
+ * through to the mark-read-only path.
+ */
+function parseSupplyOrderId(data?: string | null): number | null {
+  if (!data) return null;
+  try {
+    const parsed = JSON.parse(data) as { supplyOrderId?: unknown };
+    if (parsed && typeof parsed.supplyOrderId === "string") {
+      const n = Number(parsed.supplyOrderId);
+      return Number.isFinite(n) ? n : null;
+    }
+    if (parsed && typeof parsed.supplyOrderId === "number") {
+      return parsed.supplyOrderId;
+    }
+  } catch {
+    // Malformed JSON — treat as non-actionable.
+  }
+  return null;
+}
+
 export default function SupplierNotifications() {
+  const router = useRouter();
   const { session, getNotificationsForUser, markNotificationRead } = useStore();
   const user = session?.user!;
   const items = getNotificationsForUser(user.id);
+
+  /**
+   * Single tap handler — does mark-read + (optionally) navigation.
+   * Splitting the two keeps the UX consistent: every tap clears the
+   * unread dot, but only actionable notifications navigate away.
+   */
+  const openNotification = useCallback(
+    (n: NotificationItem) => {
+      if (!n.read) {
+        void markNotificationRead(n.id);
+      }
+      // "supply" = the Seller↔Supplier restock flow. The whole point of
+      // the notification is to drive the supplier to the supply-order
+      // details page so they can act on it.
+      if (n.type === "supply" && n.data) {
+        const id = parseSupplyOrderId(n.data);
+        if (id != null) {
+          router.push({
+            pathname: "/(supplier)/restock/[id]",
+            params: { id: String(id) },
+          } as any);
+        }
+      }
+    },
+    [markNotificationRead, router],
+  );
 
   return (
     <SidebarLayout>
@@ -47,7 +108,9 @@ export default function SupplierNotifications() {
             keyExtractor={(i) => i.id}
             contentContainerStyle={{ padding: Spacing.lg, paddingBottom: Spacing.xxl }}
             ItemSeparatorComponent={() => <View style={{ height: Spacing.sm }} />}
-            renderItem={({ item }) => <NotificationRow item={item} onPress={() => markNotificationRead(item.id)} />}
+            renderItem={({ item }) => (
+              <NotificationRow item={item} onPress={() => openNotification(item)} />
+            )}
           />
         )}
       </SafeAreaView>
@@ -58,6 +121,8 @@ export default function SupplierNotifications() {
 function NotificationRow({ item, onPress }: { item: NotificationItem; onPress: () => void }) {
   const tone = (() => {
     switch (item.type) {
+      case "supply":
+        return { color: Colors.supplier, icon: "cloud-download-outline" as const };
       case "near_arrival":
         return { color: Colors.accent, icon: "location-outline" as const };
       case "trip_started":

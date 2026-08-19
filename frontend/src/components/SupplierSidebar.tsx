@@ -59,7 +59,7 @@ export const SUPPLIER_SIDEBAR_ROUTES: SupplierSidebarRoute[] = [
 
   // Legacy — kept from the original restock-requests dashboard, now a
   // single tabbed page that surfaces Home / Requests / Deliveries.
-  { key: "restock", label: "Restock", icon: "📥", path: "/(supplier)/restock", section: "legacy", requiresApproval: true },
+  { key: "restock", label: "Restock Requests", icon: "📥", path: "/(supplier)/restock", section: "legacy", requiresApproval: true },
   { key: "guide", label: "Guide", icon: "📘", path: "/(supplier)/guide", section: "legacy" },
 ];
 

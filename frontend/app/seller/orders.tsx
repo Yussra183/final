@@ -12,11 +12,13 @@
  * actions wired through `useStore()` so the data layer stays the only
  * thing to swap when the backend lands.
  */
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   Alert,
   Modal,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -26,6 +28,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { SellerHeader } from "../../src/components/SellerHeader";
 import { Card } from "../../src/components/Card";
@@ -41,6 +44,7 @@ import {
 import { Order, OrderStatus } from "../../constants/types";
 
 type TabKey = "new" | "accepted" | "preparing" | "delivered" | "rejected";
+const ORDERS_REFRESH_MS = 15000;
 
 interface TabDef {
   key: TabKey;
@@ -408,11 +412,14 @@ function RejectReasonModal({
 }
 
 export default function SellerOrders() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ orderId?: string }>();
   const {
     session,
     getOrdersForUser,
     acceptOrder,
     rejectOrder,
+    refresh,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<TabKey>("new");
@@ -420,6 +427,7 @@ export default function SellerOrders() {
   const [rejectForOrder, setRejectForOrder] = useState<Order | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const user = session?.user;
   const allOrders = useMemo(
@@ -446,6 +454,44 @@ export default function SellerOrders() {
     const tab = TABS.find((t) => t.key === activeTab)!;
     return allOrders.filter((o) => tab.statuses.includes(o.status));
   }, [activeTab, allOrders]);
+
+  const refreshOrders = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh().catch(() => {
+        /* non-blocking */
+      });
+    }, [refresh]),
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      refresh().catch(() => {
+        /* non-blocking */
+      });
+    }, ORDERS_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  useEffect(() => {
+    const orderId = typeof params.orderId === "string" ? params.orderId : "";
+    if (!orderId) return;
+    const target = allOrders.find((o) => o.id === orderId);
+    if (!target) return;
+    const targetTab =
+      TABS.find((tab) => tab.statuses.includes(target.status))?.key ?? "new";
+    setActiveTab(targetTab);
+    setDetailsOrder(target);
+    router.setParams({ orderId: undefined as any });
+  }, [allOrders, params.orderId, router]);
 
   // ---- Actions ------------------------------------------------------
   const onAccept = (o: Order) => {
@@ -503,7 +549,12 @@ export default function SellerOrders() {
 
       <TabBar active={activeTab} onChange={setActiveTab} counts={counts} />
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={refreshOrders} />
+        }
+      >
         {filtered.length === 0 ? (
           <EmptyState
             icon={

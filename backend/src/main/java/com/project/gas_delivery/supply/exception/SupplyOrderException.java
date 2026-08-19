@@ -16,7 +16,10 @@ public class SupplyOrderException extends RuntimeException {
         ILLEGAL_TRANSITION,
         REASON_REQUIRED,
         SUPPLIER_NOT_APPROVED,
-        SELF_REQUEST
+        SELF_REQUEST,
+        /** Raised when the seller requests a gas brand / size combination that
+         *  the canonical {@code GasCatalog} does not list. */
+        INVALID_GAS_COMBINATION
     }
 
     private final Kind kind;

@@ -151,6 +151,14 @@ export default function SellerLayout() {
         options={businessOptions("Inventory", "Inventory", "cube-outline")}
       />
       <TypedDrawer.Screen
+        name="restock"
+        options={businessOptions(
+          "Request Gas (Restock)",
+          "Request Gas from Supplier",
+          "cloud-download-outline",
+        )}
+      />
+      <TypedDrawer.Screen
         name="delivery"
         options={businessOptions(
           "Delivery Tracking",

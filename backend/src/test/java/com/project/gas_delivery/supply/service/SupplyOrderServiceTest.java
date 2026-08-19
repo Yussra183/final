@@ -49,14 +49,15 @@ import static org.mockito.Mockito.when;
  * <ol>
  *   <li>Seller-only create.</li>
  *   <li>Seller cannot raise against an unapproved supplier.</li>
- *   <li>Supplier ACCEPTED → PREPARING → DISPATCHED → DELIVERED → seller
- *       RECEIVED is legal at each step.</li>
- *   <li>SELLER cannot deliver (illegal transition).</li>
- *   <li>SUPPLIER cannot RECEIVE (illegal transition).</li>
+ *   <li>Supplier ACCEPTED → PREPARING → DISPATCHED is legal, then the
+ *       supplier's job is done. The seller transitions
+ *       DISPATCHED → DELIVERED (terminal) which credits inventory.</li>
+ *   <li>SELLER CAN mark DELIVERED (the seller's own transition).</li>
+ *   <li>SUPPLIER cannot mark DELIVERED — only the seller can.</li>
  *   <li>REJECTED requires a non-empty reason.</li>
- *   <li>RECEIVED increments the matching product's stock by exactly
+ *   <li>DELIVERED increments the matching product's stock by exactly
  *       {@code quantity} (via {@link StockService#replenishForSupplyReceipt}).</li>
- *   <li>RECEIVED with no {@code productId} does not touch stock.</li>
+ *   <li>DELIVERED with no {@code productId} does not touch stock.</li>
  *   <li>Duplicate notifications for the same transition are suppressed
  *       in a session.</li>
  * </ol>
@@ -115,7 +116,7 @@ class SupplyOrderServiceTest {
 
     private ProductEntity product(Long id, long sellerId, int stock, int threshold) {
         return new ProductEntity(
-                sellerId, "LPG " + id, "13kg", BigDecimal.valueOf(32_000),
+                sellerId, "Oryx Gas", "6 kg", BigDecimal.valueOf(32_000),
                 stock, threshold, "refill", "desc", "🔥");
     }
 
@@ -125,7 +126,7 @@ class SupplyOrderServiceTest {
         SupplyOrderEntity e = new SupplyOrderEntity(
                 sellerId, "Seller-" + sellerId,
                 supplierId, supplierId == 0 ? null : "Supplier-" + supplierId,
-                "LPG 13kg", "13kg", quantity,
+                "Oryx Gas", "6 kg", quantity,
                 productId == 0 ? null : productId,
                 "notes");
         // supplierId == 0 means "no supplier assigned" — nullify after
@@ -168,8 +169,8 @@ class SupplyOrderServiceTest {
     @Test
     void create_onlySellerMayRaise() {
         CreateSupplyOrderRequest req = new CreateSupplyOrderRequest();
-        req.setProductName("LPG 13kg");
-        req.setSize("13kg");
+        req.setProductName("Oryx Gas");
+        req.setSize("6 kg");
         req.setQuantity(10);
 
         assertThatThrownBy(() ->
@@ -181,8 +182,8 @@ class SupplyOrderServiceTest {
     @Test
     void create_rejectsUnapprovedSupplier() {
         CreateSupplyOrderRequest req = new CreateSupplyOrderRequest();
-        req.setProductName("LPG 13kg");
-        req.setSize("13kg");
+        req.setProductName("Oryx Gas");
+        req.setSize("6 kg");
         req.setQuantity(10);
         req.setSupplierId(99L);
         when(userRepository.findById(99L)).thenReturn(Optional.of(supplier(99L, "Acme Gas")));
@@ -196,10 +197,65 @@ class SupplyOrderServiceTest {
     }
 
     @Test
+    void create_rejectsInvalidBrandSizeCombination_oryx15kg() {
+        // Oryx Gas has no 15 kg size — the canonical GasCatalog only
+        // lists 3 kg / 6 kg / 12.5 kg / 38 kg for Oryx. A seller
+        // attempting to raise a restock with the wrong size must be
+        // rejected with INVALID_GAS_COMBINATION.
+        CreateSupplyOrderRequest req = new CreateSupplyOrderRequest();
+        req.setProductName("Oryx Gas");
+        req.setSize("15 kg");
+        req.setQuantity(10);
+
+        assertThatThrownBy(() ->
+                service.create(1L, Role.SELLER, req))
+                .isInstanceOf(SupplyOrderException.class)
+                .extracting("kind")
+                .isEqualTo(SupplyOrderException.Kind.INVALID_GAS_COMBINATION);
+    }
+
+    @Test
+    void create_rejectsGenericLPG() {
+        // Bare "LPG" is not in the GasCatalog brand list — the supplier
+        // can't fulfil a generic refill from a specific brand. Reject.
+        CreateSupplyOrderRequest req = new CreateSupplyOrderRequest();
+        req.setProductName("LPG");
+        req.setSize("13 kg");
+        req.setQuantity(5);
+
+        assertThatThrownBy(() ->
+                service.create(1L, Role.SELLER, req))
+                .isInstanceOf(SupplyOrderException.class)
+                .extracting("kind")
+                .isEqualTo(SupplyOrderException.Kind.INVALID_GAS_COMBINATION);
+    }
+
+    @Test
+    void create_acceptsEveryCanonicalBrandSizeCombination() {
+        // Defensive: every entry in the canonical GasCatalog must be
+        // accepted by the create() validator. This is the tripwire
+        // that catches a future brand / size addition from regressing
+        // the catalog's per-brand size table.
+        when(userRepository.findById(1L)).thenReturn(Optional.of(seller(1L, "Bob's Shop")));
+        stubSaveToReturnSameInstance();
+
+        for (com.project.gas_delivery.product.GasCatalog.CatalogEntry entry :
+                com.project.gas_delivery.product.GasCatalog.entries()) {
+            CreateSupplyOrderRequest req = new CreateSupplyOrderRequest();
+            req.setProductName(entry.brand());
+            req.setSize(entry.size());
+            req.setQuantity(1);
+
+            SupplyOrderDto dto = service.create(1L, Role.SELLER, req);
+            assertThat(dto.getStatus()).isEqualTo("pending");
+        }
+    }
+
+    @Test
     void create_persistsRow_andNotifiesAddressedSupplier() {
         CreateSupplyOrderRequest req = new CreateSupplyOrderRequest();
-        req.setProductName("LPG 13kg");
-        req.setSize("13kg");
+        req.setProductName("Oryx Gas");
+        req.setSize("6 kg");
         req.setQuantity(10);
         req.setSupplierId(99L);
         req.setNotes("Please deliver Monday morning");
@@ -224,8 +280,8 @@ class SupplyOrderServiceTest {
     @Test
     void create_withoutSupplierId_createsOpenPoolRow_noNotification() {
         CreateSupplyOrderRequest req = new CreateSupplyOrderRequest();
-        req.setProductName("LPG 13kg");
-        req.setSize("13kg");
+        req.setProductName("Taifa Gas");
+        req.setSize("15 kg");
         req.setQuantity(5);
         when(userRepository.findById(1L)).thenReturn(Optional.of(seller(1L, "Bob's Shop")));
         stubSaveToReturnSameInstance();
@@ -243,11 +299,16 @@ class SupplyOrderServiceTest {
     // -----------------------------------------------------------------
 
     @Test
-    void supplierHappyPath_acceptedToReceived() {
+    void supplierHappyPath_acceptedToDispatched_sellerConfirmsDelivered() {
+        // Diagram-aligned happy path: the supplier stages up through
+        // DISPATCHED, then hands off. The seller — not the supplier —
+        // closes the loop with DELIVERED on physical receipt, which
+        // is also the moment the seller's stock is credited.
         SupplyOrderEntity row = row(100L, 1L, 99L, 10L, 5, SupplyOrderStatus.PENDING);
         stubFind(row);
         stubSaveToReturnSameInstance();
         when(supplierApplicationService.isApproved(99L)).thenReturn(true);
+        when(stockService.replenishForSupplyReceipt(eq(10L), eq(5))).thenReturn(8);
 
         service.updateStatus(100L, Role.SUPPLIER, 99L,
                 updateReq(SupplyOrderStatus.ACCEPTED));
@@ -255,23 +316,43 @@ class SupplyOrderServiceTest {
                 updateReq(SupplyOrderStatus.PREPARING));
         service.updateStatus(100L, Role.SUPPLIER, 99L,
                 updateReq(SupplyOrderStatus.DISPATCHED));
-        service.updateStatus(100L, Role.SUPPLIER, 99L,
-                updateReq(SupplyOrderStatus.DELIVERED));
         service.updateStatus(100L, Role.SELLER, 1L,
-                updateReq(SupplyOrderStatus.RECEIVED));
+                updateReq(SupplyOrderStatus.DELIVERED));
 
-        assertThat(row.getStatus()).isEqualTo(SupplyOrderStatus.RECEIVED);
+        assertThat(row.getStatus()).isEqualTo(SupplyOrderStatus.DELIVERED);
         assertThat(row.getReceivedAt()).isNotNull();
         assertThat(row.getDispatchedAt()).isNotNull();
         assertThat(row.getDeliveredAt()).isNotNull();
+        // The single seller-driven DELIVERED transition must have
+        // replenished the seller's inventory.
+        verify(stockService, times(1)).replenishForSupplyReceipt(10L, 5);
     }
 
     @Test
-    void sellerCannotDeliver() {
+    void sellerCanMarkDelivered_onDispatchedRow() {
+        // Diagram says: SELLER is the one who confirms receipt and
+        // moves DISPATCHED → DELIVERED. This is the seller's own
+        // transition and must succeed.
         SupplyOrderEntity row = row(101L, 1L, 99L, 10L, 5, SupplyOrderStatus.DISPATCHED);
         stubFind(row);
+        stubSaveToReturnSameInstance();
+        when(stockService.replenishForSupplyReceipt(eq(10L), eq(5))).thenReturn(8);
 
-        assertThatThrownBy(() -> service.updateStatus(101L, Role.SELLER, 1L,
+        SupplyOrderDto dto = service.updateStatus(101L, Role.SELLER, 1L,
+                updateReq(SupplyOrderStatus.DELIVERED));
+
+        assertThat(dto.getStatus()).isEqualTo("delivered");
+        verify(stockService, times(1)).replenishForSupplyReceipt(10L, 5);
+    }
+
+    @Test
+    void supplierCannotMarkDelivered() {
+        // Per the diagram, the supplier stops at DISPATCHED. The
+        // supplier must NOT be allowed to flip DISPATCHED → DELIVERED.
+        SupplyOrderEntity row = row(102L, 1L, 99L, 10L, 5, SupplyOrderStatus.DISPATCHED);
+        stubFind(row);
+
+        assertThatThrownBy(() -> service.updateStatus(102L, Role.SUPPLIER, 99L,
                 updateReq(SupplyOrderStatus.DELIVERED)))
                 .isInstanceOf(SupplyOrderException.class)
                 .extracting("kind")
@@ -279,20 +360,10 @@ class SupplyOrderServiceTest {
     }
 
     @Test
-    void supplierCannotReceive() {
-        SupplyOrderEntity row = row(102L, 1L, 99L, 10L, 5, SupplyOrderStatus.DELIVERED);
-        stubFind(row);
-
-        assertThatThrownBy(() -> service.updateStatus(102L, Role.SUPPLIER, 99L,
-                updateReq(SupplyOrderStatus.RECEIVED)))
-                .isInstanceOf(SupplyOrderException.class)
-                .extracting("kind")
-                .isEqualTo(SupplyOrderException.Kind.ILLEGAL_TRANSITION);
-    }
-
-    @Test
     void terminalStateRejectsAllTransitions() {
-        SupplyOrderEntity row = row(103L, 1L, 99L, 10L, 5, SupplyOrderStatus.RECEIVED);
+        // DELIVERED is now the seller's terminal state. No further
+        // transitions are legal.
+        SupplyOrderEntity row = row(103L, 1L, 99L, 10L, 5, SupplyOrderStatus.DELIVERED);
         stubFind(row);
 
         assertThatThrownBy(() -> service.updateStatus(103L, Role.SUPPLIER, 99L,
@@ -359,6 +430,32 @@ class SupplyOrderServiceTest {
     }
 
     @Test
+    void sellerB_cannotRead_sellerA_supplyOrder() {
+        // Seller A's order (id 107, owned by seller 1) must be
+        // inaccessible to seller B (id 2).
+        SupplyOrderEntity row = row(107L, 1L, 99L, 10L, 5, SupplyOrderStatus.PENDING);
+        stubFind(row);
+
+        assertThatThrownBy(() -> service.getById(107L, Role.SELLER, 2L))
+                .isInstanceOf(SupplyOrderException.class)
+                .extracting("kind").isEqualTo(SupplyOrderException.Kind.FORBIDDEN);
+    }
+
+    @Test
+    void supplierB_cannotModify_supplierA_supplyOrder() {
+        // Supplier A's accepted order must be inaccessible to supplier
+        // B for any state transition.
+        SupplyOrderEntity row = row(108L, 1L, 99L, 10L, 5, SupplyOrderStatus.PENDING);
+        stubFind(row);
+
+        // Wrong supplier trying to accept.
+        assertThatThrownBy(() -> service.updateStatus(108L, Role.SUPPLIER, 50L,
+                updateReq(SupplyOrderStatus.ACCEPTED)))
+                .isInstanceOf(SupplyOrderException.class)
+                .extracting("kind").isEqualTo(SupplyOrderException.Kind.FORBIDDEN);
+    }
+
+    @Test
     void idempotentNoOp_whenStatusUnchanged() {
         SupplyOrderEntity row = row(108L, 1L, 99L, 10L, 5, SupplyOrderStatus.PENDING);
         stubFind(row);
@@ -372,34 +469,80 @@ class SupplyOrderServiceTest {
     }
 
     // -----------------------------------------------------------------
-    // receipt → stock update
+    // delivered → stock update
     // -----------------------------------------------------------------
 
     @Test
-    void received_replenishesProductStockExactlyOnce() {
-        SupplyOrderEntity row = row(109L, 1L, 99L, 10L, 7, SupplyOrderStatus.DELIVERED);
+    void delivered_replenishesProductStockExactlyOnce() {
+        // SELLER transitions DISPATCHED → DELIVERED on physical
+        // receipt; the StockService is the single inventory-credits
+        // path.
+        SupplyOrderEntity row = row(109L, 1L, 99L, 10L, 7, SupplyOrderStatus.DISPATCHED);
         stubFind(row);
         stubSaveToReturnSameInstance();
-        when(productRepository.findById(10L)).thenReturn(Optional.of(product(10L, 1L, 3, 5)));
-        when(productRepository.incrementStock(eq(10L), eq(7))).thenReturn(1);
         when(stockService.replenishForSupplyReceipt(eq(10L), eq(7))).thenReturn(10);
 
         service.updateStatus(109L, Role.SELLER, 1L,
-                updateReq(SupplyOrderStatus.RECEIVED));
+                updateReq(SupplyOrderStatus.DELIVERED));
 
         verify(stockService, times(1)).replenishForSupplyReceipt(10L, 7);
     }
 
     @Test
-    void received_withoutProductId_skipsStockUpdate() {
-        SupplyOrderEntity row = row(110L, 1L, 99L, 0L, 7, SupplyOrderStatus.DELIVERED);
+    void delivered_isIdempotent_duplicateCallDoesNotDoubleCredit() {
+        // First DELIVERED transitions DISPATCHED → DELIVERED and
+        // credits the seller's stock. A second DELIVERED (e.g. a fast
+        // double-click, or a network retry) is treated as a no-op so
+        // the stock isn't double-credited — the request short-
+        // circuits because the row is already in the requested
+        // terminal state.
+        SupplyOrderEntity row = row(113L, 1L, 99L, 10L, 7, SupplyOrderStatus.DISPATCHED);
+        stubFind(row);
+        stubSaveToReturnSameInstance();
+        when(stockService.replenishForSupplyReceipt(eq(10L), eq(7))).thenReturn(10);
+
+        service.updateStatus(113L, Role.SELLER, 1L,
+                updateReq(SupplyOrderStatus.DELIVERED));
+
+        // Second DELIVERED on the same row is a no-op (from == to).
+        SupplyOrderDto second = service.updateStatus(113L, Role.SELLER, 1L,
+                updateReq(SupplyOrderStatus.DELIVERED));
+        assertThat(second.getStatus()).isEqualTo("delivered");
+
+        // Stock is incremented exactly once across both calls.
+        verify(stockService, times(1)).replenishForSupplyReceipt(10L, 7);
+    }
+
+    @Test
+    void stockIsNotUpdatedBeforeDelivered() {
+        // Supplier transitions (PENDING → ACCEPTED → PREPARING →
+        // DISPATCHED) must not mutate the seller's stock. Only the
+        // seller's DELIVERED confirmation does.
+        SupplyOrderEntity row = row(114L, 1L, 99L, 10L, 7, SupplyOrderStatus.PENDING);
+        stubFind(row);
+        stubSaveToReturnSameInstance();
+        when(supplierApplicationService.isApproved(99L)).thenReturn(true);
+
+        service.updateStatus(114L, Role.SUPPLIER, 99L,
+                updateReq(SupplyOrderStatus.ACCEPTED));
+        service.updateStatus(114L, Role.SUPPLIER, 99L,
+                updateReq(SupplyOrderStatus.PREPARING));
+        service.updateStatus(114L, Role.SUPPLIER, 99L,
+                updateReq(SupplyOrderStatus.DISPATCHED));
+
+        verify(stockService, never()).replenishForSupplyReceipt(anyLong(), anyInt());
+    }
+
+    @Test
+    void delivered_withoutProductId_skipsStockUpdate() {
+        SupplyOrderEntity row = row(110L, 1L, 99L, 0L, 7, SupplyOrderStatus.DISPATCHED);
         // product_id == 0 → entity stored null via the helper.
         row.setProductId(null);
         stubFind(row);
         stubSaveToReturnSameInstance();
 
         service.updateStatus(110L, Role.SELLER, 1L,
-                updateReq(SupplyOrderStatus.RECEIVED));
+                updateReq(SupplyOrderStatus.DELIVERED));
 
         verify(stockService, never()).replenishForSupplyReceipt(anyLong(), anyInt());
     }
@@ -424,6 +567,51 @@ class SupplyOrderServiceTest {
                 dataCaptor.capture());
         assertThat(dataCaptor.getValue()).contains("rejected");
         assertThat(dataCaptor.getValue()).contains("out of stock until next week");
+    }
+
+    @Test
+    void supplierTransitions_eachNotifySeller() {
+        // Verify the seller-side notifications fire on each supplier
+        // transition: ACCEPTED → "Supply order accepted", PREPARING →
+        // "Supply order is being prepared", DISPATCHED → "Supply order
+        // dispatched". The supplier does NOT notify the seller on
+        // DELIVERED — only the seller does that to themselves.
+        SupplyOrderEntity row = row(115L, 1L, 99L, 10L, 5, SupplyOrderStatus.PENDING);
+        stubFind(row);
+        when(supplierApplicationService.isApproved(99L)).thenReturn(true);
+        stubSaveToReturnSameInstance();
+
+        service.updateStatus(115L, Role.SUPPLIER, 99L,
+                updateReq(SupplyOrderStatus.ACCEPTED));
+        service.updateStatus(115L, Role.SUPPLIER, 99L,
+                updateReq(SupplyOrderStatus.PREPARING));
+        service.updateStatus(115L, Role.SUPPLIER, 99L,
+                updateReq(SupplyOrderStatus.DISPATCHED));
+
+        verify(notificationService, times(1)).notify(
+                eq(1L), eq("supply"), eq("Supply order accepted"), anyString(), anyString());
+        verify(notificationService, times(1)).notify(
+                eq(1L), eq("supply"), eq("Supply order is being prepared"), anyString(), anyString());
+        verify(notificationService, times(1)).notify(
+                eq(1L), eq("supply"), eq("Supply order dispatched"), anyString(), anyString());
+    }
+
+    @Test
+    void sellerConfirmingDelivered_notifiesSupplier() {
+        // The seller is the one who confirms receipt (DISPATCHED →
+        // DELIVERED). The supplier is notified that the restock is
+        // fully closed and the seller's stock is now credited.
+        SupplyOrderEntity row = row(116L, 1L, 99L, 10L, 5, SupplyOrderStatus.DISPATCHED);
+        stubFind(row);
+        stubSaveToReturnSameInstance();
+        when(stockService.replenishForSupplyReceipt(eq(10L), eq(5))).thenReturn(8);
+
+        service.updateStatus(116L, Role.SELLER, 1L,
+                updateReq(SupplyOrderStatus.DELIVERED));
+
+        // The supplier is notified when the seller confirms receipt.
+        verify(notificationService, times(1)).notify(
+                eq(99L), eq("supply"), eq("Supply order received"), anyString(), anyString());
     }
 
     @Test

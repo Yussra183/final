@@ -58,19 +58,29 @@ import { useStore } from "../../../src/store/StoreContext";
 import { useNearbySellers } from "../../../src/hooks/useNearbySellers";
 import { isFiniteNumber } from "../../../src/components/mapPickerBridge";
 import { placeOrderForSeller } from "../../../src/utils/customerRouting";
+import type { GasProduct } from "../../../constants/types";
 import { SellerProfile } from "../../../constants/types";
-import type { NearbySeller } from "../../../src/utils/sellers";
+import {
+  type NearbySeller,
+  gasBrandsForSellerInventory,
+  gasSizesForSellerInventory,
+} from "../../../src/utils/sellers";
+import { ALL_GAS_SIZES, GAS_BRANDS } from "../../../constants/gasCatalog";
 
 /** Convert a `SellerProfile` (wire shape) to `NearbySeller` (display). */
-function sellerProfileToNearby(p: SellerProfile): NearbySeller {
+function sellerProfileToNearby(
+  p: SellerProfile,
+  products: GasProduct[],
+): NearbySeller {
+  const sizes = gasSizesForSellerInventory(products, p.sellerId);
   return {
     id: p.sellerId,
     name: p.businessName,
     status: p.openNow ? ("Active" as const) : ("Closed" as const),
     distanceKm: p.distanceKm,
     location: p.location,
-    gasTypes: ["LPG"],
-    cylinderSizes: p.availableSizes ?? [],
+    gasTypes: gasBrandsForSellerInventory(products, p.sellerId),
+    cylinderSizes: sizes.length > 0 ? sizes : p.availableSizes ?? [],
     phone: p.phone,
     lat: p.lat,
     lng: p.lng,
@@ -87,24 +97,28 @@ function useSellerDetails(id: string): {
   loading: boolean;
   error: string | null;
 } {
-  const { session, sellers: storeSellers } = useStore();
+  const { session, sellers: storeSellers, products } = useStore();
   void session; // session isn't strictly needed; the slice is keyed off storeSellers
   // Build the same fallback pool the home screen feeds the hook with.
   const apiSellers = useMemo<NearbySeller[]>(
-    () =>
-      storeSellers.map((s) => ({
-        id: s.sellerId,
-        name: s.businessName,
-        status: s.openNow ? ("Active" as const) : ("Closed" as const),
-        distanceKm: s.distanceKm,
-        location: s.location,
-        gasTypes: ["LPG"],
-        cylinderSizes: s.availableSizes,
-        phone: s.phone,
-        lat: s.lat,
-        lng: s.lng,
-      })),
-    [storeSellers],
+    () => {
+      return storeSellers.map((s) => {
+        const sizes = gasSizesForSellerInventory(products, s.sellerId);
+        return {
+          id: s.sellerId,
+          name: s.businessName,
+          status: s.openNow ? ("Active" as const) : ("Closed" as const),
+          distanceKm: s.distanceKm,
+          location: s.location,
+          gasTypes: gasBrandsForSellerInventory(products, s.sellerId),
+          cylinderSizes: sizes.length > 0 ? sizes : s.availableSizes,
+          phone: s.phone,
+          lat: s.lat,
+          lng: s.lng,
+        };
+      });
+    },
+    [products, storeSellers],
   );
   const { sellers } = useNearbySellers(apiSellers);
   const cached = sellers.find((s) => s.id === id) ?? null;
@@ -119,7 +133,7 @@ function useSellerDetails(id: string): {
     SellersApi.byId(id)
       .then((p) => {
         if (cancelled) return;
-        setFetched(sellerProfileToNearby(p));
+        setFetched(sellerProfileToNearby(p, products));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -131,7 +145,7 @@ function useSellerDetails(id: string): {
     return () => {
       cancelled = true;
     };
-  }, [id, cached]);
+  }, [id, cached, products]);
 
   return { seller: cached ?? fetched, loading, error };
 }
@@ -298,7 +312,7 @@ export default function CustomerSellerDetail() {
 
             <Text style={styles.cardLabel}>Gas types</Text>
             <View style={styles.chipRow}>
-              {(seller.gasTypes.length ? seller.gasTypes : ["LPG"]).map(
+              {(seller.gasTypes.length ? seller.gasTypes : GAS_BRANDS).map(
                 (g) => (
                   <View key={g} style={styles.chip}>
                     <Text style={styles.chipText}>{g}</Text>
@@ -311,7 +325,7 @@ export default function CustomerSellerDetail() {
             <View style={styles.chipRow}>
               {(seller.cylinderSizes.length
                 ? seller.cylinderSizes
-                : ["6kg", "13kg", "15kg", "38kg"]
+                : ALL_GAS_SIZES
               ).map((s) => (
                 <View key={s} style={styles.chip}>
                   <Text style={styles.chipText}>{s}</Text>

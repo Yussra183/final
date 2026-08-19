@@ -59,10 +59,10 @@ public interface OrderService {
     /**
      * Dispatch queue — orders in {@code accepted} with no rider yet.
      *
-     * <p>If {@code actorId} is non-null and the actor is a rider, the
-     * result is narrowed to orders from sellers this rider is assigned
-     * to via the {@code seller_riders} table. Passing {@code null}
-     * returns the global queue (admin/supplier view).</p>
+     * <p>For riders this is the live self-dispatch queue: any order whose
+     * seller has accepted it and which still has no assigned rider.
+     * Busy or unapproved riders receive an empty list. Non-rider callers
+     * can use the same endpoint for a read-only global queue.</p>
      */
     List<OrderResponse> availableForRiders(Long actorId, Role actorRole);
 }

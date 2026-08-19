@@ -17,6 +17,7 @@ import com.project.gas_delivery.permit.exception.PermitNotFoundException;
 import com.project.gas_delivery.permit.exception.PermitStateException;
 import com.project.gas_delivery.permit.repository.PermitDocumentRepository;
 import com.project.gas_delivery.permit.repository.SellerPermitRepository;
+import com.project.gas_delivery.product.service.GasCatalogProvisioningService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,18 +64,21 @@ public class PermitService {
     private final PermitDocumentStorageService storageService;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final GasCatalogProvisioningService gasCatalogProvisioningService;
     private SellerApplicationPdfService pdfService;
 
     public PermitService(SellerPermitRepository permitRepository,
                          PermitDocumentRepository documentRepository,
                          PermitDocumentStorageService storageService,
                          UserRepository userRepository,
-                         NotificationService notificationService) {
+                         NotificationService notificationService,
+                         GasCatalogProvisioningService gasCatalogProvisioningService) {
         this.permitRepository = permitRepository;
         this.documentRepository = documentRepository;
         this.storageService = storageService;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
+        this.gasCatalogProvisioningService = gasCatalogProvisioningService;
     }
 
     /**
@@ -279,6 +283,7 @@ public class PermitService {
             seller.setActive(true);
             userRepository.save(seller);
         }
+        gasCatalogProvisioningService.provisionForSeller(permit.getSellerId());
 
         notificationService.notify(
                 permit.getSellerId(),

@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { SellerHeader } from "../../src/components/SellerHeader";
 import { Card } from "../../src/components/Card";
@@ -145,6 +146,7 @@ function RecentNotificationRow({ n }: { n: NotificationItem }) {
 }
 
 export default function SellerDashboard() {
+  const router = useRouter();
   const {
     session,
     orders,
@@ -371,6 +373,14 @@ export default function SellerDashboard() {
                   <Text style={styles.alertQtyLabel}>left</Text>
                 </View>
               </View>
+              <TouchableOpacity
+                style={styles.alertAction}
+                onPress={() => router.push("/seller/restock" as any)}
+                accessibilityRole="button"
+              >
+                <Ionicons name="cloud-download-outline" size={16} color={Colors.primary} />
+                <Text style={styles.alertActionText}>Request gas from supplier</Text>
+              </TouchableOpacity>
             </Card>
           ))
         )}
@@ -567,6 +577,20 @@ const styles = StyleSheet.create({
   alertQtyLabel: {
     fontSize: FontSize.xs,
     color: Colors.textMuted,
+  },
+  alertAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: Spacing.sm,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  alertActionText: {
+    color: Colors.primary,
+    fontWeight: "700",
+    fontSize: FontSize.sm,
   },
 
   // All good row

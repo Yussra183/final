@@ -5,6 +5,7 @@ import com.project.gas_delivery.auth.enums.Role;
 import com.project.gas_delivery.auth.repository.UserRepository;
 import com.project.gas_delivery.notification.service.NotificationService;
 import com.project.gas_delivery.permit.service.SupplierApplicationService;
+import com.project.gas_delivery.product.GasCatalog;
 import com.project.gas_delivery.product.service.StockService;
 import com.project.gas_delivery.supply.dto.CreateSupplyOrderRequest;
 import com.project.gas_delivery.supply.dto.SupplyOrderDto;
@@ -84,12 +85,18 @@ public class SupplyOrderService {
     private final UserRepository userRepository;
 
     /**
-     * Cache: supply-order ids we already fired a status-change notification
-     * for in this JVM session. Same dedupe shape as
+     * Cache: (supply-order id, target status) pairs we already fired a
+     * notification for in this JVM session. Same dedupe shape as
      * {@link StockService#recentlyNotified} — guards against duplicate
      * notifications if Spring replays the same transaction on retry.
+     *
+     * <p>Keyed on the <em>target status</em>, not just the order id,
+     * so that a row progressing through ACCEPTED → PREPARING →
+     * DISPATCHED → DELIVERED fires a fresh notification on every step
+     * (the previous implementation only fired once per row, swallowing
+     * every subsequent status change).</p>
      */
-    private final Map<Long, Boolean> recentlyNotifiedSupplyOrders = new LinkedHashMap<>();
+    private final Map<String, Boolean> recentlyNotifiedSupplyOrders = new LinkedHashMap<>();
 
     public SupplyOrderService(SupplyOrderRepository repository,
                               SupplierApplicationService supplierApplicationService,
@@ -156,6 +163,13 @@ public class SupplyOrderService {
             throw new SupplyOrderException(SupplyOrderException.Kind.FORBIDDEN,
                     "Only sellers can raise supply orders.");
         }
+        // FR-06: validate the gas brand / size against the canonical
+        // GasCatalog. The seller is never allowed to request a brand +
+        // size combination the supplier can't fulfil (e.g. "Oryx Gas
+        // 15kg"). The check rejects every non-canonical combination,
+        // including legacy / unrecognised brands like a bare "LPG".
+        validateGasCombination(req.getProductName(), req.getSize());
+
         if (req.getSupplierId() != null) {
             User supplier = userRepository.findById(req.getSupplierId())
                     .orElseThrow(() -> new SupplyOrderException(
@@ -208,7 +222,7 @@ public class SupplyOrderService {
                             "kind", "new_order"
                     ))
             );
-            markNotified(saved.getId());
+            markNotified(saved.getId(), SupplyOrderStatus.PENDING);
         }
         return SupplyOrderDto.from(saved);
     }
@@ -250,8 +264,17 @@ public class SupplyOrderService {
             }
             case REJECTED -> row.setRejectReason(req.getReason());
             case DISPATCHED -> row.setDispatchedAt(now);
-            case DELIVERED  -> row.setDeliveredAt(now);
-            case RECEIVED   -> row.setReceivedAt(now);
+            // Per the supplied business diagram (Block 7), the SELLER
+            // — not the supplier — confirms receipt and triggers the
+            // DELIVERED transition. The supplier only stages up to
+            // DISPATCHED; once the gas reaches the seller, the seller
+            // taps "Confirm receipt" → DELIVERED, and that single
+            // transition atomically timestamps `deliveredAt` and
+            // credits the inventory.
+            case DELIVERED  -> {
+                row.setDeliveredAt(now);
+                row.setReceivedAt(now);
+            }
             case CANCELLED  -> {
                 row.setCancelledAt(now);
                 row.setCancelledByRole(
@@ -263,13 +286,14 @@ public class SupplyOrderService {
         }
         SupplyOrderEntity saved = repository.save(row);
 
-        // RECEIVED is the only transition that mutates the seller's
-        // inventory. Routing through StockService.applyManualStock
-        // re-uses the same threshold-check + low-stock notification
-        // machinery the seller-facing manual adjust already uses, so
-        // restocking out of a low-stock state naturally re-arms the
-        // threshold alert for the next dip.
-        if (to == SupplyOrderStatus.RECEIVED) {
+        // DELIVERED (set by the seller on receipt confirmation) is the
+        // single transition that mutates the seller's inventory. Routing
+        // through StockService.replenishForSupplyReceipt re-uses the same
+        // threshold-check + low-stock notification machinery the manual
+        // stock-adjust path already uses, so restocking out of a low-
+        // stock state naturally re-arms the threshold alert for the
+        // next dip.
+        if (to == SupplyOrderStatus.DELIVERED) {
             applyReplenishment(saved);
         }
         fireStatusNotifications(saved, from, to);
@@ -309,14 +333,17 @@ public class SupplyOrderService {
      * Decide whether {@code from → to} is a legal transition for the
      * given actor and require a reason when one is needed.
      *
-     * <p>Per-actor rules:</p>
+     * <p>Per-actor rules (aligned to the supplied business diagram,
+     * Block 7):</p>
      * <ul>
      *   <li>SELLER may: cancel (PENDING/ACCEPTED/PREPARING/DISPATCHED),
-     *       mark RECEIVED (DELIVERED only).</li>
+     *       mark DELIVERED on receipt (DISPATCHED only) — this single
+     *       transition timestamps `deliveredAt` and credits inventory.</li>
      *   <li>SUPPLIER may: accept (PENDING or unclaimed), reject
      *       (PENDING only), start preparing (ACCEPTED), dispatch
-     *       (ACCEPTED or PREPARING), mark delivered (DISPATCHED),
-     *       cancel (PENDING/ACCEPTED/PREPARING/DISPATCHED).</li>
+     *       (ACCEPTED or PREPARING), cancel
+     *       (PENDING/ACCEPTED/PREPARING/DISPATCHED). The supplier does
+     *       NOT set DELIVERED — only the seller does, on receipt.</li>
      *   <li>ADMIN may cancel from any non-terminal state (escape hatch).</li>
      * </ul>
      */
@@ -330,10 +357,15 @@ public class SupplyOrderService {
             case DISPATCHED -> (actorRole == Role.SUPPLIER)
                     && (from == SupplyOrderStatus.ACCEPTED
                         || from == SupplyOrderStatus.PREPARING);
-            case DELIVERED  -> (actorRole == Role.SUPPLIER)
+            case DELIVERED  -> (actorRole == Role.SELLER)
                     && (from == SupplyOrderStatus.DISPATCHED);
+            // RECEIVED is kept for backwards compatibility with rows
+            // written before the diagram-aligned change; new flows
+            // land directly on DELIVERED. Suppliers cannot reach it,
+            // and no admin path writes it either.
             case RECEIVED   -> (actorRole == Role.SELLER)
-                    && (from == SupplyOrderStatus.DELIVERED);
+                    && (from == SupplyOrderStatus.DISPATCHED)
+                    && !Boolean.TRUE;  // disabled — DELIVERED is canonical
             case REJECTED   -> (actorRole == Role.SUPPLIER)
                     && (from == SupplyOrderStatus.PENDING);
             case CANCELLED  -> CANCELLABLE_STATUSES.contains(from)
@@ -385,17 +417,24 @@ public class SupplyOrderService {
     }
 
     /**
-     * Fan out a notification for every interesting status change. The
-     * supplier is notified on seller-driven transitions (RECEIVED,
-     * CANCELLED by seller); the seller is notified on supplier-driven
-     * transitions (ACCEPTED, REJECTED, PREPARING, DISPATCHED, DELIVERED,
-     * CANCELLED by supplier). The dedupe cache stops Spring's transaction
-     * retry from doubling up.
+     * Fan out a notification for every interesting status change.
+     *
+     * <p>Per the diagram:</p>
+     * <ul>
+     *   <li>Supplier-driven transitions (ACCEPTED, PREPARING,
+     *       DISPATCHED, REJECTED, CANCELLED-by-supplier) notify the
+     *       <em>seller</em>.</li>
+     *   <li>Seller-driven transitions (DELIVERED, CANCELLED-by-seller)
+     *       notify the <em>supplier</em>.</li>
+     * </ul>
+     *
+     * <p>The dedupe cache (keyed on {@code (orderId, targetStatus)})
+     * stops Spring's transaction retry from doubling up.</p>
      */
     private void fireStatusNotifications(SupplyOrderEntity row,
                                          SupplyOrderStatus from,
                                          SupplyOrderStatus to) {
-        if (alreadyNotified(row.getId())) return;
+        if (alreadyNotified(row.getId(), to)) return;
         Long sellerId = row.getSellerId();
         Long supplierId = row.getSupplierId();
         String product = row.getProductName() + " (" + row.getSize() + ")";
@@ -426,15 +465,29 @@ public class SupplyOrderService {
                             "supplyOrderId", String.valueOf(row.getId()),
                             "status", "dispatched", "kind", "status_change"
                     )));
-            case DELIVERED -> notificationService.notify(
-                    sellerId, "supply",
-                    "Supply order delivered",
-                    "Your supply of " + qty + product + " has been delivered. "
-                            + "Please confirm receipt to update your stock.",
-                    json(Map.of(
-                            "supplyOrderId", String.valueOf(row.getId()),
-                            "status", "delivered", "kind", "status_change"
-                    )));
+            // DELIVERED is the seller's own confirmation: the seller
+            // just acknowledged receipt, so we notify the SUPPLIER
+            // (the seller doesn't need a self-notification). The
+            // title is "Supply order received" so the supplier's
+            // existing notification feed continues to recognise the
+            // event.
+            case DELIVERED -> {
+                if (supplierId != null) {
+                    notificationService.notify(
+                            supplierId, "supply",
+                            "Supply order received",
+                            row.getSellerName() + " confirmed receipt of "
+                                    + qty + product
+                                    + ". Your restock is now closed.",
+                            json(Map.of(
+                                    "supplyOrderId", String.valueOf(row.getId()),
+                                    "status", "delivered", "kind", "status_change"
+                            )));
+                }
+            }
+            // RECEIVED is kept for backwards compatibility with rows
+            // written before the diagram-aligned change. New code
+            // does not transition into RECEIVED.
             case RECEIVED -> {
                 if (supplierId != null) {
                     notificationService.notify(
@@ -482,20 +535,60 @@ public class SupplyOrderService {
             }
             default -> { /* PENDING has no notification */ }
         }
-        markNotified(row.getId());
+        markNotified(row.getId(), to);
     }
 
-    private boolean alreadyNotified(Long id) {
-        return recentlyNotifiedSupplyOrders.containsKey(id);
+    private boolean alreadyNotified(Long id, SupplyOrderStatus status) {
+        return recentlyNotifiedSupplyOrders.containsKey(notifKey(id, status));
     }
 
-    private void markNotified(Long id) {
-        recentlyNotifiedSupplyOrders.put(id, Boolean.TRUE);
+    private void markNotified(Long id, SupplyOrderStatus status) {
+        recentlyNotifiedSupplyOrders.put(notifKey(id, status), Boolean.TRUE);
+    }
+
+    private static String notifKey(Long id, SupplyOrderStatus status) {
+        return id + ":" + (status == null ? "null" : status.name());
     }
 
     /** Test hook — clear dedupe cache between unit tests. */
     public void clearNotificationDedupForTests() {
         recentlyNotifiedSupplyOrders.clear();
+    }
+
+    /**
+     * Reject any non-canonical gas brand / size combination. The
+     * {@link GasCatalog} is the source of truth for which brands the
+     * supplier can fulfil, and which sizes each brand has — anything
+     * else is silently dropped at the supplier end, so we want to fail
+     * loudly at create-time so the seller sees a meaningful error
+     * rather than a row that goes nowhere.
+     *
+     * <p>Examples rejected by this guard:
+     * <ul>
+     *   <li>{@code "Oryx Gas" + "15 kg"} — Oryx has no 15 kg cylinder.</li>
+     *   <li>{@code "LPG" + "13kg"} — bare LPG is not a supported brand.</li>
+     *   <li>{@code "Unknown Gas" + "6 kg"} — unknown brand.</li>
+     * </ul>
+     */
+    private void validateGasCombination(String productName, String size) {
+        String brand = productName == null ? "" : productName.trim();
+        String sizeNorm = size == null ? "" : size.trim();
+        if (!GasCatalog.isSupportedBrand(brand)) {
+            throw new SupplyOrderException(
+                    SupplyOrderException.Kind.INVALID_GAS_COMBINATION,
+                    "Unsupported gas brand: '" + brand + "'. "
+                            + "Supported brands are Oryx Gas, Taifa Gas, "
+                            + "Lake Gas, Manjis Gas, Mihan Gas."
+            );
+        }
+        if (!GasCatalog.isSupportedSize(brand, sizeNorm)) {
+            throw new SupplyOrderException(
+                    SupplyOrderException.Kind.INVALID_GAS_COMBINATION,
+                    "'" + brand + "' is not available in size '" + sizeNorm + "'. "
+                            + "Supported sizes for " + brand + ": "
+                            + String.join(", ", GasCatalog.supportedSizes(brand)) + "."
+            );
+        }
     }
 
     private static String nullSafe(String value) {

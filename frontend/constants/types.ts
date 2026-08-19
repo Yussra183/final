@@ -159,8 +159,8 @@ export interface GasProduct {
   id: string;
   sellerId: string;
   sellerName: string;
-  name: string; // e.g. "6kg LPG Refill"
-  size: string; // e.g. "6kg", "13kg", "22kg"
+  name: string; // e.g. "Oryx Gas"
+  size: string; // e.g. "6 kg", "12.5 kg", "38 kg"
   price: number;
   stock: number;
   lowStockThreshold?: number; // FR-05 — backend-driven threshold
@@ -410,12 +410,14 @@ export interface NotificationItem {
   userId: string;
   title: string;
   message: string;
+  data?: string | null;
   type:
     | "order"
     | "delivery"
     | "permit"
     | "stock"
     | "system"
+    | "supply"
     | "near_arrival"
     | "trip_started"
     | "trip_completed";

@@ -24,6 +24,11 @@ import { AppButton } from "../../src/components/AppButton";
 import { Picker } from "@react-native-picker/picker";
 import { isPhone } from "../../src/utils/validators";
 import { formatCurrency } from "../../src/utils/format";
+import {
+  GAS_BRANDS,
+  getSizesForBrand,
+  isGasBrand,
+} from "../../constants/gasCatalog";
 
 export default function PlaceOrderScreen() {
   const router = useRouter();
@@ -34,6 +39,7 @@ export default function PlaceOrderScreen() {
   const [selectedSellerId, setSelectedSellerId] = useState(
     sellerId ?? sellers[0]?.sellerId ?? "",
   );
+  const [gasBrand, setGasBrand] = useState("");
   const [size, setSize] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [address, setAddress] = useState(user.address ?? "");
@@ -47,17 +53,48 @@ export default function PlaceOrderScreen() {
     [products, selectedSellerId],
   );
 
-  const sellerSizes = useMemo(
+  const sellerBrands = useMemo(
     () =>
-      Array.from(new Set(sellerProducts.map((p) => p.size))).sort(),
+      GAS_BRANDS.filter((brand) =>
+        sellerProducts.some((p) => p.name === brand),
+      ),
     [sellerProducts],
   );
 
-  // Auto-pick the first product matching the chosen size.
+  const sellerSizes = useMemo(() => {
+    if (!isGasBrand(gasBrand)) return [];
+    const allowed = new Set(getSizesForBrand(gasBrand));
+    return sellerProducts
+      .filter((p) => p.name === gasBrand && allowed.has(p.size))
+      .map((p) => p.size)
+      .filter((value, index, arr) => arr.indexOf(value) === index);
+  }, [gasBrand, sellerProducts]);
+
   const product = useMemo(
-    () => sellerProducts.find((p) => p.size === size) ?? sellerProducts[0],
-    [sellerProducts, size],
+    () =>
+      sellerProducts.find(
+        (p) => p.name === gasBrand && p.size === size,
+      ) ?? null,
+    [gasBrand, sellerProducts, size],
   );
+
+  React.useEffect(() => {
+    if (sellerBrands.length === 0) {
+      setGasBrand("");
+      setSize("");
+      return;
+    }
+    if (!sellerBrands.includes(gasBrand as any)) {
+      setGasBrand(sellerBrands[0]);
+      setSize("");
+    }
+  }, [gasBrand, sellerBrands]);
+
+  React.useEffect(() => {
+    if (size && !sellerSizes.includes(size)) {
+      setSize("");
+    }
+  }, [size, sellerSizes]);
 
   const total = useMemo(() => {
     if (!product) return 0;
@@ -68,7 +105,8 @@ export default function PlaceOrderScreen() {
   const handleSubmit = async () => {
     const next: Record<string, string> = {};
     if (!selectedSellerId) next.seller = "Select a seller";
-    if (!product) next.gasType = "Select gas type and size";
+    if (!gasBrand) next.gasBrand = "Select gas brand";
+    if (!product) next.gasBrand = "Select gas brand and size";
     if (!size) next.size = "Select cylinder size";
     if (!quantity || Number(quantity) < 1) next.quantity = "Quantity must be at least 1";
     if (product && Number(quantity) > product.stock)
@@ -81,6 +119,12 @@ export default function PlaceOrderScreen() {
     setSubmitting(true);
     let order;
     try {
+      console.log("[ORDER_DEBUG][CREATE]", {
+        sellerId: selectedSellerId,
+        gasBrand,
+        cylinderSize: size,
+        quantity: Number(quantity),
+      });
       order = await placeOrder({
         customerId: user.id,
         customerName: user.fullName,
@@ -181,6 +225,7 @@ export default function PlaceOrderScreen() {
                 selectedValue={selectedSellerId}
                 onValueChange={(v) => {
                   setSelectedSellerId(String(v));
+                  setGasBrand("");
                   setSize("");
                 }}
               >
@@ -194,6 +239,33 @@ export default function PlaceOrderScreen() {
               </Picker>
             </View>
             {errors.seller ? <Text style={styles.error}>{errors.seller}</Text> : null}
+
+            <Text style={styles.label}>Gas Brand</Text>
+            <View style={styles.sizeRow}>
+              {sellerBrands.map((brand) => {
+                const active = gasBrand === brand;
+                return (
+                  <TouchableOpacity
+                    key={brand}
+                    style={[styles.sizePill, active && styles.sizePillActive]}
+                    onPress={() => {
+                      setGasBrand(brand);
+                      if (!getSizesForBrand(brand).includes(size)) setSize("");
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.sizePillText,
+                        active && styles.sizePillTextActive,
+                      ]}
+                    >
+                      {brand}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {errors.gasBrand ? <Text style={styles.error}>{errors.gasBrand}</Text> : null}
 
             <Text style={styles.label}>Cylinder Size</Text>
             <View style={styles.sizeRow}>

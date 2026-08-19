@@ -52,6 +52,12 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
             """)
     List<OrderEntity> findAvailableForDispatch();
 
+    long countByStatus(OrderStatus status);
+
+    long countByStatusAndRiderIdIsNull(OrderStatus status);
+
+    long countByStatusAndRiderIdIsNotNull(OrderStatus status);
+
     // ---- Admin read surface -------------------------------------------
     // Aggregations backing the admin dashboard, directory and report
     // screens. Every per-page lookup below is a single GROUP BY over a

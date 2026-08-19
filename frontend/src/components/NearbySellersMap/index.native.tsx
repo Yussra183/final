@@ -112,6 +112,9 @@ export interface NearbySellerMarker {
   lng: number;
   /** Short label rendered below the pin (e.g. "2.1 km"). */
   label?: string;
+  badgeLabel?: string;
+  badgeCount?: number;
+  hasAlert?: boolean;
   /** Visual selection; usually driven by `selectedId`. */
   selected?: boolean;
   /** Business name shown on the pin label. Falls back to `label`. */
@@ -582,6 +585,17 @@ export function NearbySellersMap({
           const richName = m.name ?? m.label;
           const latitude = Number(m.lat);
           const longitude = Number(m.lng);
+          const showAlertBadge =
+            m.hasAlert === true ||
+            (typeof m.badgeCount === "number" && m.badgeCount > 0) ||
+            !!m.badgeLabel;
+          const haloColor = showAlertBadge
+            ? "#F97316"
+            : m.status === "Active"
+              ? Colors.success
+              : m.status === "Closed"
+                ? Colors.border
+                : m.color ?? "#0F766E";
           const locationStatus = (
             m as NearbySellerMarker & { locationStatus?: "OK" | "MISSING" }
           ).locationStatus ?? "OK";
@@ -603,8 +617,8 @@ export function NearbySellersMap({
               key={`seller-${m.id}`}
               coordinate={{ latitude, longitude }}
               anchor={{ x: 0.5, y: 1 }}
-              tracksViewChanges={false}
-              tracksInfoWindowChanges={false}
+              tracksViewChanges
+              tracksInfoWindowChanges
               onPress={(e) => {
                 e?.stopPropagation?.();
                 onMarkerTap?.(m.id);
@@ -613,7 +627,80 @@ export function NearbySellersMap({
               description={
                 Number.isFinite(m.distanceKm) ? `${m.distanceKm!.toFixed(1)} km` : undefined
               }
-            />
+            >
+              <View
+                style={[
+                  styles.pinWrap,
+                  selectedId === m.id || m.selected === true ? styles.pinWrapSelected : null,
+                ]}
+                collapsable={false}
+              >
+                <View
+                  style={[
+                    styles.pinHalo,
+                    {
+                      borderColor: haloColor,
+                      borderWidth: selectedId === m.id || m.selected === true ? 3 : 2,
+                      opacity: selectedId === m.id || m.selected === true ? 1 : 0.92,
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.pin,
+                      { backgroundColor: showAlertBadge ? "#E96B2C" : m.color ?? "#0F766E" },
+                    ]}
+                  >
+                    <Ionicons name="storefront" size={16} color="#FFF" />
+                  </View>
+                </View>
+                {showAlertBadge ? (
+                  <View style={styles.alertBadge}>
+                    <Text style={styles.alertBadgeText} numberOfLines={1}>
+                      {m.badgeLabel ??
+                        (typeof m.badgeCount === "number" && m.badgeCount > 0
+                          ? `${m.badgeCount} NEW`
+                          : "NEW ORDER")}
+                    </Text>
+                  </View>
+                ) : null}
+                <View style={styles.pinLabel}>
+                  <Text style={styles.pinLabelName} numberOfLines={1}>
+                    {richName ?? "Seller"}
+                  </Text>
+                  <View style={styles.pinLabelRow}>
+                    {Number.isFinite(m.distanceKm) ? (
+                      <View style={styles.pinDistancePill}>
+                        <Text style={styles.pinDistanceText} numberOfLines={1}>
+                          {m.distanceKm!.toFixed(1)} km
+                        </Text>
+                      </View>
+                    ) : null}
+                    {m.status ? (
+                      <View
+                        style={[
+                          styles.pinStatusPill,
+                          {
+                            backgroundColor: m.status === "Active" ? "#DCFCE7" : "#FEE2E2",
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.pinStatusPillText,
+                            {
+                              color: m.status === "Active" ? "#047857" : "#B91C1C",
+                            },
+                          ]}
+                        >
+                          {m.status === "Active" ? "Open" : "Closed"}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+            </Marker>
           );
         })}
 
@@ -735,6 +822,20 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: FontSize.xs - 2,
     fontWeight: "800",
+  },
+  alertBadge: {
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.full,
+    backgroundColor: "#FFF1E8",
+    borderWidth: 1,
+    borderColor: "#F97316",
+  },
+  alertBadgeText: {
+    color: "#C2410C",
+    fontSize: FontSize.xs - 2,
+    fontWeight: "900",
   },
   pinLabelName: {
     color: Colors.text,

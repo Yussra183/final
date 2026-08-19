@@ -52,6 +52,10 @@ import { useNearbySellers } from "../../../src/hooks/useNearbySellers";
 import { useCustomerLocation } from "../../../src/hooks/useCustomerLocation";
 import { identityColor } from "../../../src/lib/identityColor";
 import {
+  gasBrandsForSellerInventory,
+  gasSizesForSellerInventory,
+} from "../../../src/utils/sellers";
+import {
   UNGUJA_PLACES,
   nearestPlaceName,
 } from "../../../src/lib/ungujaPlaces";
@@ -60,7 +64,7 @@ import type { NearbySeller } from "../../../src/utils/sellers";
 
 export default function CustomerHome() {
   const router = useRouter();
-  const { session, getNotificationsForUser, sellers: storeSellers } =
+  const { session, getNotificationsForUser, sellers: storeSellers, products } =
     useStore();
 
   // Sourced from the live `GET /api/sellers` store slice. The seller
@@ -68,22 +72,25 @@ export default function CustomerHome() {
   // the backend here — the map picks up the same data the next useMemo
   // passes to the markers array.
   const apiSellers: NearbySeller[] = useMemo(() => {
-    return storeSellers.map((s) => ({
-      id: s.sellerId,
-      name: s.businessName,
-      status: s.openNow ? ("Active" as const) : ("Closed" as const),
-      distanceKm: s.distanceKm,
-      location: s.location,
-      district: undefined,
-      region: undefined,
-      gasTypes: ["LPG"],
-      cylinderSizes: s.availableSizes,
-      phone: s.phone,
-      lat: s.lat,
-      lng: s.lng,
-      locationStatus: s.locationStatus ?? "OK",
-    }));
-  }, [storeSellers]);
+    return storeSellers.map((s) => {
+      const sizes = gasSizesForSellerInventory(products, s.sellerId);
+      return {
+        id: s.sellerId,
+        name: s.businessName,
+        status: s.openNow ? ("Active" as const) : ("Closed" as const),
+        distanceKm: s.distanceKm,
+        location: s.location,
+        district: undefined,
+        region: undefined,
+        gasTypes: gasBrandsForSellerInventory(products, s.sellerId),
+        cylinderSizes: sizes.length > 0 ? sizes : s.availableSizes,
+        phone: s.phone,
+        lat: s.lat,
+        lng: s.lng,
+        locationStatus: s.locationStatus ?? "OK",
+      };
+    });
+  }, [products, storeSellers]);
 
   const { sellers, usingDefaultLocation, effectiveLocation } =
     useNearbySellers(apiSellers);

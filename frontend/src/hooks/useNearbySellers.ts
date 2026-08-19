@@ -28,6 +28,8 @@ import { useCustomerLocation } from "./useCustomerLocation";
 import {
   NearbySeller,
   FilterOptions,
+  gasBrandsForSellerInventory,
+  gasSizesForSellerInventory,
 } from "../utils/sellers";
 import type { Location } from "../../constants/types";
 
@@ -48,7 +50,7 @@ export function useNearbySellers(
   fallbackPool: NearbySeller[],
   options?: FilterOptions,
 ): UseNearbySellersResult {
-  const { session, sellers: storeSellers } = useStore();
+  const { session, sellers: storeSellers, products } = useStore();
   const customer = session?.user;
 
   // Live device GPS — preferred over the saved profile address when
@@ -126,8 +128,11 @@ export function useNearbySellers(
           location: s.location,
           district: undefined,
           region: undefined,
-          gasTypes: ["LPG"],
-          cylinderSizes: s.availableSizes,
+          gasTypes: gasBrandsForSellerInventory(products, s.sellerId),
+          cylinderSizes:
+            gasSizesForSellerInventory(products, s.sellerId).length > 0
+              ? gasSizesForSellerInventory(products, s.sellerId)
+              : s.availableSizes,
           phone: s.phone,
           lat: s.lat,
           lng: s.lng,
@@ -155,7 +160,7 @@ export function useNearbySellers(
     return () => {
       cancelled = true;
     };
-  }, [hasCustomerGps, queryLat, queryLng]);
+  }, [hasCustomerGps, products, queryLat, queryLng]);
 
   // The customer's saved location. When they haven't set one, synthesize
   // one from the first available seller so the screen still has
@@ -167,8 +172,11 @@ export function useNearbySellers(
       status: s.openNow ? ("Active" as const) : ("Closed" as const),
       distanceKm: s.distanceKm,
       location: s.location,
-      gasTypes: [],
-      cylinderSizes: s.availableSizes,
+      gasTypes: gasBrandsForSellerInventory(products, s.sellerId),
+      cylinderSizes:
+        gasSizesForSellerInventory(products, s.sellerId).length > 0
+          ? gasSizesForSellerInventory(products, s.sellerId)
+          : s.availableSizes,
       phone: s.phone,
       lat: s.lat,
       lng: s.lng,
@@ -180,7 +188,7 @@ export function useNearbySellers(
       if (!map.has(s.id)) map.set(s.id, s);
     });
     return Array.from(map.values());
-  }, [storeSellers, fallbackPool]);
+  }, [fallbackPool, products, storeSellers]);
 
   const { effectiveLocation, usingDefaultLocation } = useMemo(() => {
     if (

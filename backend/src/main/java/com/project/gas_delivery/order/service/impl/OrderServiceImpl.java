@@ -16,18 +16,28 @@ import com.project.gas_delivery.order.repository.OrderRepository;
 import com.project.gas_delivery.order.service.OrderService;
 import com.project.gas_delivery.order.service.OrderStatusTransitions;
 import com.project.gas_delivery.order.service.OrderStatusTransitions.ActorRole;
+import com.project.gas_delivery.notification.service.NotificationService;
+import com.project.gas_delivery.permit.enums.PermitStatus;
+import com.project.gas_delivery.permit.repository.RiderApplicationRepository;
 import com.project.gas_delivery.payment.service.PaymentService;
+import com.project.gas_delivery.product.GasCatalog;
+import com.project.gas_delivery.product.entity.ProductEntity;
+import com.project.gas_delivery.product.repository.ProductRepository;
 import com.project.gas_delivery.product.service.StockService;
+import com.project.gas_delivery.rider.entity.RiderProfileEntity;
+import com.project.gas_delivery.rider.repository.RiderProfileRepository;
 import com.project.gas_delivery.rider.repository.SellerRiderRepository;
 import com.project.gas_delivery.tracking.service.DeliveryTrackingService;
 import jakarta.persistence.EntityManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Default implementation of {@link OrderService}.
@@ -43,26 +53,40 @@ import java.util.stream.Collectors;
 @Service
 public class OrderServiceImpl implements OrderService {
 
+    private static final Logger log = LoggerFactory.getLogger(OrderServiceImpl.class);
+
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
     private final SellerRiderRepository sellerRiderRepository;
+    private final RiderProfileRepository riderProfileRepository;
+    private final RiderApplicationRepository riderApplicationRepository;
     private final DeliveryTrackingService deliveryTrackingService;
     private final StockService stockService;
+    private final ProductRepository productRepository;
+    private final NotificationService notificationService;
     private final PaymentService paymentService;
     private final EntityManager entityManager;
 
     public OrderServiceImpl(OrderRepository orderRepository,
                             UserRepository userRepository,
                             SellerRiderRepository sellerRiderRepository,
+                            RiderProfileRepository riderProfileRepository,
+                            RiderApplicationRepository riderApplicationRepository,
                             DeliveryTrackingService deliveryTrackingService,
                             StockService stockService,
+                            ProductRepository productRepository,
+                            NotificationService notificationService,
                             PaymentService paymentService,
                             EntityManager entityManager) {
         this.orderRepository = orderRepository;
         this.userRepository = userRepository;
         this.sellerRiderRepository = sellerRiderRepository;
+        this.riderProfileRepository = riderProfileRepository;
+        this.riderApplicationRepository = riderApplicationRepository;
         this.deliveryTrackingService = deliveryTrackingService;
         this.stockService = stockService;
+        this.productRepository = productRepository;
+        this.notificationService = notificationService;
         this.paymentService = paymentService;
         this.entityManager = entityManager;
     }
@@ -89,28 +113,31 @@ public class OrderServiceImpl implements OrderService {
             throw new NotAuthorizedException(
                     "This seller is not yet approved to accept orders.");
         }
+        log.info("[ORDER_DEBUG][CREATE] customerId={} sellerId={} itemCount={}",
+                customerId, sellerId, req.items().size());
 
-        // ---- FR-05 stock reservation -----------------------------------
-        // Decrement each line item's stock atomically BEFORE we save the
-        // order. StockService.reserveForOrder runs in this same
-        // transaction (Propagation.MANDATORY); if any item fails
-        // (insufficient stock, inactive product), it throws
-        // InsufficientStockException and Spring rolls back the entire
-        // create(...) call, leaving the database untouched — no order
-        // row, no partial stock decrement.
-        //
-        // We process items in two passes:
-        //   1. validate every item's productId parses cleanly,
-        //   2. reserve stock per item.
-        // Items are already @NotEmpty + @Valid in CreateOrderRequest,
-        // so the list is non-null and each item's quantity is >= 1.
         for (var item : req.items()) {
             Long productId = parseId(item.productId(), "item.productId");
-            // Defensive: items with quantity <= 0 should already have
-            // failed bean validation, but the StockService double-checks
-            // and would throw IllegalArgumentException. Convert it to
-            // a friendly BadRequestException so the customer UI sees a
-            // consistent 400.
+            ProductEntity product = productRepository.findById(productId)
+                    .orElseThrow(() -> new BadRequestException("Selected product was not found."));
+            if (!product.isActive()) {
+                throw new BadRequestException("Selected product is no longer available.");
+            }
+            if (!sellerId.equals(product.getSellerId())) {
+                throw new BadRequestException("Selected product does not belong to the chosen seller.");
+            }
+            if (!GasCatalog.isSupportedBrand(item.productName())) {
+                throw new BadRequestException("Selected gas brand is not supported.");
+            }
+            if (!GasCatalog.isSupportedSize(item.productName(), item.size())) {
+                throw new BadRequestException(item.productName() + " does not support " + item.size() + ".");
+            }
+            if (!product.getName().equals(item.productName()) || !product.getSize().equals(item.size())) {
+                throw new BadRequestException(
+                        "Selected gas brand or cylinder size no longer matches this seller's inventory.");
+            }
+            log.info("[ORDER_DEBUG][CREATE] customerId={} sellerId={} gasBrand={} cylinderSize={} quantity={}",
+                    customerId, sellerId, item.productName(), item.size(), item.quantity());
             try {
                 stockService.reserveForOrder(productId, item.quantity());
             } catch (IllegalArgumentException ex) {
@@ -133,6 +160,31 @@ public class OrderServiceImpl implements OrderService {
         entity.setNotes(req.notes());
 
         OrderEntity saved = orderRepository.save(entity);
+        log.info("[ORDER_LIFECYCLE][CREATED] orderId={} customerId={} sellerId={} status={} riderId={}",
+                saved.getId(), saved.getCustomerId(), saved.getSellerId(),
+                saved.getStatus(), saved.getRiderId());
+        var firstItem = saved.getItems().isEmpty() ? null : saved.getItems().get(0);
+        if (firstItem != null) {
+            String data = "{" +
+                    "\"orderId\":\"" + saved.getId() + "\"," +
+                    "\"sellerId\":\"" + saved.getSellerId() + "\"," +
+                    "\"gasBrand\":\"" + jsonEscape(firstItem.productName()) + "\"," +
+                    "\"cylinderSize\":\"" + jsonEscape(firstItem.size()) + "\"," +
+                    "\"quantity\":" + firstItem.quantity() + "," +
+                    "\"deliveryType\":\"Delivery\"" +
+                    "}";
+            notificationService.notify(
+                    saved.getSellerId(),
+                    "order",
+                    "New Gas Order",
+                    "Order #" + saved.getId() + " • " + firstItem.productName()
+                            + " • " + firstItem.size() + " x " + firstItem.quantity()
+                            + " • Delivery",
+                    data
+            );
+            log.info("[ORDER_DEBUG][SELLER_NOTIFICATION] sellerId={} orderId={} notificationCreated={}",
+                    saved.getSellerId(), saved.getId(), true);
+        }
         return OrderResponse.from(saved);
     }
 
@@ -143,8 +195,13 @@ public class OrderServiceImpl implements OrderService {
     public OrderResponse accept(Long actorId, Role actorRole, Long orderId) {
         requireRole(actorRole, Role.SELLER);
         OrderEntity order = loadOrder(orderId);
+        OrderStatus previousStatus = order.getStatus();
         requireOwnership(order, actorId, ActorRole.SELLER, OrderStatus.ACCEPTED);
-        return setStatus(order, OrderStatus.ACCEPTED);
+        OrderResponse response = setStatus(order, OrderStatus.ACCEPTED);
+        log.info("[ORDER_LIFECYCLE][SELLER_ACCEPTED] orderId={} sellerId={} oldStatus={} newStatus={} riderId={}",
+                order.getId(), order.getSellerId(), previousStatus, order.getStatus(), order.getRiderId());
+        notifyReadyForPickup(order);
+        return response;
     }
 
     @Override
@@ -186,15 +243,29 @@ public class OrderServiceImpl implements OrderService {
         if (!riderId.equals(actorId)) {
             throw new NotAuthorizedException("You can only claim orders for yourself.");
         }
-        if (!userRepository.existsById(riderId)) {
-            throw new BadRequestException("Rider not found.");
+        User rider = userRepository.findById(riderId)
+                .orElseThrow(() -> new BadRequestException("Rider not found."));
+        requireApprovedRider(riderId);
+        RiderProfileEntity riderProfile = riderProfileRepository.findById(riderId)
+                .orElseGet(() -> riderProfileRepository.save(new RiderProfileEntity(
+                        riderId,
+                        "motorcycle",
+                        null,
+                        null,
+                        null,
+                        true,
+                        rider.getPhone(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                )));
+        if (!riderProfile.isAvailable()) {
+            throw new NotAuthorizedException("You are currently busy and cannot accept a new delivery.");
         }
 
-        // ---- Seller-assignment guard (added 2026-07-21) -------------
-        // A rider can only claim orders from sellers they're assigned to
-        // via the `seller_riders` join table. We do this pre-flight as a
-        // hard 403 BEFORE the atomic UPDATE so any cross-seller attempt is
-        // rejected with a clear reason instead of racing into `ASSIGNED`.
         OrderEntity order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new OrderNotFoundException("Order " + orderId + " not found."));
 
@@ -203,13 +274,7 @@ public class OrderServiceImpl implements OrderService {
                     "Order is " + order.getStatus().toJson() + "; only ACCEPTED orders can be claimed.");
         }
         if (order.getRiderId() != null) {
-            // Already taken — surface as a race loss; the JOIN check would
-            // be moot against an order that's already ASSIGNED.
-            throw new RiderBusyException("Another rider has already accepted this delivery.");
-        }
-        if (!sellerRiderRepository.existsBySellerIdAndRiderId(order.getSellerId(), riderId)) {
-            throw new NotAuthorizedException(
-                    "This rider is not assigned to the order's seller.");
+            throw new RiderBusyException("Order is no longer available.");
         }
 
         // Atomic UPDATE … RETURNING — first rider wins.
@@ -237,18 +302,18 @@ public class OrderServiceImpl implements OrderService {
                 .getResultList();
 
         if (rows.isEmpty()) {
-            // 0 rows updated → another rider raced ahead between the
-            // pre-flight check and the UPDATE (the JOIN already proved
-            // membership, so it's purely a race on `rider_id IS NULL`).
-            throw new RiderBusyException("Another rider has already accepted this delivery.");
+            throw new RiderBusyException("Order is no longer available.");
         }
 
-        // Detach any cached entity and re-load so the response reflects
-        // the post-UPDATE state we just persisted (avoids RETURNING
-        // column-order mismatches with Hibernate's entity mapping).
+        riderProfile.setAvailable(false);
+        riderProfileRepository.save(riderProfile);
+
         entityManager.flush();
         entityManager.clear();
-        return OrderResponse.from(loadOrder(orderId));
+
+        OrderEntity claimed = loadOrder(orderId);
+        notifyClaimedOrder(claimed);
+        return OrderResponse.from(claimed);
     }
 
     // ---- rider progress -------------------------------------------------
@@ -286,22 +351,7 @@ public class OrderServiceImpl implements OrderService {
             case CUSTOMER -> orderRepository.findByCustomerIdOrderByUpdatedAtDesc(actorFilterId);
             case SELLER -> orderRepository.findBySellerIdOrderByUpdatedAtDesc(actorFilterId);
             case RIDER -> {
-                // A rider sees every order belonging to any seller
-                // they're assigned to via `seller_riders` — unclaimed
-                // (ACCEPTED, rider_id IS NULL) AND in-flight, NOT only
-                // orders they've already self-claimed. The seller-set
-                // lookup is the same guard `claim(...)` already
-                // enforces, so riders never see orders from sellers
-                // they're not assigned to.
-                Set<Long> assignedSellerIds = sellerRiderRepository
-                        .findSellerIdsByRiderId(actorFilterId)
-                        .stream()
-                        .collect(Collectors.toSet());
-                if (assignedSellerIds.isEmpty()) {
-                    yield List.of();
-                }
-                yield orderRepository
-                        .findBySellerIdInOrderByUpdatedAtDesc(assignedSellerIds);
+                yield orderRepository.findByRiderIdOrderByUpdatedAtDesc(actorFilterId);
             }
             case ADMIN, SUPPLIER -> allOrdersSorted();
         };
@@ -327,25 +377,31 @@ public class OrderServiceImpl implements OrderService {
     @Transactional(readOnly = true)
     public List<OrderResponse> availableForRiders(Long actorId, Role actorRole) {
         List<OrderEntity> all = orderRepository.findAvailableForDispatch();
+        long acceptedTotal = orderRepository.countByStatus(OrderStatus.ACCEPTED);
+        long acceptedUnassigned = orderRepository.countByStatusAndRiderIdIsNull(OrderStatus.ACCEPTED);
+        long acceptedAssigned = orderRepository.countByStatusAndRiderIdIsNotNull(OrderStatus.ACCEPTED);
 
-        // For riders, narrow the queue to orders from sellers they're assigned
-        // to via the seller_riders table. Admin/supplier see the global queue.
         if (actorId == null || actorRole != Role.RIDER) {
+            log.info("[RIDER_ORDERS] actorRole={} actorId={} acceptedTotal={} acceptedUnassigned={} acceptedAssigned={} returnedOrderIds={}",
+                    actorRole, actorId, acceptedTotal, acceptedUnassigned, acceptedAssigned,
+                    all.stream().map(OrderEntity::getId).toList());
             return all.stream().map(OrderResponse::from).toList();
         }
-
-        Set<Long> assignedSellerIds = sellerRiderRepository.findSellerIdsByRiderId(actorId).stream()
-                .collect(Collectors.toSet());
-
-        if (assignedSellerIds.isEmpty()) {
-            // Rider isn't assigned to any seller — empty queue is correct.
+        requireApprovedRider(actorId);
+        RiderProfileEntity riderProfile = riderProfileRepository.findById(actorId).orElse(null);
+        if (riderProfile != null && !riderProfile.isAvailable()) {
+            log.info("[RIDER_ORDERS] riderId={} available=false acceptedTotal={} acceptedUnassigned={} acceptedAssigned={} returnedOrderIds=[]",
+                    actorId, acceptedTotal, acceptedUnassigned, acceptedAssigned);
             return List.of();
         }
-
-        return all.stream()
-                .filter(o -> assignedSellerIds.contains(o.getSellerId()))
-                .map(OrderResponse::from)
-                .toList();
+        log.info("[RIDER_ORDERS] riderId={} available={} acceptedTotal={} acceptedUnassigned={} acceptedAssigned={} returnedOrderIds={}",
+                actorId,
+                riderProfile == null ? null : riderProfile.isAvailable(),
+                acceptedTotal,
+                acceptedUnassigned,
+                acceptedAssigned,
+                all.stream().map(OrderEntity::getId).toList());
+        return all.stream().map(OrderResponse::from).toList();
     }
 
     // ---- helpers --------------------------------------------------------
@@ -409,8 +465,105 @@ public class OrderServiceImpl implements OrderService {
             if (next == OrderStatus.DELIVERED) {
                 paymentService.markAutoCompletedOnDelivery(saved.getId());
             }
+            if (saved.getRiderId() != null) {
+                riderProfileRepository.findById(saved.getRiderId()).ifPresent(profile -> {
+                    profile.setAvailable(true);
+                    riderProfileRepository.save(profile);
+                });
+            }
         }
         return OrderResponse.from(saved);
+    }
+
+    private void requireApprovedRider(Long riderId) {
+        boolean approved = riderApplicationRepository.findByRiderId(riderId)
+                .map(application -> application.getStatus() == PermitStatus.APPROVED)
+                .orElse(false);
+        if (!approved) {
+            throw new NotAuthorizedException("Only approved riders can accept deliveries.");
+        }
+    }
+
+    private void notifyReadyForPickup(OrderEntity order) {
+        notificationService.notify(
+                order.getCustomerId(),
+                "order",
+                "Order accepted",
+                order.getSellerName() + " accepted order #" + order.getId() + ". It is now ready for pickup.",
+                "{\"orderId\":\"" + order.getId() + "\"}"
+        );
+
+        Set<Long> approvedRiderIds = new HashSet<>(
+                riderApplicationRepository.findRiderIdsByStatus(PermitStatus.APPROVED));
+        if (approvedRiderIds.isEmpty()) {
+            return;
+        }
+        List<RiderProfileEntity> availableRiders = riderProfileRepository.findByAvailable(true);
+        if (availableRiders.isEmpty()) {
+            return;
+        }
+        String data = buildRiderNotificationData(order);
+        for (RiderProfileEntity rider : availableRiders) {
+            if (!approvedRiderIds.contains(rider.getUserId())) {
+                continue;
+            }
+            notificationService.notify(
+                    rider.getUserId(),
+                    "delivery",
+                    "New delivery available",
+                    order.getSellerName() + " • " + firstItemSummary(order),
+                    data
+            );
+        }
+    }
+
+    private void notifyClaimedOrder(OrderEntity order) {
+        if (order.getRiderId() == null) {
+            return;
+        }
+        String riderName = order.getRiderName() == null || order.getRiderName().isBlank()
+                ? "A rider"
+                : order.getRiderName();
+        String data = "{" +
+                "\"orderId\":\"" + order.getId() + "\"," +
+                "\"riderId\":\"" + order.getRiderId() + "\"," +
+                "\"sellerId\":\"" + order.getSellerId() + "\"" +
+                "}";
+        notificationService.notify(
+                order.getCustomerId(),
+                "delivery",
+                "Rider assigned",
+                riderName + " accepted order #" + order.getId() + " and is heading to "
+                        + order.getSellerName() + ".",
+                data
+        );
+        notificationService.notify(
+                order.getSellerId(),
+                "delivery",
+                "Rider assigned",
+                riderName + " accepted order #" + order.getId() + ". Prepare pickup for dispatch.",
+                data
+        );
+    }
+
+    private String buildRiderNotificationData(OrderEntity order) {
+        var firstItem = order.getItems().isEmpty() ? null : order.getItems().get(0);
+        return "{" +
+                "\"orderId\":\"" + order.getId() + "\"," +
+                "\"sellerId\":\"" + order.getSellerId() + "\"," +
+                "\"sellerName\":\"" + jsonEscape(order.getSellerName()) + "\"," +
+                "\"gasBrand\":\"" + jsonEscape(firstItem == null ? "" : firstItem.productName()) + "\"," +
+                "\"gasSize\":\"" + jsonEscape(firstItem == null ? "" : firstItem.size()) + "\"," +
+                "\"quantity\":" + (firstItem == null ? 0 : firstItem.quantity()) +
+                "}";
+    }
+
+    private String firstItemSummary(OrderEntity order) {
+        var firstItem = order.getItems().isEmpty() ? null : order.getItems().get(0);
+        if (firstItem == null) {
+            return "New order ready for pickup";
+        }
+        return firstItem.productName() + " " + firstItem.size() + " x " + firstItem.quantity();
     }
 
     private static Long parseId(String raw, String fieldName) {
@@ -422,6 +575,13 @@ public class OrderServiceImpl implements OrderService {
         } catch (NumberFormatException e) {
             throw new BadRequestException(fieldName + " must be a numeric id.");
         }
+    }
+
+    private static String jsonEscape(String input) {
+        if (input == null) return "";
+        return input
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"");
     }
 
     private List<OrderEntity> allOrdersSorted() {

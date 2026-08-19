@@ -21,6 +21,8 @@
  */
 
 import type { Location } from "../../constants/types";
+import type { GasProduct } from "../../constants/types";
+import { GAS_BRANDS, isGasBrand } from "../../constants/gasCatalog";
 
 /**
  * A "display-ready" seller — what the home card needs to render. This
@@ -50,6 +52,32 @@ export interface NearbySeller extends Record<string, unknown> {
    * bottom-sheet row shows a "Location not set" pill.
    */
   locationStatus?: "OK" | "MISSING";
+}
+
+export function gasBrandsForSellerInventory(
+  products: GasProduct[],
+  sellerId: string,
+): string[] {
+  const seen = new Set<string>();
+  for (const product of products) {
+    if (product.sellerId !== sellerId) continue;
+    if (!isGasBrand(product.name)) continue;
+    seen.add(product.name);
+  }
+  return GAS_BRANDS.filter((brand) => seen.has(brand));
+}
+
+export function gasSizesForSellerInventory(
+  products: GasProduct[],
+  sellerId: string,
+): string[] {
+  const seen = new Set<string>();
+  for (const product of products) {
+    if (product.sellerId !== sellerId) continue;
+    if (!isGasBrand(product.name)) continue;
+    seen.add(product.size);
+  }
+  return Array.from(seen);
 }
 
 /**

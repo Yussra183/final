@@ -126,9 +126,15 @@ function RestockHomeSection() {
   const acceptedCount = requests.filter(
     (r) => normalizeRestockStatus(r.status) === "accepted",
   ).length;
+  // "In transit" is now the supplier's terminal-ish state: once a row
+  // hits DISPATCHED, the supplier's job is done. The seller then
+  // confirms receipt which moves the row to DELIVERED, and the
+  // supplier sees the count move out of this bucket automatically.
   const inTransitCount = requests.filter(
     (r) => normalizeRestockStatus(r.status) === "dispatched",
   ).length;
+  // "Delivered" KPI counts rows the seller has confirmed receipt of —
+  // i.e. truly finished. Useful for the supplier's reconciliation.
   const deliveredCount = requests.filter(
     (r) => normalizeRestockStatus(r.status) === "delivered",
   ).length;
@@ -192,9 +198,13 @@ function RestockHomeSection() {
     updateRestockStatus(r.id, { status: "dispatched" });
   };
 
-  const handleMarkDelivered = (r: RestockRequest) => {
-    updateRestockStatus(r.id, { status: "delivered" });
-  };
+  // NOTE: the supplier does NOT mark a restock DELIVERED. Per the
+  // business diagram, the supplier stages up to DISPATCHED; the seller
+  // is the one who confirms physical receipt, which transitions the
+  // row to DELIVERED and credits inventory. Showing a "Confirm
+  // delivery" button here would re-introduce the old state machine
+  // (and silently fail at the API because the supplier is no longer
+  // authorised to transition DISPATCHED → DELIVERED).
 
   const statusPillTone = (s: RestockRequest["status"]) => {
     const norm = normalizeRestockStatus(s);
@@ -281,17 +291,27 @@ function RestockHomeSection() {
             key={r.id}
             style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
           >
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.itemTitle}>
-                  {r.productName} ({r.size}) ×{r.quantity}
-                </Text>
-                <Text style={styles.itemMeta}>
-                  {r.sellerName} • {formatDate(r.createdAt)}
-                </Text>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() =>
+                router.push({
+                  pathname: "/(supplier)/restock/[id]",
+                  params: { id: r.id },
+                } as any)
+              }
+            >
+              <View style={styles.row}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.itemTitle}>
+                    {r.productName} ({r.size}) ×{r.quantity}
+                  </Text>
+                  <Text style={styles.itemMeta}>
+                    {r.sellerName} • {formatDate(r.createdAt)}
+                  </Text>
+                </View>
+                <StatusPill label="Pending" tone="warning" />
               </View>
-              <StatusPill label="Pending" tone="warning" />
-            </View>
+            </TouchableOpacity>
             <View style={styles.actionRow}>
               <AppButton
                 title="Accept"
@@ -335,20 +355,30 @@ function RestockHomeSection() {
               key={r.id}
               style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
             >
-              <View style={styles.row}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemTitle}>
-                    {r.productName} ({r.size}) ×{r.quantity}
-                  </Text>
-                  <Text style={styles.itemMeta}>
-                    To {r.sellerName} • {formatDate(r.createdAt)}
-                  </Text>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() =>
+                  router.push({
+                    pathname: "/(supplier)/restock/[id]",
+                    params: { id: r.id },
+                  } as any)
+                }
+              >
+                <View style={styles.row}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitle}>
+                      {r.productName} ({r.size}) ×{r.quantity}
+                    </Text>
+                    <Text style={styles.itemMeta}>
+                      To {r.sellerName} • {formatDate(r.createdAt)}
+                    </Text>
+                  </View>
+                  <StatusPill
+                    label={RESTOCK_STATUS_LABELS[s]}
+                    tone={statusPillTone(s)}
+                  />
                 </View>
-                <StatusPill
-                  label={RESTOCK_STATUS_LABELS[s]}
-                  tone={statusPillTone(s)}
-                />
-              </View>
+              </TouchableOpacity>
               {s === "accepted" ? (
                 <AppButton
                   title="Start preparing"
@@ -366,13 +396,9 @@ function RestockHomeSection() {
                   onPress={() => handleDispatch(r)}
                 />
               ) : (
-                <AppButton
-                  title="Confirm delivery"
-                  variant="primary"
-                  fullWidth
-                  style={{ marginTop: Spacing.sm }}
-                  onPress={() => handleMarkDelivered(r)}
-                />
+                <Text style={[styles.itemMeta, { marginTop: Spacing.sm }]}>
+                  Awaiting seller's receipt confirmation
+                </Text>
               )}
             </Card>
           );
@@ -417,6 +443,7 @@ type RequestFilter =
   | "cancelled";
 
 function RestockRequestsSection() {
+  const router = useRouter();
   const { session, getRestockForSupplier, updateRestockStatus } = useStore();
   const user = session?.user!;
   const requests = getRestockForSupplier(user.id);
@@ -497,31 +524,41 @@ function RestockRequestsSection() {
           const s = normalizeRestockStatus(item.status);
           return (
             <Card>
-              <View style={styles.row}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemTitle}>
-                    {item.productName} ({item.size})
-                  </Text>
-                  <Text style={styles.itemMeta}>
-                    {item.sellerName} • {formatDate(item.createdAt)}
-                  </Text>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() =>
+                  router.push({
+                    pathname: "/(supplier)/restock/[id]",
+                    params: { id: item.id },
+                  } as any)
+                }
+              >
+                <View style={styles.row}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitle}>
+                      {item.productName} ({item.size})
+                    </Text>
+                    <Text style={styles.itemMeta}>
+                      {item.sellerName} • {formatDate(item.createdAt)}
+                    </Text>
+                  </View>
+                  <StatusPill
+                    label={RESTOCK_STATUS_LABELS[s]}
+                    tone={
+                      s === "delivered" || s === "received"
+                        ? "success"
+                        : s === "rejected" || s === "cancelled"
+                          ? "danger"
+                          : s === "dispatched" || s === "preparing"
+                            ? "info"
+                            : s === "accepted"
+                              ? "primary"
+                              : "warning"
+                    }
+                  />
                 </View>
-                <StatusPill
-                  label={RESTOCK_STATUS_LABELS[s]}
-                  tone={
-                    s === "delivered" || s === "received"
-                      ? "success"
-                      : s === "rejected" || s === "cancelled"
-                        ? "danger"
-                        : s === "dispatched" || s === "preparing"
-                          ? "info"
-                          : s === "accepted"
-                            ? "primary"
-                            : "warning"
-                  }
-                />
-              </View>
-              <Text style={styles.qty}>Quantity: {item.quantity} units</Text>
+                <Text style={styles.qty}>Quantity: {item.quantity} units</Text>
+              </TouchableOpacity>
               {s === "pending" ? (
                 <View style={styles.actionRow}>
                   <AppButton
@@ -557,13 +594,9 @@ function RestockRequestsSection() {
                 />
               ) : null}
               {s === "dispatched" ? (
-                <AppButton
-                  title="Confirm delivery"
-                  variant="primary"
-                  onPress={() => updateRestockStatus(item.id, { status: "delivered" })}
-                  fullWidth
-                  style={{ marginTop: Spacing.sm }}
-                />
+                <Text style={[styles.itemMeta, { marginTop: Spacing.sm }]}>
+                  On the way — awaiting seller's receipt confirmation.
+                </Text>
               ) : null}
             </Card>
           );

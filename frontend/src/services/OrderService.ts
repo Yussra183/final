@@ -131,17 +131,7 @@ export class OrderService {
     });
     return {
       order: created,
-      auditNotes: [
-        {
-          id: `n-${created.id}-placed`,
-          userId: dto.sellerId,
-          title: "New order received",
-          message: `Order #${created.id.slice(-4)} from ${dto.customerName}`,
-          type: "order",
-          read: false,
-          createdAt: created.createdAt,
-        },
-      ],
+      auditNotes: [],
     };
   }
 

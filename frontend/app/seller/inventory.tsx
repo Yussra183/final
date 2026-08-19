@@ -37,17 +37,12 @@ import { AppButton } from "../../src/components/AppButton";
 import { useStore } from "../../src/store/StoreContext";
 import { formatCurrency } from "../../src/utils/format";
 import { GasProduct } from "../../constants/types";
+import { ALL_GAS_SIZES } from "../../constants/gasCatalog";
+import { useRouter } from "expo-router";
 
 const FALLBACK_LOW_STOCK_THRESHOLD = 10;
 
-type SizeFilter = "all" | "6kg" | "13kg" | "22kg";
-
-const SIZE_FILTERS: { key: SizeFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "6kg", label: "6kg" },
-  { key: "13kg", label: "13kg" },
-  { key: "22kg", label: "22kg" },
-];
+type SizeFilter = "all" | string;
 
 /** Inventory card — image · name · size · stock bar · price · actions. */
 function ProductCard({
@@ -302,6 +297,7 @@ function EditProductModal({
 }
 
 export default function SellerInventory() {
+  const router = useRouter();
   const {
     session,
     products,
@@ -329,6 +325,14 @@ export default function SellerInventory() {
     if (sizeFilter === "all") return myProducts;
     return myProducts.filter((p) => p.size === sizeFilter);
   }, [myProducts, sizeFilter]);
+
+  const sizeFilters = useMemo(
+    () => [
+      { key: "all", label: "All" },
+      ...ALL_GAS_SIZES.map((size) => ({ key: size, label: size })),
+    ],
+    [],
+  );
 
   const lowCount = useMemo(
     () =>
@@ -423,6 +427,13 @@ export default function SellerInventory() {
               </View>
               <StatusPill label={`${lowCount}`} tone="warning" />
             </View>
+            <TouchableOpacity
+              style={styles.bannerCta}
+              onPress={() => router.push("/seller/restock" as any)}
+            >
+              <Ionicons name="cloud-download-outline" size={16} color={Colors.primary} />
+              <Text style={styles.bannerCtaText}>Request gas from supplier</Text>
+            </TouchableOpacity>
           </Card>
         ) : null}
 
@@ -432,7 +443,7 @@ export default function SellerInventory() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.filterRow}
         >
-          {SIZE_FILTERS.map((f) => {
+          {sizeFilters.map((f) => {
             const active = sizeFilter === f.key;
             return (
               <TouchableOpacity
@@ -543,6 +554,20 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textSecondary,
     marginTop: 2,
+  },
+  bannerCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: Spacing.sm,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  bannerCtaText: {
+    color: Colors.primary,
+    fontWeight: "700",
+    fontSize: FontSize.sm,
   },
 
   // Filter chips

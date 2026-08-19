@@ -613,105 +613,21 @@ export default function RiderProfile() {
                 )}
               </Card>
 
-              {/* ============== Assigned seller ============== */}
-              <Text style={styles.sectionTitle}>Assigned Seller</Text>
-              {assignedSeller ? (
-                <Card>
-                  {renderField(
-                    "storefront-outline",
-                    "Business Name",
-                    assignedSeller.businessName,
-                    Colors.primary,
-                  )}
-                  <Divider />
-                  {renderField(
-                    "person-outline",
-                    "Seller Name",
-                    assignedSeller.sellerName,
-                    Colors.accent,
-                  )}
-                  <Divider />
-                  {renderField(
-                    "call-outline",
-                    "Seller Phone Number",
-                    assignedSeller.phone,
-                    Colors.secondary,
-                  )}
-                  <Divider />
-                  {renderField(
-                    "location-outline",
-                    "Seller Location",
-                    assignedSeller.location,
-                    Colors.info,
-                  )}
-                  {assignedSeller.district || assignedSeller.region ? (
-                    <>
-                      <Divider />
-                      <View style={styles.regionRow}>
-                        <Ionicons
-                          name="map-outline"
-                          size={16}
-                          color={Colors.textSecondary}
-                        />
-                        <Text style={styles.regionText}>
-                          {[assignedSeller.district, assignedSeller.region]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </Text>
-                      </View>
-                    </>
-                  ) : null}
-                  <View style={styles.readOnlyNote}>
-                    <Ionicons
-                      name="lock-closed-outline"
-                      size={14}
-                      color={Colors.textSecondary}
-                    />
-                    <Text style={styles.readOnlyNoteText}>
-                      Assigned by the administrator — this cannot be changed
-                      from the rider app.
-                    </Text>
-                  </View>
-                </Card>
-              ) : (
-                <Card>
-                  <View style={styles.waitingRow}>
-                    <Ionicons
-                      name="hourglass-outline"
-                      size={32}
-                      color={Colors.warning}
-                    />
-                  </View>
-                  <Text style={styles.waitingTitle}>
-                    Awaiting Seller Assignment
-                  </Text>
-                  <Text style={styles.waitingBody}>
-                    You have not yet been assigned to a seller. Please wait
-                    for administrator assignment.
-                  </Text>
+              <Text style={styles.sectionTitle}>Delivery Coverage</Text>
+              <Card>
+                <Text style={styles.waitingTitle}>Mobile Rider Workflow</Text>
+                <Text style={styles.waitingBody}>
+                  Riders are not permanently attached to one seller. Open the
+                  rider dashboard to see all approved sellers and choose any
+                  ready-for-pickup order.
+                </Text>
+                {assignedSeller ? (
                   <Text style={styles.waitingSub}>
-                    You will not be able to receive or accept delivery
-                    orders until a seller has been assigned to you.
+                    Legacy seller assignment data still exists on this account,
+                    but it no longer controls which deliveries you can accept.
                   </Text>
-                </Card>
-              )}
-
-              {verification.isApproved ? (
-                <AppButton
-                  title="View My Team"
-                  variant="outline"
-                  leftIcon={
-                    <Ionicons
-                      name="people-outline"
-                      size={18}
-                      color={Colors.primary}
-                    />
-                  }
-                  onPress={() => router.push("/rider/my-team")}
-                  style={{ marginTop: Spacing.md }}
-                  fullWidth
-                />
-              ) : null}
+                ) : null}
+              </Card>
 
               {/* ============== Rider Verification (compact entry-point) ============== */}
               <Text style={styles.sectionTitle}>Rider Verification</Text>

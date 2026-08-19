@@ -4,7 +4,7 @@ package com.project.gas_delivery.supply.enums;
  * Lifecycle states for a {@code supply_orders} row (FR-06).
  *
  * <pre>
- *   PENDING ──accept──▶ ACCEPTED ──startPrepare──▶ PREPARING ──dispatch──▶ DISPATCHED ──deliver──▶ DELIVERED ──receive──▶ RECEIVED (terminal)
+ *   PENDING ──accept──▶ ACCEPTED ──startPrepare──▶ PREPARING ──dispatch──▶ DISPATCHED ──confirmReceipt──▶ DELIVERED (terminal)
  *      │                  │                            │                            │                       │
  *      │ reject           │ cancel                     │ cancel                     │ cancel                 │
  *      ▼                  ▼                            ▼                            ▼
@@ -29,8 +29,15 @@ public enum SupplyOrderStatus {
         return name().toLowerCase();
     }
 
-    /** True when the row is in a terminal state and admits no further transitions. */
+    /** True when the row is in a terminal state and admits no further transitions.
+     *
+     * <p>Per the diagram, {@link #DELIVERED} is now the seller's terminal
+     * transition (confirmed receipt credits inventory). {@link #RECEIVED}
+     * remains in the enum as a legacy value for backwards compatibility
+     * with rows written before this change but is no longer terminal and
+     * should not be written by any code path.</p>
+     */
     public boolean isTerminal() {
-        return this == RECEIVED || this == REJECTED || this == CANCELLED;
+        return this == DELIVERED || this == REJECTED || this == CANCELLED;
     }
 }

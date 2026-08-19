@@ -34,6 +34,9 @@ export interface NearbySellerMarker {
   lat: number;
   lng: number;
   label?: string;
+  badgeLabel?: string;
+  badgeCount?: number;
+  hasAlert?: boolean;
   selected?: boolean;
   /** Business name shown on the pin label. Falls back to `label`. */
   name?: string;
@@ -357,11 +360,19 @@ export function NearbySellersMap({
           ? "#94A3B8" // slate-400 — distinct, neutral "location missing" cue
           : p.pin.color ?? identityColor(p.pin.id)
         : Colors.accent;
+      const showAlertBadge =
+        !isUserPin &&
+        !isMissing &&
+        (p.pin.hasAlert === true ||
+          (typeof p.pin.badgeCount === "number" && p.pin.badgeCount > 0) ||
+          !!p.pin.badgeLabel);
       // Status halo: success for open, border for closed, self-tinted
       // when no status reported. 2 px normal, 3 px when selected.
       const haloColor =
         isMissing
           ? Colors.border
+          : showAlertBadge
+          ? "#F97316"
           : richStatus === "Active"
           ? Colors.success
           : richStatus === "Closed"
@@ -418,6 +429,16 @@ export function NearbySellersMap({
               />
             </View>
           </View>
+          {showAlertBadge ? (
+            <View style={styles.alertBadge}>
+              <Text style={styles.alertBadgeText} numberOfLines={1}>
+                {p.pin.badgeLabel ??
+                  (typeof p.pin.badgeCount === "number" && p.pin.badgeCount > 0
+                    ? `${p.pin.badgeCount} NEW`
+                    : "NEW ORDER")}
+              </Text>
+            </View>
+          ) : null}
           {isUserPin && p.pin.label ? (
             <View style={styles.pinLabel}>
               <Text style={styles.pinLabelText} numberOfLines={1}>
@@ -638,6 +659,20 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: FontSize.xs - 2,
     fontWeight: "800",
+  },
+  alertBadge: {
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.full,
+    backgroundColor: "#FFF1E8",
+    borderWidth: 1,
+    borderColor: "#F97316",
+  },
+  alertBadgeText: {
+    color: "#C2410C",
+    fontSize: FontSize.xs - 2,
+    fontWeight: "900",
   },
   pinLabelName: {
     color: Colors.text,

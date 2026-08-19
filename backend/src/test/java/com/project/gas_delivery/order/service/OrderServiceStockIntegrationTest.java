@@ -8,10 +8,15 @@ import com.project.gas_delivery.order.dto.CreateOrderRequest;
 import com.project.gas_delivery.order.dto.DeliveryLocationDto;
 import com.project.gas_delivery.order.dto.OrderItemDto;
 import com.project.gas_delivery.order.exception.InsufficientStockException;
+import com.project.gas_delivery.notification.service.NotificationService;
+import com.project.gas_delivery.permit.repository.RiderApplicationRepository;
+import com.project.gas_delivery.product.entity.ProductEntity;
+import com.project.gas_delivery.product.repository.ProductRepository;
 import com.project.gas_delivery.order.repository.OrderRepository;
 import com.project.gas_delivery.order.service.impl.OrderServiceImpl;
 import com.project.gas_delivery.payment.service.PaymentService;
 import com.project.gas_delivery.product.service.StockService;
+import com.project.gas_delivery.rider.repository.RiderProfileRepository;
 import com.project.gas_delivery.rider.repository.SellerRiderRepository;
 import com.project.gas_delivery.tracking.service.DeliveryTrackingService;
 import jakarta.persistence.EntityManager;
@@ -70,10 +75,22 @@ class OrderServiceStockIntegrationTest {
     private SellerRiderRepository sellerRiderRepository;
 
     @Mock
+    private RiderProfileRepository riderProfileRepository;
+
+    @Mock
+    private RiderApplicationRepository riderApplicationRepository;
+
+    @Mock
     private DeliveryTrackingService deliveryTrackingService;
 
     @Mock
     private StockService stockService;
+
+    @Mock
+    private ProductRepository productRepository;
+
+    @Mock
+    private NotificationService notificationService;
 
     @Mock
     private EntityManager entityManager;
@@ -84,7 +101,9 @@ class OrderServiceStockIntegrationTest {
     void setUp() {
         orderService = new OrderServiceImpl(
                 orderRepository, userRepository, sellerRiderRepository,
-                deliveryTrackingService, stockService, paymentService, entityManager
+                riderProfileRepository, riderApplicationRepository,
+                deliveryTrackingService, stockService, productRepository,
+                notificationService, paymentService, entityManager
         );
     }
 
@@ -112,13 +131,34 @@ class OrderServiceStockIntegrationTest {
                 "2",                           // sellerId (string)
                 "Test Seller",                 // sellerName
                 List.of(new OrderItemDto(
-                        productId, "LPG 13kg", "13kg", qty, BigDecimal.valueOf(32_000)
+                        productId, "Oryx Gas", "12.5 kg", qty, BigDecimal.valueOf(32_000)
                 )),
                 BigDecimal.valueOf(32_000L * qty), // total
                 "+255700000001",                              // phone
                 new DeliveryLocationDto("Test Address", -6.8, 39.2), // deliveryLocation
                 null                                            // notes
         );
+    }
+
+    private void stubProduct(long productId, long sellerId, String brand, String size) {
+        ProductEntity p = new ProductEntity(
+                sellerId,
+                brand,
+                size,
+                BigDecimal.valueOf(32_000),
+                10,
+                "refill",
+                brand + " " + size,
+                "🔥"
+        );
+        try {
+            java.lang.reflect.Field idField = ProductEntity.class.getDeclaredField("id");
+            idField.setAccessible(true);
+            idField.set(p, productId);
+        } catch (ReflectiveOperationException ex) {
+            throw new RuntimeException(ex);
+        }
+        when(productRepository.findById(productId)).thenReturn(Optional.of(p));
     }
 
     // ---------------------------------------------------------------------
@@ -128,6 +168,7 @@ class OrderServiceStockIntegrationTest {
     @Test
     void create_reservesStockForEveryItemBeforePersistingOrder() {
         stubActiveSeller(2L);
+        stubProduct(50L, 2L, "Oryx Gas", "12.5 kg");
         when(stockService.reserveForOrder(eq(50L), eq(2))).thenReturn(8);
         when(orderRepository.save(any())).thenAnswer(inv -> {
             // Simulate JPA assigning an id on persist.
@@ -147,8 +188,9 @@ class OrderServiceStockIntegrationTest {
     @Test
     void create_throwsAndDoesNotPersistOrderWhenStockInsufficient() {
         stubActiveSeller(2L);
+        stubProduct(50L, 2L, "Oryx Gas", "12.5 kg");
         when(stockService.reserveForOrder(eq(50L), eq(10)))
-                .thenThrow(new InsufficientStockException("50", "LPG 13kg", 3, 10));
+                .thenThrow(new InsufficientStockException("50", "Oryx Gas", 3, 10));
 
         assertThatThrownBy(() -> orderService.create(100L, Role.CUSTOMER, request("50", 10)))
                 .isInstanceOf(InsufficientStockException.class)
@@ -169,10 +211,11 @@ class OrderServiceStockIntegrationTest {
     @Test
     void create_rejectsOrderThatWouldDriveStockNegative() {
         stubActiveSeller(2L);
+        stubProduct(50L, 2L, "Oryx Gas", "12.5 kg");
         // Even though the backend predicate rejects, simulate the service
         // surfacing it via InsufficientStockException as the repo would.
         when(stockService.reserveForOrder(eq(50L), eq(99)))
-                .thenThrow(new InsufficientStockException("50", "LPG 13kg", 1, 99));
+                .thenThrow(new InsufficientStockException("50", "Oryx Gas", 1, 99));
 
         assertThatThrownBy(() -> orderService.create(100L, Role.CUSTOMER, request("50", 99)))
                 .isInstanceOf(InsufficientStockException.class);
@@ -191,12 +234,13 @@ class OrderServiceStockIntegrationTest {
         // this, but the service must also be robust at the boundary.
         CreateOrderRequest bad = new CreateOrderRequest(
                 "100", "Test Customer", "2", "Test Seller",
-                List.of(new OrderItemDto("50", "LPG 13kg", "13kg", 0, BigDecimal.valueOf(32_000))),
+                List.of(new OrderItemDto("50", "Oryx Gas", "12.5 kg", 0, BigDecimal.valueOf(32_000))),
                 BigDecimal.ZERO, "+255700000001",
                 new DeliveryLocationDto("Test Address", -6.8, 39.2),
                 null
         );
         stubActiveSeller(2L);
+        stubProduct(50L, 2L, "Oryx Gas", "12.5 kg");
         when(stockService.reserveForOrder(anyLong(), org.mockito.ArgumentMatchers.anyInt()))
                 .thenThrow(new IllegalArgumentException("quantity must be > 0"));
 
@@ -213,6 +257,8 @@ class OrderServiceStockIntegrationTest {
     @Test
     void create_handlesMultipleItemsAndStopsOnFirstInsufficientItem() {
         stubActiveSeller(2L);
+        stubProduct(50L, 2L, "Oryx Gas", "12.5 kg");
+        stubProduct(60L, 2L, "Taifa Gas", "15 kg");
         when(stockService.reserveForOrder(eq(50L), eq(2))).thenReturn(8);
         // Second item: out of stock.
         when(stockService.reserveForOrder(eq(60L), eq(3)))
@@ -221,8 +267,8 @@ class OrderServiceStockIntegrationTest {
         CreateOrderRequest multi = new CreateOrderRequest(
                 "100", "Test Customer", "2", "Test Seller",
                 List.of(
-                        new OrderItemDto("50", "LPG 13kg", "13kg", 2, BigDecimal.valueOf(32_000)),
-                        new OrderItemDto("60", "Regulator", "Standard", 3, BigDecimal.valueOf(8_500))
+                        new OrderItemDto("50", "Oryx Gas", "12.5 kg", 2, BigDecimal.valueOf(32_000)),
+                        new OrderItemDto("60", "Taifa Gas", "15 kg", 3, BigDecimal.valueOf(8_500))
                 ),
                 BigDecimal.valueOf(89_500),
                 "+255700000001",
@@ -239,6 +285,27 @@ class OrderServiceStockIntegrationTest {
         // save() was attempted.
         verify(stockService, times(1)).reserveForOrder(50L, 2);
         verify(stockService, times(1)).reserveForOrder(60L, 3);
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void create_rejectsInvalidBrandSizeCombination() {
+        stubActiveSeller(2L);
+        stubProduct(50L, 2L, "Taifa Gas", "15 kg");
+        CreateOrderRequest invalid = new CreateOrderRequest(
+                "100", "Test Customer", "2", "Test Seller",
+                List.of(new OrderItemDto("50", "Taifa Gas", "12.5 kg", 1, BigDecimal.valueOf(32_000))),
+                BigDecimal.valueOf(32_000),
+                "+255700000001",
+                new DeliveryLocationDto("Test Address", -6.8, 39.2),
+                null
+        );
+
+        assertThatThrownBy(() -> orderService.create(100L, Role.CUSTOMER, invalid))
+                .isInstanceOf(com.project.gas_delivery.auth.exception.BadRequestException.class)
+                .hasMessage("Selected cylinder size is not available for this gas brand.");
+
+        verify(stockService, never()).reserveForOrder(anyLong(), org.mockito.ArgumentMatchers.anyInt());
         verify(orderRepository, never()).save(any());
     }
 }

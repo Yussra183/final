@@ -3,9 +3,8 @@
  *
  * Shared customer-side navigation helpers. Centralised so the home
  * screen and the seller-details screen both encode the order-form
- * params the same way — the decoder lives on the receiving end of
- * the route (`readSeller` in `app/(customer)/orders.tsx`) and any
- * drift here would silently break pre-fill.
+ * params the same way and any drift here would silently break
+ * pre-fill.
  *
  * Why a separate util instead of co-locating with each caller?
  * ------------------------------------------------------------
@@ -25,7 +24,7 @@
  * we've decided to centralise.
  *
  * Both the Home list and the seller details screen also share the
- * same screen entry pattern: router.push("/(customer)/orders"). The
+ * same screen entry pattern: router.push("/(customer)/place-order"). The
  * "Choose another seller" CTA in the details screen instead uses
  * `router.back()` to return to the map.
  */
@@ -34,8 +33,8 @@ import type { NearbySeller } from "./sellers";
 
 /**
  * Pipe-joined arrays survive the URL param round-trip safely without
- * JSON-encoding. `readSeller()` on the orders screen splits on `|`.
- * Empty values are dropped so we don't pass `"LPG|"` to the form.
+ * JSON-encoding. The order screen splits them back on `|`.
+ * Empty values are dropped so we don't pass blank brand/size slots.
  */
 function joinPipe(items: string[] | undefined | null): string {
   if (!items) return "";
@@ -43,7 +42,7 @@ function joinPipe(items: string[] | undefined | null): string {
 }
 
 /**
- * Build the URL params for `/(customer)/orders` so the order form
+ * Build the URL params for `/(customer)/place-order` so the order form
  * pre-fills the seller.
  *
  * Exposed independently (in addition to `placeOrderForSeller`) so
@@ -52,7 +51,7 @@ function joinPipe(items: string[] | undefined | null): string {
  * shape.
  */
 export function orderParamsForSeller(seller: NearbySeller): {
-  pathname: "/(customer)/orders";
+  pathname: "/(customer)/place-order";
   params: {
     sellerId: string;
     sellerName: string;
@@ -62,7 +61,7 @@ export function orderParamsForSeller(seller: NearbySeller): {
   };
 } {
   return {
-    pathname: "/(customer)/orders" as const,
+    pathname: "/(customer)/place-order" as const,
     params: {
       sellerId: seller.id,
       sellerName: seller.name,

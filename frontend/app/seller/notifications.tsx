@@ -17,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
@@ -152,6 +153,7 @@ function CategoryHeader({ category, unread }: { category: CategoryDef; unread: n
 }
 
 export default function SellerNotifications() {
+  const router = useRouter();
   const {
     session,
     getNotificationsForUser,
@@ -250,6 +252,43 @@ export default function SellerNotifications() {
   }, [activeCat, items]);
 
   const totalUnread = counts.all.unread;
+
+  const openNotification = useCallback(
+    (n: NotificationItem) => {
+      if (!n.read) {
+        void markNotificationRead(n.id);
+      }
+      if (!n.data) return;
+      try {
+        const parsed = JSON.parse(n.data) as {
+          orderId?: string;
+          supplyOrderId?: string;
+        };
+        // Customer order → seller orders list, deep-linked to that order.
+        if (n.type === "order" && parsed.orderId) {
+          router.push({
+            pathname: "/seller/orders",
+            params: { orderId: parsed.orderId },
+          } as any);
+          return;
+        }
+        // Supply (restock) → seller restock screen, which already
+        // shows the matching row in one of its sections (In flight /
+        // Awaiting your receipt / History) with the appropriate
+        // action button. The full supply-order details screen exists
+        // on the supplier side; here the seller can act on the row
+        // from the same screen, so deep-linking straight to the
+        // section is enough.
+        if (n.type === "supply" && parsed.supplyOrderId) {
+          router.push("/seller/restock" as any);
+        }
+      } catch {
+        // Ignore malformed metadata — marking the notification read
+        // is still valid.
+      }
+    },
+    [markNotificationRead, router],
+  );
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -359,9 +398,7 @@ export default function SellerNotifications() {
                   <NotificationCard
                     key={n.id}
                     item={n}
-                    onPress={() => {
-                      if (!n.read) markNotificationRead(n.id);
-                    }}
+                    onPress={() => openNotification(n)}
                   />
                 ))}
               </View>

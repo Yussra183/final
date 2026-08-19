@@ -1228,6 +1228,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    */
   const placeOrder = useCallback(
     async (input: PlaceOrderInput): Promise<Order> => {
+      if (__DEV__) {
+        console.log("[ORDER_DEBUG][CREATE]", {
+          sellerId: input.sellerId,
+          gasBrand: input.items[0]?.productName ?? null,
+          cylinderSize: input.items[0]?.size ?? null,
+          quantity: input.items[0]?.quantity ?? null,
+        });
+      }
       const dto: CreateOrderDto = {
         customerId: input.customerId,
         customerName: input.customerName,
@@ -1309,7 +1317,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const claimOrder = useCallback(
     async (orderId: string) => {
       if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
-      const order = orders.find((o) => o.id === orderId);
+      let order = orders.find((o) => o.id === orderId);
+      if (!order) {
+        const available = await OrdersApi.availableForRiders();
+        order = available.find((o) => o.id === orderId);
+      }
       if (!order) throw new OrderServiceError("NOT_FOUND", "Order not found.");
       const result = await orderService.claim(
         { actor: session.user },
@@ -1361,10 +1373,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const availableOrdersForUser = useCallback((): Order[] => {
     if (!session) return [];
     if (session.user.role !== "rider") return [];
-    // Backend's `GET /api/orders/dispatch/available` is authoritative —
-    // sellers allowed per rider is enforced through the `seller_riders`
-    // join table. Locally we mirror the safe shape: ACCEPTED, no
-    // assigned rider, not terminal.
+    // Rider availability is now loaded from the dedicated dispatch
+    // endpoint. This selector only preserves the old local fallback
+    // shape for any screen that has not been migrated yet.
     const filtered = orders.filter(
       (o) =>
         o.status === "accepted" &&

@@ -149,8 +149,7 @@ export default function OrdersScreen() {
         : item.id.slice(-6);
     const orderNumber = `#${shortNumber}`;
     const payStatus = derivePaymentStatus(item.status);
-    const gasType =
-      (i?.productName ?? "").split(" ").slice(1).join(" ") || "—";
+    const gasType = i?.productName ?? "—";
     return (
       <FadeIn delay={index * 50} style={styles.historyCardWrap}>
         <Pressable onPress={() => viewDetails(item)}>
