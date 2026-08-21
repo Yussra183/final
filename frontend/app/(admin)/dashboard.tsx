@@ -28,6 +28,8 @@ import {
   AdminEmptyState,
   AdminStatTile,
 } from "../../src/components/admin";
+import { AdminIcon } from "../../src/components/admin/Icon";
+import type { AdminIconName } from "../../src/components/admin/Icon";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { orderStatusLabel, orderTone } from "../../constants/order";
 import { AdminApi } from "../../src/api/endpoints";
@@ -97,24 +99,6 @@ export default function AdminDashboardHome() {
     <AdminLayout
       title="Dashboard"
       subtitle="Live overview of operations and pending approvals"
-      rightActions={
-        <View style={styles.headerActions}>
-          <AdminButton
-            label="Refresh"
-            icon="↻"
-            variant="secondary"
-            onPress={reloadAll}
-            loading={stats.refreshing || orders.refreshing || activity.refreshing}
-          />
-          <TouchableOpacity
-            style={styles.headerBtn}
-            onPress={() => router.push("/reports" as any)}
-          >
-            <Text style={styles.headerBtnIcon}>📊</Text>
-            <Text style={styles.headerBtnText}>View Reports</Text>
-          </TouchableOpacity>
-        </View>
-      }
       refreshControl={
         <RefreshControl
           refreshing={
@@ -139,31 +123,31 @@ export default function AdminDashboardHome() {
               <AdminStatTile
                 label="Total Users"
                 value={s.totalUsers}
-                icon="👤"
+                icon="profile"
                 tone="admin"
               />
               <AdminStatTile
                 label="Customers"
                 value={s.totalCustomers}
-                icon="👥"
+                icon="customers"
                 tone="success"
               />
               <AdminStatTile
                 label="Sellers"
                 value={s.totalSellers}
-                icon="🏪"
+                icon="sellers"
                 tone="accent"
               />
               <AdminStatTile
                 label="Riders"
                 value={s.totalRiders}
-                icon="🛵"
+                icon="riders"
                 tone="info"
               />
               <AdminStatTile
                 label="Suppliers"
                 value={s.totalSuppliers}
-                icon="🏭"
+                icon="suppliers"
                 tone="primary"
               />
             </View>
@@ -174,25 +158,25 @@ export default function AdminDashboardHome() {
               <AdminStatTile
                 label="Total Products"
                 value={s.totalProducts}
-                icon="🛢️"
+                icon="products"
                 tone="primary"
               />
               <AdminStatTile
                 label="Total Orders"
                 value={s.totalOrders}
-                icon="📦"
+                icon="products"
                 tone="admin"
               />
               <AdminStatTile
                 label="Active Orders"
                 value={s.activeOrders}
-                icon="🚚"
+                icon="orders"
                 tone="info"
               />
               <AdminStatTile
                 label="Revenue (Delivered)"
                 value={formatCurrency(s.revenueDelivered)}
-                icon="💰"
+                icon="orders"
                 tone="success"
               />
             </View>
@@ -201,13 +185,13 @@ export default function AdminDashboardHome() {
               <AdminStatTile
                 label="Pending"
                 value={s.orderStatus.pending}
-                icon="⏳"
+                icon="pending"
                 tone="warning"
               />
               <AdminStatTile
                 label="Accepted"
                 value={s.orderStatus.accepted}
-                icon="✅"
+                icon="approve"
                 tone="info"
               />
               <AdminStatTile
@@ -217,25 +201,25 @@ export default function AdminDashboardHome() {
                   s.orderStatus.picked_up +
                   s.orderStatus.in_transit
                 }
-                icon="🛵"
+                icon="riders"
                 tone="primary"
               />
               <AdminStatTile
                 label="Delivered"
                 value={s.orderStatus.delivered}
-                icon="🏁"
+                icon="approve"
                 tone="success"
               />
               <AdminStatTile
                 label="Cancelled"
                 value={s.orderStatus.cancelled}
-                icon="✖️"
+                icon="reject"
                 tone="danger"
               />
               <AdminStatTile
                 label="Rejected"
                 value={s.orderStatus.rejected}
-                icon="🚫"
+                icon="reject"
                 tone="danger"
               />
             </View>
@@ -248,31 +232,31 @@ export default function AdminDashboardHome() {
               <AdminStatTile
                 label="Pending Applications"
                 value={s.pendingSellerApplications}
-                icon="📥"
+                icon="documents"
                 tone="warning"
               />
               <AdminStatTile
                 label="Under Review"
                 value={s.underReviewSellerApplications}
-                icon="🔍"
+                icon="search"
                 tone="info"
               />
               <AdminStatTile
                 label="Approved Sellers"
                 value={s.approvedSellers}
-                icon="✅"
+                icon="approve"
                 tone="success"
               />
               <AdminStatTile
                 label="Rejected"
                 value={s.rejectedSellerApplications}
-                icon="❌"
+                icon="reject"
                 tone="danger"
               />
               <AdminStatTile
                 label="Notifications"
                 value={s.totalNotifications}
-                icon="🔔"
+                icon="notifications"
                 tone="neutral"
               />
             </View>
@@ -283,39 +267,39 @@ export default function AdminDashboardHome() {
               {[
                 {
                   label: "Review Seller Apps",
-                  icon: "📥",
+                  icon: "documents" as AdminIconName,
                   tone: "#FEF3C7",
-                  route: "/seller-applications",
+                  route: "/sellers?tab=applications",
                   count: s.pendingSellerApplications,
                 },
                 {
                   label: "Manage Orders",
-                  icon: "📦",
+                  icon: "products" as AdminIconName,
                   tone: "#DBEAFE",
-                  route: "/orders",
+                  route: "/customers?tab=orders",
                   count: s.activeOrders,
                 },
                 {
                   label: "Manage Sellers",
-                  icon: "🏪",
+                  icon: "sellers" as AdminIconName,
                   tone: "#CCFBF1",
                   route: "/sellers",
                 },
                 {
                   label: "Manage Riders",
-                  icon: "🛵",
+                  icon: "riders" as AdminIconName,
                   tone: "#E0E7FF",
                   route: "/riders",
                 },
                 {
                   label: "Customers",
-                  icon: "👥",
+                  icon: "customers" as AdminIconName,
                   tone: "#FCE7F3",
                   route: "/customers",
                 },
                 {
                   label: "View Reports",
-                  icon: "📊",
+                  icon: "reports" as AdminIconName,
                   tone: "#EDE9FE",
                   route: "/reports",
                 },
@@ -327,7 +311,7 @@ export default function AdminDashboardHome() {
                   onPress={() => router.push(a.route as any)}
                 >
                   <View style={[styles.quickIcon, { backgroundColor: a.tone }]}>
-                    <Text style={styles.quickIconText}>{a.icon}</Text>
+                    <AdminIcon name={a.icon} size={20} color={Colors.text} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.quickLabel}>{a.label}</Text>
@@ -335,7 +319,7 @@ export default function AdminDashboardHome() {
                       <Text style={styles.quickMeta}>{a.count} open</Text>
                     ) : null}
                   </View>
-                  <Text style={styles.quickArrow}>›</Text>
+                  <AdminIcon name="next" size={18} color={Colors.textMuted} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -353,7 +337,7 @@ export default function AdminDashboardHome() {
             <View style={{ marginTop: Spacing.md, gap: 12 }}>
               {recentActivity.length === 0 ? (
                 <AdminEmptyState
-                  icon="🔔"
+                  icon="notifications"
                   title="No notifications yet"
                   message="System notifications will appear here as they are recorded."
                 />
@@ -381,14 +365,16 @@ export default function AdminDashboardHome() {
           <AdminCard style={{ flex: 1 }}>
             <View style={styles.cardHeaderRow}>
               <Text style={styles.cardHeading}>Recent Orders</Text>
-              <TouchableOpacity onPress={() => router.push("/orders" as any)}>
-                <Text style={styles.cardLink}>See all</Text>
-              </TouchableOpacity>
+              <TouchableOpacity
+              onPress={() => router.push("/customers?tab=orders" as any)}
+            >
+              <Text style={styles.cardLink}>See all</Text>
+            </TouchableOpacity>
             </View>
             <View style={{ marginTop: Spacing.md, gap: Spacing.sm }}>
               {recentOrders.length === 0 ? (
                 <AdminEmptyState
-                  icon="📦"
+                  icon="products"
                   title="No orders yet"
                   message="Orders placed by customers will appear here."
                 />
@@ -447,29 +433,6 @@ function toBadgeTone(status: AdminOrder["status"]) {
 }
 
 const styles = StyleSheet.create({
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  headerBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.admin,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 9,
-    borderRadius: Radius.md,
-  },
-  headerBtnIcon: {
-    color: "#FFF",
-    fontSize: 14,
-    marginRight: 6,
-  },
-  headerBtnText: {
-    color: "#FFF",
-    fontWeight: "800",
-    fontSize: FontSize.sm,
-  },
   kpiGrid: {
     flexDirection: "row",
     flexWrap: "wrap",

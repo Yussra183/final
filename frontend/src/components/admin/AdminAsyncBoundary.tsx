@@ -56,7 +56,7 @@ export function AdminAsyncBoundary({
         <Text style={styles.errorTitle}>Couldn&apos;t load this page</Text>
         <Text style={styles.errorMessage}>{error}</Text>
         <View style={{ marginTop: Spacing.lg }}>
-          <AdminButton label="Try again" icon="↻" onPress={onRetry} />
+          <AdminButton label="Try again" icon="refresh" onPress={onRetry} />
         </View>
       </View>
     );

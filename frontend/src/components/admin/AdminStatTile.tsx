@@ -11,6 +11,7 @@ import {
   Shadow,
   Spacing,
 } from "../../../constants/colors";
+import { AdminIcon, AdminIconName } from "./Icon";
 
 export type StatTone =
   | "primary"
@@ -25,7 +26,7 @@ export type StatTone =
 interface Props {
   label: string;
   value: string | number;
-  icon: string;
+  icon: AdminIconName;
   tone?: StatTone;
   delta?: string; // e.g. "+12%" or "-3"
   deltaTone?: "up" | "down" | "neutral";
@@ -38,7 +39,7 @@ const TONE_BG: Record<StatTone, string> = {
   warning: "#FEF3C7",
   danger: "#FEE2E2",
   info: "#DBEAFE",
-  admin: "#E2E8F0",
+  admin: "#CCFBF1",
   neutral: "#F1F5F9",
 };
 
@@ -49,7 +50,7 @@ const TONE_TEXT: Record<StatTone, string> = {
   warning: "#B45309",
   danger: "#B91C1C",
   info: "#1D4ED8",
-  admin: "#1E293B",
+  admin: "#0F766E",
   neutral: "#475569",
 };
 
@@ -67,7 +68,7 @@ export function AdminStatTile({
         <View
           style={[styles.iconBubble, { backgroundColor: TONE_BG[tone] }]}
         >
-          <Text style={styles.iconText}>{icon}</Text>
+          <AdminIcon name={icon} size={18} color={TONE_TEXT[tone]} />
         </View>
         {delta ? (
           <View

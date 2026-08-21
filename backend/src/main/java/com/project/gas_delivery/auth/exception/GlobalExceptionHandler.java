@@ -254,6 +254,8 @@ public class GlobalExceptionHandler {
                     ex.getMessage(), "SUPPLY_SUPPLIER_NOT_APPROVED", null);
             case SELF_REQUEST         -> ApiErrorBody.of(HttpStatus.BAD_REQUEST,
                     ex.getMessage(), "SUPPLY_SELF_REQUEST", null);
+            case INVALID_GAS_COMBINATION -> ApiErrorBody.of(HttpStatus.BAD_REQUEST,
+                    ex.getMessage(), "SUPPLY_INVALID_GAS_COMBINATION", null);
         };
     }
 

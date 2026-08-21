@@ -12,6 +12,8 @@ import com.project.gas_delivery.auth.service.SessionService;
 import com.project.gas_delivery.seller.entity.SellerProfileEntity;
 import com.project.gas_delivery.seller.repository.SellerProfileRepository;
 import com.project.gas_delivery.seller.service.GeocodingService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -42,6 +44,15 @@ import java.util.UUID;
  */
 @Service
 public class AuthServiceImpl implements AuthService {
+
+    /**
+     * Temporary diagnostic logger for the live login-failure investigation.
+     * Emits only the failure branch + safe metadata (identifier length,
+     * user-found flag, BCrypt-match flag). NEVER logs the plaintext
+     * password, the stored hash, or any token. Safe to remove once the
+     * investigation is complete — does not change auth behaviour.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(AuthServiceImpl.class);
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -196,10 +207,35 @@ public class AuthServiceImpl implements AuthService {
                 ? userRepository.findByEmail(identifier)
                 : userRepository.findByUsername(identifier);
 
-        User user = found.orElseThrow(() ->
-                new BadCredentialsException("Invalid username/email or password"));
+        // TEMP DIAGNOSTIC — capture the exact branch on the next login.
+        // No password, hash, or token is ever written to the log.
+        if (LOG.isInfoEnabled()) {
+            LOG.info("[AUTH_DIAG] identifier_len={} lookup_by={} found={}",
+                    identifier.length(),
+                    identifier.contains("@") ? "email" : "username",
+                    found.isPresent());
+        }
 
-        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+        User user = found.orElseThrow(() -> {
+            if (LOG.isInfoEnabled()) {
+                LOG.info("[AUTH_DIAG] branch=user_not_found");
+            }
+            return new BadCredentialsException("Invalid username/email or password");
+        });
+
+        boolean passwordMatches = passwordEncoder.matches(request.password(), user.getPasswordHash());
+        if (LOG.isInfoEnabled()) {
+            // Print only the BCrypt prefix length and the user row's
+            // stored hash prefix length so we can spot a mismatch that
+            // would indicate the stored hash was corrupted/replaced,
+            // without ever exposing the hash values themselves.
+            String storedPrefix = user.getPasswordHash() == null
+                    ? "null"
+                    : user.getPasswordHash().substring(0, Math.min(7, user.getPasswordHash().length()));
+            LOG.info("[AUTH_DIAG] branch=password_check user_id={} role={} active={} stored_hash_prefix={} matches={}",
+                    user.getId(), user.getRole(), user.isActive(), storedPrefix, passwordMatches);
+        }
+        if (!passwordMatches) {
             throw new BadCredentialsException("Invalid username/email or password");
         }
 
@@ -218,6 +254,9 @@ public class AuthServiceImpl implements AuthService {
         // original bad-credentials fallback so the seller-specific
         // branches above it stay un-branched.
         if (!user.isActive() && user.getRole() != Role.SELLER) {
+            if (LOG.isInfoEnabled()) {
+                LOG.info("[AUTH_DIAG] branch=account_disabled user_id={}", user.getId());
+            }
             throw new BadCredentialsException("Account is disabled");
         }
 

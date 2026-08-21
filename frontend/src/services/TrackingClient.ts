@@ -70,6 +70,13 @@ export interface TrackingClient {
    */
   subscribe(orderId: number): void;
   /**
+   * Subscribe to a supplier delivery-operation trip's tracking channel.
+   * Mirrors {@link TrackingClient.subscribe} for the additive trip path
+   * that the supplier live-tracking feature uses. Same socket, same
+   * broadcaster, same dedupe — only the channel key is different.
+   */
+  subscribeTrip(tripId: number): void;
+  /**
    * Drop a subscription. Sends an UNSUBSCRIBE frame if the socket is
    * OPEN. Safe to call with an unknown {@code orderId}.
    */
@@ -81,9 +88,15 @@ export interface TrackingClient {
    * Drops the frame silently if the socket isn't open — the REST
    * fallback in {@link TrackingApi.postLocation} is responsible for
    * back-fill in that case.
+   *
+   * <p>Either {@code orderId} (customer/rider order channel) or
+   * {@code tripId} (supplier delivery-operations channel) must be
+   * present. The server-side dispatcher treats the two as mutually
+   * exclusive.</p>
    */
   sendLocation(payload: {
-    orderId: number;
+    orderId?: number;
+    tripId?: number;
     lat: number;
     lng: number;
     headingDeg?: number;
@@ -119,6 +132,8 @@ export function createTrackingClient(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const subscribed = new Set<number>();
   const subscribedBefore = new Set<number>();
+  const subscribedTrips = new Set<number>();
+  const subscribedTripsBefore = new Set<number>();
 
   function clearReconnectTimer() {
     if (reconnectTimer) {
@@ -142,6 +157,9 @@ export function createTrackingClient(
   function sendAllPendingSubscriptions() {
     subscribed.forEach((orderId) => {
       send({ type: "SUBSCRIBE", orderId });
+    });
+    subscribedTrips.forEach((tripId) => {
+      send({ type: "SUBSCRIBE", tripId });
     });
   }
 
@@ -174,6 +192,8 @@ export function createTrackingClient(
         // socket was down.
         subscribedBefore.forEach((id) => subscribed.add(id));
         subscribedBefore.clear();
+        subscribedTripsBefore.forEach((id) => subscribedTrips.add(id));
+        subscribedTripsBefore.clear();
         sendAllPendingSubscriptions();
         handlers.onOpen?.();
       };
@@ -223,6 +243,8 @@ export function createTrackingClient(
         // re-subscribe automatically when the new socket opens.
         subscribed.forEach((id) => subscribedBefore.add(id));
         subscribed.clear();
+        subscribedTrips.forEach((id) => subscribedTripsBefore.add(id));
+        subscribedTrips.clear();
         scheduleReconnect();
       };
     } catch (e) {
@@ -246,6 +268,14 @@ export function createTrackingClient(
       send({ type: "SUBSCRIBE", orderId });
     },
 
+    subscribeTrip(tripId) {
+      if (subscribedTrips.has(tripId) || subscribedTripsBefore.has(tripId)) {
+        return;
+      }
+      subscribedTrips.add(tripId);
+      send({ type: "SUBSCRIBE", tripId });
+    },
+
     unsubscribe(orderId) {
       subscribed.delete(orderId);
       subscribedBefore.delete(orderId);
@@ -257,6 +287,8 @@ export function createTrackingClient(
       clearReconnectTimer();
       subscribed.clear();
       subscribedBefore.clear();
+      subscribedTrips.clear();
+      subscribedTripsBefore.clear();
       if (socket) {
         try {
           socket.close(1000, "client-disconnect");

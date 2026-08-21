@@ -82,15 +82,6 @@ export default function ProductsPage() {
     <AdminLayout
       title="Products"
       subtitle="Every product listed in the catalogue"
-      rightActions={
-        <AdminButton
-          label="Refresh"
-          icon="↻"
-          variant="secondary"
-          onPress={reload}
-          loading={refreshing}
-        />
-      }
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={reload} />
       }
@@ -106,25 +97,25 @@ export default function ProductsPage() {
           <AdminStatTile
             label="Products Shown"
             value={counts.all}
-            icon="🛢️"
+            icon="products"
             tone="primary"
           />
           <AdminStatTile
             label="Active"
             value={counts.active}
-            icon="✅"
+            icon="approve"
             tone="success"
           />
           <AdminStatTile
             label="Inactive"
             value={counts.inactive}
-            icon="💤"
+            icon="inactive"
             tone="warning"
           />
           <AdminStatTile
             label="In Stock"
             value={counts.inStock}
-            icon="📦"
+            icon="products"
             tone="info"
           />
         </View>
@@ -144,7 +135,7 @@ export default function ProductsPage() {
           />
           {products.length === 0 ? (
             <AdminEmptyState
-              icon="🛢️"
+              icon="products"
               title="No products found"
               message={
                 search || filter !== "all"

@@ -20,12 +20,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { useStore } from "../../src/store/StoreContext";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { Card } from "../../src/components/Card";
@@ -35,12 +35,23 @@ import { Avatar } from "../../src/components/Avatar";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { AppButton } from "../../src/components/AppButton";
 import { EmptyState } from "../../src/components/EmptyState";
+import { SegmentedTabs, SegmentedTab } from "../../src/components/SegmentedTabs";
+import { PressableScale } from "../../src/components/MicroAnimations";
 import { formatDate } from "../../src/utils/format";
 import { SupplierApprovalGate } from "../../src/components/SupplierApprovalGate";
-import { RestockRequest, RESTOCK_STATUS_LABELS, normalizeRestockStatus } from "../../constants/types";
+import {
+  RestockRequest,
+  RESTOCK_STATUS_LABELS,
+  normalizeRestockStatus,
+} from "../../constants/types";
 
 type RestockTab = "home" | "requests" | "deliveries";
-const ACCENT = "#6366F1";
+
+const RESTOCK_TABS: SegmentedTab[] = [
+  { key: "home", label: "Home", icon: "home-outline" },
+  { key: "requests", label: "Requests", icon: "cloud-download-outline" },
+  { key: "deliveries", label: "Deliveries", icon: "car-sport-outline" },
+];
 
 export default function SupplierRestock() {
   return (
@@ -68,34 +79,14 @@ function RestockContent() {
         </View>
       </View>
 
-      {/* Tab bar — segmented control */}
-      <View style={styles.tabBar}>
-        {(
-          [
-            { key: "home", label: "Home", icon: "🏠" },
-            { key: "requests", label: "Requests", icon: "📥" },
-            { key: "deliveries", label: "Deliveries", icon: "🚚" },
-          ] as { key: RestockTab; label: string; icon: string }[]
-        ).map((t) => {
-          const active = tab === t.key;
-          return (
-            <TouchableOpacity
-              key={t.key}
-              activeOpacity={0.85}
-              onPress={() => setTab(t.key)}
-              style={[styles.tab, active && styles.tabActive]}
-            >
-              <Text style={styles.tabIcon}>{t.icon}</Text>
-              <Text style={[styles.tabText, active && styles.tabTextActive]}>
-                {t.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <SegmentedTabs
+        tabs={RESTOCK_TABS}
+        active={tab}
+        onChange={(k) => setTab(k as RestockTab)}
+      />
 
       {tab === "home" ? (
-        <RestockHomeSection />
+        <RestockHomeSection onNavigate={setTab} />
       ) : tab === "requests" ? (
         <RestockRequestsSection />
       ) : (
@@ -107,7 +98,11 @@ function RestockContent() {
 
 /* ---------- Restock Home (KPI strip + awaiting + dispatches) ---------- */
 
-function RestockHomeSection() {
+function RestockHomeSection({
+  onNavigate,
+}: {
+  onNavigate: (tab: RestockTab) => void;
+}) {
   const router = useRouter();
   const {
     session,
@@ -176,7 +171,7 @@ function RestockHomeSection() {
         {
           text: "Reject",
           style: "destructive",
-          onPress: (reason) => {
+          onPress: (reason?: string) => {
             const trimmed = (reason ?? "").trim();
             if (!trimmed) {
               Alert.alert("Reason required", "Please enter a reason.");
@@ -232,7 +227,7 @@ function RestockHomeSection() {
         <View style={{ flex: 1 }}>
           <Text style={styles.subGreeting}>Supplier Hub</Text>
         </View>
-        <Avatar name={user.fullName} size={48} color={ACCENT} />
+        <Avatar name={user.fullName} size={48} color={Colors.supplier} />
       </View>
 
       {/* KPI strip */}
@@ -240,67 +235,81 @@ function RestockHomeSection() {
         <StatCard
           label="Pending"
           value={pendingCount}
-          icon="⏳"
+          iconName="hourglass-outline"
           tone="warning"
           style={{ marginRight: Spacing.sm }}
         />
         <StatCard
           label="Accepted"
           value={acceptedCount}
-          icon="✅"
-          tone="primary"
-          style={{ marginRight: Spacing.sm }}
+          iconName="checkmark-outline"
+          tone="supplier"
         />
       </View>
       <View style={[styles.statsRow, { marginTop: Spacing.sm }]}>
         <StatCard
           label="Dispatched"
           value={inTransitCount}
-          icon="🚚"
+          iconName="car-sport-outline"
           tone="info"
           style={{ marginRight: Spacing.sm }}
         />
         <StatCard
           label="Delivered"
           value={deliveredCount}
-          icon="📦"
-          tone="primary"
+          iconName="cube-outline"
+          tone="accent"
         />
       </View>
 
       {/* Awaiting your action */}
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Awaiting your action</Text>
+        <View style={styles.sectionHeaderTitleRow}>
+          <Ionicons
+            name="alert-circle-outline"
+            size={16}
+            color={Colors.warning}
+          />
+          <Text style={styles.sectionTitle}>Awaiting your action</Text>
+        </View>
         <TouchableOpacity
-          onPress={() => router.push("/(supplier)/restock" as any)}
+          onPress={() => onNavigate("requests")}
+          style={styles.linkPill}
         >
           <Text style={styles.linkText}>View all</Text>
+          <Ionicons
+            name="chevron-forward"
+            size={12}
+            color={Colors.supplier}
+          />
         </TouchableOpacity>
       </View>
       {awaiting.length === 0 ? (
         <View style={{ marginHorizontal: Spacing.lg }}>
           <EmptyState
-            icon="🎉"
+            iconName="checkmark-done-outline"
             title="All clear"
             message="No pending requests right now."
+            iconColor={Colors.success}
           />
         </View>
       ) : (
         awaiting.slice(0, 3).map((r) => (
-          <Card
+          <PressableScale
             key={r.id}
-            style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
+            onPress={() =>
+              router.push({
+                pathname: "/(supplier)/restock/[id]",
+                params: { id: r.id },
+              } as any)
+            }
+            style={styles.pendingCardWrap}
           >
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() =>
-                router.push({
-                  pathname: "/(supplier)/restock/[id]",
-                  params: { id: r.id },
-                } as any)
-              }
-            >
+            <Card style={styles.pendingCard}>
               <View style={styles.row}>
+                <View style={styles.pendingBubble}>
+                  <Ionicons name="cube" size={20} color={Colors.warning} />
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemTitle}>
                     {r.productName} ({r.size}) ×{r.quantity}
@@ -311,38 +320,53 @@ function RestockHomeSection() {
                 </View>
                 <StatusPill label="Pending" tone="warning" />
               </View>
-            </TouchableOpacity>
-            <View style={styles.actionRow}>
-              <AppButton
-                title="Accept"
-                variant="primary"
-                onPress={() => handleAccept(r)}
-                style={{ flex: 1, marginRight: 6 }}
-              />
-              <AppButton
-                title="Reject"
-                variant="danger"
-                onPress={() => handleReject(r)}
-                style={{ flex: 1, marginLeft: 6 }}
-              />
-            </View>
-          </Card>
+              <View style={styles.actionRow}>
+                <AppButton
+                  title="Accept"
+                  variant="primary"
+                  leftIcon={<Ionicons name="checkmark" size={14} color="#FFF" />}
+                  onPress={() => handleAccept(r)}
+                  style={{ flex: 1, marginRight: 6 }}
+                />
+                <AppButton
+                  title="Reject"
+                  variant="danger"
+                  leftIcon={<Ionicons name="close" size={14} color="#FFF" />}
+                  onPress={() => handleReject(r)}
+                  style={{ flex: 1, marginLeft: 6 }}
+                />
+              </View>
+            </Card>
+          </PressableScale>
         ))
       )}
 
       {/* Today's dispatches */}
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Today's dispatches</Text>
+        <View style={styles.sectionHeaderTitleRow}>
+          <Ionicons
+            name="car-sport-outline"
+            size={16}
+            color={Colors.supplier}
+          />
+          <Text style={styles.sectionTitle}>In flight</Text>
+        </View>
         <TouchableOpacity
-          onPress={() => router.push("/(supplier)/restock" as any)}
+          onPress={() => onNavigate("deliveries")}
+          style={styles.linkPill}
         >
           <Text style={styles.linkText}>Deliveries</Text>
+          <Ionicons
+            name="chevron-forward"
+            size={12}
+            color={Colors.supplier}
+          />
         </TouchableOpacity>
       </View>
       {dispatching.length === 0 ? (
         <View style={{ marginHorizontal: Spacing.lg }}>
           <EmptyState
-            icon="🚛"
+            iconName="car-outline"
             title="Nothing on the road"
             message="Accepted and dispatched requests will appear here."
           />
@@ -351,20 +375,25 @@ function RestockHomeSection() {
         dispatching.slice(0, 4).map((r) => {
           const s = normalizeRestockStatus(r.status);
           return (
-            <Card
+            <PressableScale
               key={r.id}
-              style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
+              onPress={() =>
+                router.push({
+                  pathname: "/(supplier)/restock/[id]",
+                  params: { id: r.id },
+                } as any)
+              }
+              style={styles.pendingCardWrap}
             >
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() =>
-                  router.push({
-                    pathname: "/(supplier)/restock/[id]",
-                    params: { id: r.id },
-                  } as any)
-                }
-              >
+              <Card>
                 <View style={styles.row}>
+                  <View style={styles.supplierBubble}>
+                    <Ionicons
+                      name="cube-outline"
+                      size={18}
+                      color={Colors.supplier}
+                    />
+                  </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.itemTitle}>
                       {r.productName} ({r.size}) ×{r.quantity}
@@ -378,53 +407,39 @@ function RestockHomeSection() {
                     tone={statusPillTone(s)}
                   />
                 </View>
-              </TouchableOpacity>
-              {s === "accepted" ? (
-                <AppButton
-                  title="Start preparing"
-                  variant="secondary"
-                  fullWidth
-                  style={{ marginTop: Spacing.sm }}
-                  onPress={() => handleStartPreparing(r)}
-                />
-              ) : s === "preparing" ? (
-                <AppButton
-                  title="Dispatch"
-                  variant="secondary"
-                  fullWidth
-                  style={{ marginTop: Spacing.sm }}
-                  onPress={() => handleDispatch(r)}
-                />
-              ) : (
-                <Text style={[styles.itemMeta, { marginTop: Spacing.sm }]}>
-                  Awaiting seller's receipt confirmation
-                </Text>
-              )}
-            </Card>
+                {s === "accepted" ? (
+                  <AppButton
+                    title="Start preparing"
+                    variant="secondary"
+                    fullWidth
+                    style={{ marginTop: Spacing.sm }}
+                    onPress={() => handleStartPreparing(r)}
+                  />
+                ) : s === "preparing" ? (
+                  <AppButton
+                    title="Dispatch"
+                    variant="secondary"
+                    fullWidth
+                    style={{ marginTop: Spacing.sm }}
+                    onPress={() => handleDispatch(r)}
+                  />
+                ) : (
+                  <View style={styles.awaitingRow}>
+                    <Ionicons
+                      name="time-outline"
+                      size={12}
+                      color={Colors.textSecondary}
+                    />
+                    <Text style={styles.itemMeta}>
+                      Awaiting seller's receipt confirmation
+                    </Text>
+                  </View>
+                )}
+              </Card>
+            </PressableScale>
           );
         })
       )}
-
-      {/* Quick actions */}
-      <Text style={styles.sectionTitle}>Quick actions</Text>
-      <View style={styles.actionGrid}>
-        {[
-          { label: "Requests", icon: "📥", route: "/(supplier)/restock" },
-          { label: "Deliveries", icon: "🚚", route: "/(supplier)/restock" },
-          { label: "Profile", icon: "👤", route: "/(supplier)/profile" },
-          { label: "Guide", icon: "📘", route: "/(supplier)/guide" },
-        ].map((a) => (
-          <TouchableOpacity
-            key={a.label}
-            style={styles.actionTile}
-            activeOpacity={0.8}
-            onPress={() => router.push(a.route as any)}
-          >
-            <Text style={styles.actionIcon}>{a.icon}</Text>
-            <Text style={styles.actionLabel}>{a.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
     </ScrollView>
   );
 }
@@ -483,13 +498,24 @@ function RestockRequestsSection() {
   };
 
   const filters: RequestFilter[] = [
-    "all", "pending", "accepted", "preparing", "dispatched",
-    "delivered", "received", "rejected", "cancelled",
+    "all",
+    "pending",
+    "accepted",
+    "preparing",
+    "dispatched",
+    "delivered",
+    "received",
+    "rejected",
+    "cancelled",
   ];
 
   return (
     <>
-      <View style={styles.tabRow}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabRow}
+      >
         {filters.map((f) => {
           const active = filter === f;
           return (
@@ -499,14 +525,19 @@ function RestockRequestsSection() {
               onPress={() => setFilter(f)}
             >
               <Text
-                style={[styles.subTabText, active && styles.subTabTextActive]}
+                style={[
+                  styles.subTabText,
+                  active && styles.subTabTextActive,
+                ]}
               >
-                {RESTOCK_STATUS_LABELS[f]}
+                {f === "all"
+                  ? "All"
+                  : RESTOCK_STATUS_LABELS[f as keyof typeof RESTOCK_STATUS_LABELS]}
               </Text>
             </TouchableOpacity>
           );
         })}
-      </View>
+      </ScrollView>
 
       <FlatList
         data={filtered}
@@ -515,7 +546,7 @@ function RestockRequestsSection() {
         ItemSeparatorComponent={() => <View style={{ height: Spacing.sm }} />}
         ListEmptyComponent={
           <EmptyState
-            icon="📭"
+            iconName="cloud-download-outline"
             title="No requests"
             message="Restock requests from sellers will appear here."
           />
@@ -524,8 +555,7 @@ function RestockRequestsSection() {
           const s = normalizeRestockStatus(item.status);
           return (
             <Card>
-              <TouchableOpacity
-                activeOpacity={0.85}
+              <PressableScale
                 onPress={() =>
                   router.push({
                     pathname: "/(supplier)/restock/[id]",
@@ -534,6 +564,13 @@ function RestockRequestsSection() {
                 }
               >
                 <View style={styles.row}>
+                  <View style={styles.supplierBubble}>
+                    <Ionicons
+                      name="cube-outline"
+                      size={18}
+                      color={Colors.supplier}
+                    />
+                  </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.itemTitle}>
                       {item.productName} ({item.size})
@@ -558,7 +595,7 @@ function RestockRequestsSection() {
                   />
                 </View>
                 <Text style={styles.qty}>Quantity: {item.quantity} units</Text>
-              </TouchableOpacity>
+              </PressableScale>
               {s === "pending" ? (
                 <View style={styles.actionRow}>
                   <AppButton
@@ -566,12 +603,18 @@ function RestockRequestsSection() {
                     variant="primary"
                     onPress={() => setSupplier(item)}
                     style={{ flex: 1, marginRight: 6 }}
+                    leftIcon={
+                      <Ionicons name="checkmark" size={14} color="#FFF" />
+                    }
                   />
                   <AppButton
                     title="Reject"
                     variant="danger"
                     onPress={() => handleRejectInline(item)}
                     style={{ flex: 1, marginLeft: 6 }}
+                    leftIcon={
+                      <Ionicons name="close" size={14} color="#FFF" />
+                    }
                   />
                 </View>
               ) : null}
@@ -579,7 +622,9 @@ function RestockRequestsSection() {
                 <AppButton
                   title="Start preparing"
                   variant="secondary"
-                  onPress={() => updateRestockStatus(item.id, { status: "preparing" })}
+                  onPress={() =>
+                    updateRestockStatus(item.id, { status: "preparing" })
+                  }
                   fullWidth
                   style={{ marginTop: Spacing.sm }}
                 />
@@ -588,15 +633,24 @@ function RestockRequestsSection() {
                 <AppButton
                   title="Dispatch"
                   variant="secondary"
-                  onPress={() => updateRestockStatus(item.id, { status: "dispatched" })}
+                  onPress={() =>
+                    updateRestockStatus(item.id, { status: "dispatched" })
+                  }
                   fullWidth
                   style={{ marginTop: Spacing.sm }}
                 />
               ) : null}
               {s === "dispatched" ? (
-                <Text style={[styles.itemMeta, { marginTop: Spacing.sm }]}>
-                  On the way — awaiting seller's receipt confirmation.
-                </Text>
+                <View style={styles.awaitingRow}>
+                  <Ionicons
+                    name="time-outline"
+                    size={12}
+                    color={Colors.textSecondary}
+                  />
+                  <Text style={styles.itemMeta}>
+                    On the way — awaiting seller's receipt confirmation.
+                  </Text>
+                </View>
               ) : null}
             </Card>
           );
@@ -621,11 +675,20 @@ function RestockDeliveriesSection() {
 
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
-      <Text style={styles.sectionTitle}>Active</Text>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionHeaderTitleRow}>
+          <Ionicons
+            name="car-sport-outline"
+            size={16}
+            color={Colors.supplier}
+          />
+          <Text style={styles.sectionTitle}>Active</Text>
+        </View>
+      </View>
       {active.length === 0 ? (
         <View style={{ marginHorizontal: Spacing.lg }}>
           <EmptyState
-            icon="🚚"
+            iconName="car-outline"
             title="No active deliveries"
             message="Approved and in-transit requests appear here."
           />
@@ -637,6 +700,13 @@ function RestockDeliveriesSection() {
             style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
           >
             <View style={styles.row}>
+              <View style={styles.supplierBubble}>
+                <Ionicons
+                  name="cube-outline"
+                  size={18}
+                  color={Colors.supplier}
+                />
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.itemTitle}>
                   {item.productName} ({item.size}) ×{item.quantity}
@@ -654,11 +724,20 @@ function RestockDeliveriesSection() {
         ))
       )}
 
-      <Text style={styles.sectionTitle}>History</Text>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionHeaderTitleRow}>
+          <Ionicons
+            name="archive-outline"
+            size={16}
+            color={Colors.textSecondary}
+          />
+          <Text style={styles.sectionTitle}>History</Text>
+        </View>
+      </View>
       {history.length === 0 ? (
         <View style={{ marginHorizontal: Spacing.lg }}>
           <EmptyState
-            icon="🗂️"
+            iconName="archive-outline"
             title="No history yet"
             message="Completed deliveries will be archived here."
           />
@@ -670,6 +749,13 @@ function RestockDeliveriesSection() {
             style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
           >
             <View style={styles.row}>
+              <View style={styles.supplierBubble}>
+                <Ionicons
+                  name="cube-outline"
+                  size={18}
+                  color={Colors.supplier}
+                />
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.itemTitle}>
                   {item.productName} ({item.size}) ×{item.quantity}
@@ -697,6 +783,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
   title: { fontSize: FontSize.xxl, fontWeight: "800", color: Colors.text },
   subtitle: {
@@ -704,91 +791,101 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     marginTop: 2,
   },
-  /* segmented tab bar */
-  tabBar: {
-    flexDirection: "row",
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
-    gap: Spacing.sm,
-  },
-  tab: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
-    gap: 6,
-  },
-  tabActive: {
-    backgroundColor: Colors.supplier,
-    borderColor: Colors.supplier,
-  },
-  tabIcon: { fontSize: 14 },
-  tabText: {
-    fontSize: FontSize.xs,
-    fontWeight: "800",
-    color: Colors.textSecondary,
-  },
-  tabTextActive: { color: "#FFF" },
   /* home */
   subPageHeader: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  subGreeting: { fontSize: FontSize.xl, fontWeight: "800", color: Colors.text },
-  statsRow: { flexDirection: "row", paddingHorizontal: Spacing.lg },
-  sectionTitle: {
-    fontSize: FontSize.lg,
+  subGreeting: {
+    fontSize: FontSize.xl,
     fontWeight: "800",
     color: Colors.text,
-    paddingHorizontal: Spacing.lg,
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.sm,
   },
+  statsRow: { flexDirection: "row", paddingHorizontal: Spacing.lg },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingHorizontal: Spacing.lg,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
   },
-  linkText: { color: ACCENT, fontWeight: "700", marginRight: Spacing.lg },
+  sectionHeaderTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  sectionTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: "800",
+    color: Colors.text,
+  },
+  linkPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: "#EEF2FF",
+  },
+  linkText: {
+    color: Colors.supplier,
+    fontWeight: "800",
+    fontSize: FontSize.xs,
+  },
   row: { flexDirection: "row", alignItems: "center" },
-  itemTitle: { fontWeight: "800", color: Colors.text, fontSize: FontSize.md },
+  pendingCardWrap: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  pendingCard: {
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.warning,
+  },
+  pendingBubble: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: Colors.warningSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: Spacing.md,
+  },
+  supplierBubble: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#EEF2FF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: Spacing.md,
+  },
+  itemTitle: {
+    fontWeight: "800",
+    color: Colors.text,
+    fontSize: FontSize.md,
+  },
   itemMeta: {
     color: Colors.textSecondary,
     fontSize: FontSize.xs,
     marginTop: 2,
   },
   actionRow: { flexDirection: "row", marginTop: Spacing.sm },
-  actionGrid: {
+  awaitingRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    paddingHorizontal: Spacing.lg,
-    gap: Spacing.sm,
-  },
-  actionTile: {
-    flexBasis: "47%",
-    backgroundColor: Colors.surface,
-    padding: Spacing.lg,
-    borderRadius: Radius.lg,
     alignItems: "center",
-    boxShadow: "0 4px 8px rgba(0,0,0,0.08)",
+    gap: 4,
+    marginTop: Spacing.sm,
   },
-  actionIcon: { fontSize: 28, marginBottom: 4 },
-  actionLabel: { fontSize: FontSize.xs, fontWeight: "700", color: Colors.text },
   /* requests filter chips */
   tabRow: {
-    flexDirection: "row",
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.md,
     gap: 6,
-    flexWrap: "wrap",
   },
   subTab: {
     paddingHorizontal: 12,
@@ -798,10 +895,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  subTabActive: { backgroundColor: ACCENT, borderColor: ACCENT },
+  subTabActive: { backgroundColor: Colors.supplier, borderColor: Colors.supplier },
   subTabText: {
     fontSize: FontSize.xs,
-    fontWeight: "700",
+    fontWeight: "800",
     color: Colors.textSecondary,
   },
   subTabTextActive: { color: "#FFF" },

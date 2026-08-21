@@ -28,6 +28,7 @@ import {
   Vehicle,
   Rider,
   DeliveryTrip,
+  ServerDeliveryTrip,
   LatLng,
   RouteStop,
   RiderPermitSummary,
@@ -54,7 +55,9 @@ import {
   RoutesApi,
   SellersApi,
   SupplierApplicationsApi,
+  SupplierRidersApi,
   SuppliersApi,
+  TripsApi,
   UpdateRestockStatusBody,
   UsersApi,
   VehiclesApi,
@@ -133,6 +136,15 @@ interface StoreShape {
   routes: DeliveryRoute[];
   vehicles: Vehicle[];
   riders: Rider[];
+  /**
+   * V19 — riders the signed-in supplier has explicitly assigned to
+   * their company roster. Sourced from {@code GET /api/supplier-riders}.
+   * Distinct from {@code riders} (which is the global rider list
+   * loaded from {@code GET /api/riders} for the Fleet screen). The
+   * Add Route / Edit Route rider picker must source from this slice —
+   * a rider in {@code riders} but not here is not eligible.
+   */
+  supplierRiders: Rider[];
   trips: DeliveryTrip[];
 
   // Helpers
@@ -332,12 +344,92 @@ interface StoreShape {
   startTrip: (input: StartTripInput) => Promise<DeliveryTrip>;
   tickTrip: (tripId: string, deltaProgress?: number) => DeliveryTrip | null;
   markStopDelivered: (tripId: string, sellerId: string) => void;
-  createRoute: (input: Omit<DeliveryRoute, "id" | "polyline"> & { polyline?: LatLng[] }) => Promise<DeliveryRoute>;
+  /**
+   * V19 — server-backed trip create. The supplier doesn't re-enter
+   * supervisor / rider / vehicle here; the route row already carries
+   * the durable crew and the backend's trip-create falls back to
+   * those values. The frontend still passes overrides when present so
+   * a Start Delivery can swap crew on the fly.
+   */
+  createServerTrip: (input: {
+    routeId: string;
+    riderId?: string | null;
+    vehicleId?: string | null;
+    supervisorName?: string | null;
+    supervisorPhone?: string | null;
+  }) => Promise<ServerDeliveryTrip>;
+  startServerTrip: (tripId: string) => Promise<ServerDeliveryTrip>;
+  /**
+   * V19 — create a route and persist it to the backend so it
+   * survives an app reload. The optional seller-id list is forwarded
+   * to {@code PUT /api/routes/{id}/stops} when present. The backend
+   * turns the seller ids into {@link RouteStop} rows with real
+   * coordinates and rejects sellers without coordinates with a 400,
+   * which the caller surfaces via the thrown error.
+   *
+   * <p>V19 added the four crew fields — {@code riderId},
+   * {@code vehicleId}, {@code supervisorName}, {@code supervisorPhone}
+   * — to the durable route row. The backend re-validates ownership
+   * server-side, so submitting a foreign rider id returns 400.</p>
+   */
+  createRoute: (
+    input: Omit<DeliveryRoute, "id" | "polyline"> & { polyline?: LatLng[] },
+  ) => Promise<DeliveryRoute>;
+  setRouteStops: (routeId: string, sellerIds: string[]) => Promise<DeliveryRoute>;
+  /**
+   * V19 — edit a route's metadata AND crew. {@code null} crew fields
+   * clear that field; the backend treats null as "no change to the
+   * other fields". Stops are still managed via
+   * {@link StoreShape.setRouteStops}.
+   */
+  updateRouteDetails: (
+    routeId: string,
+    patch: {
+      name: string;
+      scheduleDay: string;
+      scheduleTime: string;
+      riderId?: string | null;
+      vehicleId?: string | null;
+      supervisorName?: string | null;
+      supervisorPhone?: string | null;
+    },
+  ) => Promise<DeliveryRoute>;
   toggleRouteActive: (id: string, active: boolean) => void;
   addVehicle: (input: Omit<Vehicle, "id">) => Promise<Vehicle>;
   toggleVehicleActive: (id: string, active: boolean) => void;
-  addRider: (input: Omit<Rider, "id">) => Promise<Rider>;
+  // V19 — supplier-owned rider creation. The supplier creates their own
+  // riders from Supplier → Fleet → Add Rider. The backend persists a
+  // real `users(role=RIDER)` row + `rider_profiles` row +
+  // `supplier_riders` join row in one transaction and returns the
+  // fresh Rider with a real numeric id (no `rider-${Date.now()}`
+  // placeholders). The new rider is auto-linked to the calling
+  // supplier, so `requireOwnRider` accepts it on the very next route
+  // save.
   toggleRiderActive: (id: string, active: boolean) => void;
+  /**
+   * Create a new rider that belongs to the signed-in supplier by
+   * construction. Returns the freshly persisted Rider so the caller
+   * can render the new row immediately. The `id` on the returned
+   * rider is the real numeric database id.
+   */
+  addSupplierRider: (input: {
+    fullName: string;
+    phone?: string;
+    licenseNo?: string;
+    vehicleType?: string;
+    vehiclePlate?: string;
+    vehicleModel?: string;
+  }) => Promise<Rider>;
+  /**
+   * V19 — supplier ↔ rider assignments. The supplier calls these from
+   * the Fleet screen to assign / unassign a rider to their company.
+   * Both are idempotent on the server side so a redundant tap doesn't
+   * surface an error. Kept for back-compat with riders created before
+   * the supplier-owned-rider endpoint was introduced — new riders go
+   * through `addSupplierRider`.
+   */
+  linkSupplierRider: (riderId: string) => Promise<void>;
+  unlinkSupplierRider: (riderId: string) => Promise<void>;
 
   /**
    * Update the signed-in user's profile (name, phone, email, and the
@@ -462,6 +554,34 @@ const StoreContext = createContext<StoreShape | undefined>(undefined);
 const USE_MOCK = API_CONFIG.USE_MOCK;
 
 /**
+ * Translate the lowercase status values used throughout the supplier
+ * UI ({@code RestockRequest["status"]}) into the canonical uppercase
+ * identifiers the backend's {@code SupplyOrderStatus} enum expects on
+ * the wire. Jackson's default case-sensitive enum binder rejects any
+ * other casing with {@code HttpMessageNotReadableException}, which
+ * surfaces to the supplier as "Action failed / An unexpected error
+ * occurred" when the Accept button is pressed.
+ *
+ * <p>This map is the single wire-boundary translation; every UI status
+ * value flows through it before {@code RestockApi.updateStatus} is
+ * invoked. Legacy aliases ({@code approved}, {@code in_transit}) are
+ * folded into the canonical values so any caller still passing the
+ * older terms continues to work.</p>
+ */
+const RESTOCK_STATUS_TO_BACKEND_ENUM: Record<string, string> = {
+  pending: "PENDING",
+  accepted: "ACCEPTED",
+  approved: "ACCEPTED",
+  preparing: "PREPARING",
+  in_transit: "DISPATCHED",
+  dispatched: "DISPATCHED",
+  delivered: "DELIVERED",
+  received: "RECEIVED",
+  rejected: "REJECTED",
+  cancelled: "CANCELLED",
+};
+
+/**
  * Merge a `CustomerLocation` payload from `/api/customers/me` onto a
  * `User`, normalising the wire's `null`s into `undefined`.
  *
@@ -574,6 +694,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [routes, setRoutes] = useState<DeliveryRoute[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [riders, setRiders] = useState<Rider[]>([]);
+  // V19 — supplier's roster of riders. Mirrors `riders` shape but
+  // filtered to those the supplier has explicitly linked.
+  const [supplierRiders, setSupplierRiders] = useState<Rider[]>([]);
   const [trips, setTrips] = useState<DeliveryTrip[]>([]);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(false);
@@ -663,9 +786,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // the signed-in supplier. Only fetch them when the actor is a
     // supplier so other roles don't see 403 noise from the new module.
     if (actorAtStart?.role === "supplier") {
-      const [routesResult, vehiclesResult] = await Promise.allSettled([
+      const [
+        routesResult,
+        vehiclesResult,
+        supplierRidersResult,
+      ] = await Promise.allSettled([
         RoutesApi.list(),
         VehiclesApi.list(),
+        SupplierRidersApi.list(),
       ]);
       setRoutes(
         routesResult.status === "fulfilled" ? routesResult.value : [],
@@ -673,9 +801,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setVehicles(
         vehiclesResult.status === "fulfilled" ? vehiclesResult.value : [],
       );
+      setSupplierRiders(
+        supplierRidersResult.status === "fulfilled"
+          ? supplierRidersResult.value
+          : [],
+      );
     } else {
       setRoutes([]);
       setVehicles([]);
+      setSupplierRiders([]);
     }
 
     const orderResult = results[2];
@@ -1552,7 +1686,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         );
         return;
       }
-      const updated = await RestockApi.updateStatus(id, payload);
+      // The backend's `SupplyOrderStatus` enum is bound on
+      // `UpdateSupplyOrderStatusRequest.status` via Jackson's default
+      // case-sensitive deserialiser, which only accepts the canonical
+      // uppercase identifiers (`ACCEPTED`, `PREPARING`, …). The
+      // frontend's `RestockRequest["status"]` union and the response
+      // DTO use the lowercase wire form
+      // (`SupplyOrderStatus.toJson()`), so without this normalisation
+      // step the Supplier Accept request body `{ "status": "accepted" }`
+      // is rejected by Jackson with `HttpMessageNotReadableException`
+      // and the user sees the generic "Action failed / An unexpected
+      // error occurred" alert. Map every status to its canonical
+      // uppercase enum identifier at the single wire boundary below.
+      const wirePayload: UpdateRestockStatusBody = {
+        ...payload,
+        status: (RESTOCK_STATUS_TO_BACKEND_ENUM[
+          payload.status as RestockRequest["status"]
+        ] ?? payload.status) as RestockRequest["status"],
+      };
+      const updated = await RestockApi.updateStatus(id, wirePayload);
       setRestockRequests((prev) =>
         prev.map((r) => (r.id === id ? updated : r)),
       );
@@ -2657,22 +2809,301 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  /** Create a new delivery route (used by the Routes screen). */
+  /**
+   * Create a new delivery route and persist it to the backend so it
+   * survives an app reload. The optional seller-id list is forwarded
+   * to {@code PUT /api/routes/{id}/stops} when present. The backend
+   * turns the seller ids into {@link RouteStop} rows with real
+   * coordinates and rejects sellers without coordinates with a 400,
+   * which the caller surfaces via the thrown error.
+   *
+   * <p>Also recomputes the local polyline from the stops so the route
+   * map renders correctly the moment the route is added.</p>
+   */
   const createRoute = useCallback(
     async (
       input: Omit<DeliveryRoute, "id" | "polyline"> & { polyline?: LatLng[] },
     ): Promise<DeliveryRoute> => {
-      const id = `r-${Date.now()}`;
-      const polyline: LatLng[] =
-        input.polyline && input.polyline.length > 0
-          ? input.polyline
-          : input.stops.length > 1
-            ? // Fall back to a straight-line polyline through the stops.
-              input.stops.map((s) => ({ lat: s.lat, lng: s.lng }))
-            : [];
-      const route: DeliveryRoute = { ...input, id, polyline };
-      setRoutes((prev) => [...prev, route]);
-      return route;
+      try {
+        const created = await RoutesApi.create({
+          name: input.name,
+          scheduleDay: input.scheduleDay,
+          scheduleTime: input.scheduleTime,
+          // V19 — forward the captured crew to the backend. Each field
+          // is optional; the backend validates ownership before write.
+          riderId: input.riderId ?? null,
+          vehicleId: input.vehicleId ?? null,
+          supervisorName: input.supervisorName ?? null,
+          supervisorPhone: input.supervisorPhone ?? null,
+        });
+        let serverRoute: DeliveryRoute = {
+          id: created.id,
+          name: created.name,
+          scheduleDay: created.scheduleDay,
+          scheduleTime: created.scheduleTime,
+          active: created.active,
+          stops: [],
+          polyline: [],
+          // The server echoes the crew back so the local copy matches
+          // the durable row without a separate GET.
+          riderId: created.riderId ?? null,
+          riderName: created.riderName ?? null,
+          riderPhone: created.riderPhone ?? null,
+          vehicleId: created.vehicleId ?? null,
+          vehiclePlate: created.vehiclePlate ?? null,
+          supervisorName: created.supervisorName ?? null,
+          supervisorPhone: created.supervisorPhone ?? null,
+        };
+        if (input.stops.length > 0) {
+          const sellerIds = input.stops.map((s) => s.sellerId);
+          const withStops = await RoutesApi.setStops(created.id, sellerIds);
+          serverRoute = {
+            ...serverRoute,
+            stops: withStops.stops,
+            polyline: withStops.polyline,
+          };
+        }
+        setRoutes((prev) => [...prev, serverRoute]);
+        return serverRoute;
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(
+            "[ROUTES][CREATE_FAILED]",
+            (err as Error)?.message ?? String(err),
+          );
+        }
+        throw err;
+      }
+    },
+    [],
+  );
+
+  /**
+   * Replace the ordered stop list on a route. Persists to the backend
+   * with the seller ids; the backend resolves each id against the
+   * seller profile, copying real coordinates into the stop rows so the
+   * map renders correctly the moment the response lands.
+   */
+  /**
+   * Replace the ordered stop list on a route. Persists to the backend
+   * with the seller ids; the backend resolves each id against the
+   * seller profile, copying real coordinates into the stop rows so the
+   * map renders correctly the moment the response lands.
+   */
+  const setRouteStops = useCallback(
+    async (routeId: string, sellerIds: string[]): Promise<DeliveryRoute> => {
+      const updated = await RoutesApi.setStops(routeId, sellerIds);
+      setRoutes((prev) =>
+        prev.map((r) => (r.id === routeId ? updated : r)),
+      );
+      return updated;
+    },
+    [],
+  );
+
+  /**
+   * V19 — server-backed trip create. Calls {@code POST /api/trips}.
+   * The supplier typically passes no overrides; the route row already
+   * carries the durable crew and the backend falls back to it. The
+   * frontend still passes overrides when present so a Start Delivery
+   * can swap crew on the fly for this one execution.
+   *
+   * <p>Returns the freshly persisted {@link ServerDeliveryTrip}; the
+   * caller is responsible for navigating to the live screen and
+   * starting the trip via {@link startServerTrip}.</p>
+   */
+  const createServerTrip = useCallback(
+    async (input: {
+      routeId: string;
+      riderId?: string | null;
+      vehicleId?: string | null;
+      supervisorName?: string | null;
+      supervisorPhone?: string | null;
+    }): Promise<ServerDeliveryTrip> => {
+      const trip = await TripsApi.create({
+        routeId: input.routeId,
+        riderId: input.riderId ?? undefined,
+        vehicleId: input.vehicleId ?? undefined,
+        supervisorName: input.supervisorName ?? "",
+        supervisorPhone: input.supervisorPhone ?? "",
+      });
+      // Mirror into the in-memory `trips` slice so other tabs
+      // (Route Details, etc.) render the trip the moment it exists.
+      setTrips((prev) => {
+        if (prev.some((t) => t.id === trip.id)) return prev;
+        return [
+          {
+            id: trip.id,
+            supplierId: trip.supplierId,
+            routeId: trip.routeId,
+            routeName: trip.routeName,
+            vehicleId: trip.vehicleId ?? "",
+            vehiclePlate: trip.vehiclePlate ?? "",
+            riderId: trip.riderId ?? "",
+            riderName: trip.riderName ?? "",
+            date: "",
+            departureTime: "",
+            status: "draft",
+            startedAt: trip.startedAt ?? undefined,
+            completedAt: trip.completedAt ?? undefined,
+            positions: [],
+            progress: 0,
+            stops: trip.stops,
+          } as unknown as DeliveryTrip,
+          ...prev,
+        ];
+      });
+      return trip;
+    },
+    [],
+  );
+
+  /**
+   * V19 — server-backed trip start. Calls {@code POST /api/trips/{id}/start}
+   * which transitions the trip {@code PLANNED → ACTIVE}. This is the
+   * gate the seller-side tracking channel reads: no GPS sample is
+   * broadcast before the trip is ACTIVE.
+   */
+  const startServerTrip = useCallback(
+    async (tripId: string): Promise<ServerDeliveryTrip> => {
+      const trip = await TripsApi.start(tripId);
+      setTrips((prev) =>
+        prev.map((t) =>
+          t.id === tripId
+            ? ({
+                ...t,
+                status: "started",
+                startedAt: trip.startedAt ?? undefined,
+              } as unknown as DeliveryTrip)
+            : t,
+        ),
+      );
+      return trip;
+    },
+    [],
+  );
+
+  /**
+   * V19 — link a rider to the supplier's roster. The Fleet screen
+   * calls this when the supplier flips "Assign to my company" on.
+   * Idempotent on the backend; local state is updated optimistically
+   * to keep the toggle feeling instant.
+   */
+  const linkSupplierRider = useCallback(
+    async (riderId: string): Promise<void> => {
+      await SupplierRidersApi.link(riderId);
+      // Merge the rider into supplierRiders so the picker immediately
+      // reflects the new assignment. We need the full rider row —
+      // pull it from the global `riders` slice if present, else fall
+      // back to a minimal stub.
+      const known = riders.find((r) => r.id === riderId);
+      const stub: Rider = known ?? {
+        id: riderId,
+        fullName: "",
+        phone: "",
+        licenseNo: "",
+        active: true,
+      };
+      setSupplierRiders((prev) =>
+        prev.some((r) => r.id === riderId)
+          ? prev
+          : [...prev, stub],
+      );
+    },
+    [riders],
+  );
+
+  /**
+   * V19 — supplier-owned rider creation. The Fleet → Add Rider form
+   * calls this; the backend creates the rider and links it to the
+   * signed-in supplier in one transaction. We update the local
+   * `supplierRiders` slice (so the picker shows the new row) and
+   * also add to the global `riders` slice so any other UI that
+   * reads the global roster reflects the new rider.
+   */
+  const addSupplierRider = useCallback(
+    async (input: {
+      fullName: string;
+      phone?: string;
+      licenseNo?: string;
+      vehicleType?: string;
+      vehiclePlate?: string;
+      vehicleModel?: string;
+    }): Promise<Rider> => {
+      const created = await SupplierRidersApi.create(input);
+      // Always trust the server's returned shape — its `id` is the
+      // real numeric database id, never a synthetic placeholder.
+      const rider: Rider = {
+        id: created.id,
+        fullName: created.fullName ?? input.fullName,
+        phone: created.phone ?? input.phone ?? "",
+        licenseNo: created.licenseNo ?? input.licenseNo ?? "",
+        active: created.active ?? true,
+        email: created.email,
+        username: created.username,
+        vehicleType: created.vehicleType,
+        vehiclePlate: created.vehiclePlate,
+        vehicleModel: created.vehicleModel,
+        available: created.available,
+      };
+      setSupplierRiders((prev) =>
+        prev.some((r) => r.id === rider.id) ? prev : [rider, ...prev],
+      );
+      setRiders((prev) =>
+        prev.some((r) => r.id === rider.id) ? prev : [rider, ...prev],
+      );
+      return rider;
+    },
+    [],
+  );
+
+  /**
+   * V19 — remove a rider from the supplier's roster. Idempotent on
+   * the backend. Local state is updated so the picker immediately
+   * drops the row.
+   */
+  const unlinkSupplierRider = useCallback(
+    async (riderId: string): Promise<void> => {
+      try {
+        await SupplierRidersApi.unlink(riderId);
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(
+            "[SUPPLIER_RIDERS][UNLINK_FAILED]",
+            (err as Error)?.message ?? String(err),
+          );
+        }
+        throw err;
+      }
+      setSupplierRiders((prev) => prev.filter((r) => r.id !== riderId));
+    },
+    [],
+  );
+
+  /**
+   * V19 — edit a route's name / day / time AND crew. Persists to the
+   * backend so the edit survives a reload. {@code null} crew fields
+   * clear that field; the backend treats {@code null} as the explicit
+   * "remove" signal for crew and as "no change" for the metadata.
+   */
+  const updateRouteDetails = useCallback(
+    async (
+      routeId: string,
+      patch: {
+        name: string;
+        scheduleDay: string;
+        scheduleTime: string;
+        riderId?: string | null;
+        vehicleId?: string | null;
+        supervisorName?: string | null;
+        supervisorPhone?: string | null;
+      },
+    ): Promise<DeliveryRoute> => {
+      const updated = await RoutesApi.update(routeId, patch);
+      setRoutes((prev) =>
+        prev.map((r) => (r.id === routeId ? updated : r)),
+      );
+      return updated;
     },
     [],
   );
@@ -2737,13 +3168,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  /** Add a new rider to the team. */
-  const addRider = useCallback(async (input: Omit<Rider, "id">) => {
-    const rider: Rider = { ...input, id: `rider-${Date.now()}` };
-    setRiders((prev) => [...prev, rider]);
-    return rider;
-  }, []);
-
+  /** Toggle a rider's active flag. The id MUST be the real backend id
+   * returned by {@code RidersApi.list()} — the Fleet screen never
+   * mints local ids, so the lookup always lands on a real user row. */
   const toggleRiderActive = useCallback((id: string, active: boolean) => {
     setRiders((prev) =>
       prev.map((r) => (r.id === id ? { ...r, active } : r)),
@@ -2778,6 +3205,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       routes,
       vehicles,
       riders,
+      supplierRiders,
       trips,
       getUser,
       getProductsForSeller,
@@ -2839,12 +3267,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       startTrip,
       tickTrip,
       markStopDelivered,
+      createServerTrip,
+      startServerTrip,
       createRoute,
+      setRouteStops,
+      updateRouteDetails,
       toggleRouteActive,
       addVehicle,
       toggleVehicleActive,
-      addRider,
       toggleRiderActive,
+      addSupplierRider,
+      linkSupplierRider,
+      unlinkSupplierRider,
     }),
     [
       session,
@@ -2871,6 +3305,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       routes,
       vehicles,
       riders,
+      supplierRiders,
       trips,
       getUser,
       getProductsForSeller,
@@ -2932,12 +3367,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       startTrip,
       tickTrip,
       markStopDelivered,
+      createServerTrip,
+      startServerTrip,
       createRoute,
+      setRouteStops,
+      updateRouteDetails,
       toggleRouteActive,
       addVehicle,
       toggleVehicleActive,
-      addRider,
       toggleRiderActive,
+      addSupplierRider,
+      linkSupplierRider,
+      unlinkSupplierRider,
     ],
   );
 

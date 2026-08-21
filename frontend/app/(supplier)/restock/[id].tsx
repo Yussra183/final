@@ -1,7 +1,7 @@
 /**
- * Supplier → Supply Order Details.
+ * Supplier → Restock Request Details.
  *
- * A single supply order (FR-06) for the signed-in supplier. Opens
+ * A single restock request (FR-06) for the signed-in supplier. Opens
  * either from the supplier notifications list (deep-link via the
  * notification's `data.supplyOrderId`), from the supplier Restock
  * page's row tap, or from a manual URL.
@@ -16,10 +16,10 @@
  *
  * | from        | to           | button shown     | reason required |
  * |-------------|--------------|------------------|-----------------|
- * | PENDING     | ACCEPTED     | Accept Order     | no              |
- * | PENDING     | REJECTED     | Reject Order     | yes             |
+ * | PENDING     | ACCEPTED     | Accept Request   | no              |
+ * | PENDING     | REJECTED     | Reject Request   | yes             |
  * | ACCEPTED    | PREPARING    | Start Preparing  | no              |
- * | PREPARING   | DISPATCHED   | Dispatch Order   | no              |
+ * | PREPARING   | DISPATCHED   | Dispatch Request | no              |
  * | DISPATCHED  | —            | none (awaiting   | —               |
  * |             |              | seller receipt)  |                 |
  * | DELIVERED   | —            | none (closed)    | —               |
@@ -58,7 +58,7 @@ import { formatDate, formatDateTime } from "../../../src/utils/format";
 
 export default function SupplierRestockDetail() {
   return (
-    <SupplierApprovalGate title="Supply Order">
+    <SupplierApprovalGate title="Restock Request">
       <RestockDetailContent />
     </SupplierApprovalGate>
   );
@@ -104,7 +104,7 @@ function RestockDetailContent() {
       const all = await RestockApi.list();
       const found = all.find((r) => Number(r.id) === orderId) ?? null;
       if (!found) {
-        setError("This supply order is no longer available to you.");
+        setError("This restock request is no longer available to you.");
       } else {
         setOrder(found);
       }
@@ -112,7 +112,7 @@ function RestockDetailContent() {
       const msg =
         err instanceof ApiError
           ? err.message
-          : (err as Error)?.message ?? "Could not load the supply order.";
+          : (err as Error)?.message ?? "Could not load the restock request.";
       setError(msg);
     } finally {
       setLoading(false);
@@ -131,9 +131,19 @@ function RestockDetailContent() {
 
   /**
    * Apply a transition. The backend is the source of truth — on
-   * success we refresh the store (which `updateRestockStatus` already
-   * mutates), then pull the updated row back into local state. On
-   * failure we surface the real error (no silent mutation).
+   * success we trigger a full re-fetch so the local `order` snapshot
+   * reflects the new status and the next-step panel swaps from
+   * "Accept / Reject" to the appropriate follow-up action (e.g.
+   * "Start Preparing" after a successful Accept). The pre-existing
+   * implementation tried to read the freshly-updated row out of the
+   * store's `restockRequests` via a closure-captured `supplierRows`
+   // reference, but that reference is the value from the *previous*
+   * render — the new value only arrives on the next render, by which
+   * time the local `order` snapshot is already driving the JSX and
+   * the next-step branch is wrong. Fetching from the server after
+   * every successful transition removes the stale-snapshot race and
+   * guarantees the UI re-evaluates against the authoritative row.
+   * On failure we surface the real error (no silent mutation).
    */
   const transition = useCallback(
     async (
@@ -149,15 +159,11 @@ function RestockDetailContent() {
             status: next,
             ...(reason ? { reason } : {}),
           });
-          // updateRestockStatus mutates the store's `restockRequests`
-          // array in place, but the local `order` snapshot above is a
-          // stale reference — pull the freshly-saved row out of the
-          // store so the detail page reflects the new status without
-          // a full refresh.
-          const refreshed = supplierRows.find(
-            (r) => r.id === order.id,
-          );
-          if (refreshed) setOrder(refreshed);
+          // Re-pull the row from the server so the local snapshot is
+          // bound to the post-transition status before the next-step
+          // JSX is rendered. `fetchOrder` calls `RestockApi.list()`,
+          // which is the same code path the screen uses on mount.
+          await fetchOrder();
           if (confirmMessage) {
             Alert.alert("Done", confirmMessage);
           }
@@ -174,13 +180,13 @@ function RestockDetailContent() {
       };
       run();
     },
-    [order, updateRestockStatus, supplierRows],
+    [order, updateRestockStatus, fetchOrder],
   );
 
   const handleAccept = () => {
     if (!order) return;
     Alert.alert(
-      "Accept order?",
+      "Accept request?",
       `Confirm you will fulfil ${order.sellerName}'s request for `
         + `${order.quantity} × ${order.productName} (${order.size}).`,
       [
@@ -188,7 +194,7 @@ function RestockDetailContent() {
         {
           text: "Accept",
           onPress: () =>
-            transition("accepted", undefined, "Order accepted."),
+            transition("accepted", undefined, "Request accepted."),
         },
       ],
     );
@@ -197,7 +203,7 @@ function RestockDetailContent() {
   const handleReject = () => {
     if (!order) return;
     Alert.prompt(
-      "Reject order?",
+      "Reject request?",
       `Tell the seller why (required).`,
       [
         { text: "Keep request", style: "cancel" },
@@ -210,7 +216,7 @@ function RestockDetailContent() {
               Alert.alert("Reason required", "Please enter a reason.");
               return;
             }
-            transition("rejected", trimmed, "Order rejected.");
+            transition("rejected", trimmed, "Request rejected.");
           },
         },
       ],
@@ -225,13 +231,13 @@ function RestockDetailContent() {
   const handleDispatch = () => {
     if (!order) return;
     Alert.alert(
-      "Dispatch order?",
+      "Dispatch request?",
       `Mark this restock as dispatched. The seller will be notified and can confirm receipt to update their stock.`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Dispatch",
-          onPress: () => transition("dispatched", undefined, "Order dispatched."),
+          onPress: () => transition("dispatched", undefined, "Request dispatched."),
         },
       ],
     );
@@ -243,8 +249,8 @@ function RestockDetailContent() {
         <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={["top"]}>
           <View style={styles.empty}>
             <EmptyState
-              icon="❓"
-              title="Missing supply order id"
+              iconName="help-circle-outline"
+              title="Missing restock request id"
               message="Open this screen from a notification or the restock list."
             />
             <AppButton
@@ -263,7 +269,7 @@ function RestockDetailContent() {
       <SidebarLayout>
         <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={["top"]}>
           <View style={styles.empty}>
-            <EmptyState icon="⚠️" title="Order unavailable" message={error} />
+            <EmptyState iconName="alert-circle-outline" iconColor={Colors.warning} title="Request unavailable" message={error} />
             <AppButton
               title="Retry"
               variant="primary"
@@ -325,7 +331,7 @@ function RestockDetailContent() {
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
             <Text style={styles.title} numberOfLines={1}>
-              Supply Order #{order.id}
+              Restock Request #{order.id}
             </Text>
             <Text style={styles.subtitle}>
               From {order.sellerName} • {formatDate(order.createdAt)}
@@ -347,7 +353,10 @@ function RestockDetailContent() {
           }
         >
           <Card style={styles.card}>
-            <Text style={styles.sectionLabel}>Order details</Text>
+            <View style={styles.sectionLabelRow}>
+              <Ionicons name="cube-outline" size={13} color={Colors.supplier} />
+              <Text style={styles.sectionLabel}>Request details</Text>
+            </View>
             <DetailRow label="Seller" value={order.sellerName} />
             <DetailRow label="Gas" value={order.productName} />
             <DetailRow label="Size" value={order.size} />
@@ -374,19 +383,28 @@ function RestockDetailContent() {
 
           {/* Action panel — only the legal next step is shown. */}
           <Card style={[styles.card, { marginTop: Spacing.md }]}>
-            <Text style={styles.sectionLabel}>Next step</Text>
+            <View style={styles.sectionLabelRow}>
+              <Ionicons
+                name="flash-outline"
+                size={13}
+                color={Colors.supplier}
+              />
+              <Text style={styles.sectionLabel}>Next step</Text>
+            </View>
             {status === "pending" ? (
               <View style={styles.actionRow}>
                 <AppButton
-                  title="Accept Order"
+                  title="Accept Request"
                   variant="primary"
+                  leftIcon={<Ionicons name="checkmark" size={14} color="#FFF" />}
                   style={{ flex: 1, marginRight: 6 }}
                   onPress={handleAccept}
                   disabled={acting}
                 />
                 <AppButton
-                  title="Reject Order"
+                  title="Reject Request"
                   variant="danger"
+                  leftIcon={<Ionicons name="close" size={14} color="#FFF" />}
                   style={{ flex: 1, marginLeft: 6 }}
                   onPress={handleReject}
                   disabled={acting}
@@ -396,39 +414,72 @@ function RestockDetailContent() {
               <AppButton
                 title="Start Preparing"
                 variant="primary"
+                leftIcon={<Ionicons name="hourglass-outline" size={14} color="#FFF" />}
                 fullWidth
                 onPress={handleStartPreparing}
                 disabled={acting}
               />
             ) : status === "preparing" ? (
               <AppButton
-                title="Dispatch Order"
+                title="Dispatch Request"
                 variant="primary"
+                leftIcon={<Ionicons name="car-sport-outline" size={14} color="#FFF" />}
                 fullWidth
                 onPress={handleDispatch}
                 disabled={acting}
               />
             ) : status === "dispatched" ? (
-              <Text style={styles.note}>
-                On the way — awaiting the seller's receipt confirmation.
-              </Text>
+              <View style={styles.noteRow}>
+                <Ionicons
+                  name="time-outline"
+                  size={14}
+                  color={Colors.info}
+                />
+                <Text style={styles.note}>
+                  On the way — awaiting the seller's receipt confirmation.
+                </Text>
+              </View>
             ) : status === "delivered" || status === "received" ? (
-              <Text style={styles.note}>
-                Closed. The seller confirmed receipt and their stock has
-                been credited.
-              </Text>
+              <View style={styles.noteRow}>
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={14}
+                  color={Colors.success}
+                />
+                <Text style={styles.note}>
+                  Closed. The seller confirmed receipt and their stock has
+                  been credited.
+                </Text>
+              </View>
             ) : status === "rejected" ? (
-              <Text style={styles.note}>
-                You rejected this order.
-              </Text>
+              <View style={styles.noteRow}>
+                <Ionicons
+                  name="close-circle-outline"
+                  size={14}
+                  color={Colors.danger}
+                />
+                <Text style={styles.note}>You rejected this request.</Text>
+              </View>
             ) : status === "cancelled" ? (
-              <Text style={styles.note}>
-                This order was cancelled.
-              </Text>
+              <View style={styles.noteRow}>
+                <Ionicons
+                  name="ban-outline"
+                  size={14}
+                  color={Colors.danger}
+                />
+                <Text style={styles.note}>This request was cancelled.</Text>
+              </View>
             ) : (
-              <Text style={styles.note}>
-                Nothing to do for this order right now.
-              </Text>
+              <View style={styles.noteRow}>
+                <Ionicons
+                  name="ellipsis-horizontal-circle-outline"
+                  size={14}
+                  color={Colors.textSecondary}
+                />
+                <Text style={styles.note}>
+                  Nothing to do for this request right now.
+                </Text>
+              </View>
             )}
           </Card>
 
@@ -436,7 +487,14 @@ function RestockDetailContent() {
               been through, computed from timestamps we already carry
               on the wire shape. */}
           <Card style={[styles.card, { marginTop: Spacing.md }]}>
-            <Text style={styles.sectionLabel}>Timeline</Text>
+            <View style={styles.sectionLabelRow}>
+              <Ionicons
+                name="time-outline"
+                size={13}
+                color={Colors.supplier}
+              />
+              <Text style={styles.sectionLabel}>Timeline</Text>
+            </View>
             <TimelineRow
               done
               label="Request raised"
@@ -551,7 +609,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.surface,
+    backgroundColor: "#EEF2FF",
   },
   title: {
     fontSize: FontSize.xl,
@@ -578,6 +636,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: Spacing.sm,
   },
+  sectionLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: Spacing.sm,
+  },
   detailRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -602,6 +666,12 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontSize: FontSize.sm,
     fontWeight: "600",
+    flexShrink: 1,
+  },
+  noteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   timelineRow: {
     flexDirection: "row",

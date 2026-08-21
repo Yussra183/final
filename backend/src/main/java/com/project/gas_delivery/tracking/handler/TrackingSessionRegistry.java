@@ -43,9 +43,29 @@ public class TrackingSessionRegistry {
     /** orderId → set of sessionIds subscribed to that order's updates. */
     private final Map<Long, Set<String>> subscriptions = new ConcurrentHashMap<>();
 
+    /**
+     * Generic channel key → set of sessionIds. The order path still uses
+     * the {@code Long}-keyed {@link #subscriptions} map above for
+     * backwards compatibility; trip-scoped subscriptions land here under
+     * the {@link #tripChannel(Long)} key so an order {@code id} and a
+     * trip {@code id} never share a channel even if they happen to be
+     * the same number.
+     */
+    private final Map<String, Set<String>> channelSubscriptions = new ConcurrentHashMap<>();
+
     /** Standard attribute keys used by the handshake interceptor. */
     public static final String ATTR_ACTOR_ID = "tracking.actorId";
     public static final String ATTR_ACTOR_ROLE = "tracking.actorRole";
+
+    /** Canonical namespacing — keeps the {@code Long}-keyed map safe. */
+    public static String orderChannel(Long orderId) {
+        return "order:" + orderId;
+    }
+
+    /** Canonical namespacing — keeps trip ids separate from order ids. */
+    public static String tripChannel(Long tripId) {
+        return "trip:" + tripId;
+    }
 
     public void register(WebSocketSession session) {
         sessions.put(session.getId(), session);
@@ -54,6 +74,7 @@ public class TrackingSessionRegistry {
     public void unregister(String sessionId) {
         sessions.remove(sessionId);
         subscriptions.values().forEach(set -> set.remove(sessionId));
+        channelSubscriptions.values().forEach(set -> set.remove(sessionId));
     }
 
     public WebSocketSession get(String sessionId) {
@@ -78,6 +99,19 @@ public class TrackingSessionRegistry {
         subscriptions
                 .computeIfAbsent(orderId, k -> ConcurrentHashMap.newKeySet())
                 .add(sessionId);
+        channelSubscriptions
+                .computeIfAbsent(orderChannel(orderId), k -> ConcurrentHashMap.newKeySet())
+                .add(sessionId);
+    }
+
+    /**
+     * Subscribe a session to a trip's tracking channel. Same idempotency
+     * contract as {@link #subscribe(Long, String)}.
+     */
+    public void subscribeTrip(Long tripId, String sessionId) {
+        channelSubscriptions
+                .computeIfAbsent(tripChannel(tripId), k -> ConcurrentHashMap.newKeySet())
+                .add(sessionId);
     }
 
     /**
@@ -86,11 +120,18 @@ public class TrackingSessionRegistry {
      */
     public void unsubscribe(String sessionId) {
         subscriptions.values().forEach(set -> set.remove(sessionId));
+        channelSubscriptions.values().forEach(set -> set.remove(sessionId));
     }
 
     /** Snapshot of every session currently subscribed to {@code orderId}. */
     public Set<String> subscribersOf(Long orderId) {
         Set<String> s = subscriptions.get(orderId);
+        return s == null ? Set.of() : Set.copyOf(s);
+    }
+
+    /** Snapshot of every session currently subscribed to {@code tripId}. */
+    public Set<String> tripSubscribersOf(Long tripId) {
+        Set<String> s = channelSubscriptions.get(tripChannel(tripId));
         return s == null ? Set.of() : Set.copyOf(s);
     }
 }

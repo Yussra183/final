@@ -25,7 +25,7 @@ function SupplierDrawerContent(props: DrawerContentComponentProps) {
   return (
     <DrawerContentScrollView
       {...props}
-      contentContainerStyle={{ paddingTop: 0, backgroundColor: Colors.background }}
+      contentContainerStyle={{ paddingTop: 0, backgroundColor: Colors.surface }}
     >
       <SupplierSidebar />
     </DrawerContentScrollView>
@@ -53,7 +53,7 @@ export default function SupplierLayout() {
         // own header is already there.
         headerShown: false,
         drawerStyle: {
-          backgroundColor: Colors.background,
+          backgroundColor: Colors.surface,
           width: 300,
         },
         drawerActiveTintColor: Colors.supplier,

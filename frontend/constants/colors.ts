@@ -29,17 +29,23 @@ export const Colors = {
   danger: "#EF4444", // red-500
   info: "#3B82F6", // blue-500
 
-  // Roles
+  // Roles — all roles use the main brand color (teal) so the whole app
+  // shares one consistent visual identity. The legacy per-role tints
+  // (admin = slate, supplier = indigo) are kept here only as fallbacks
+  // for any code that still reads them; new code should reference
+  // `primary` directly.
   customer: "#0F766E",
-  seller: "#F97316",
-  supplier: "#6366F1",
-  rider: "#10B981",
-  admin: "#1E293B",
+  seller: "#0F766E",
+  supplier: "#0F766E",
+  rider: "#0F766E",
+  admin: "#0F766E",
 
   // Soft surface tints — used for badge / pill / banner backgrounds where a
   // pale wash of a brand color is wanted without hand-rolling a hex literal
   // in every screen.
   primarySoft: "#CCFBF1",   // primary teal @ ~20%
+  supplierSoft: "#CCFBF1",  // alias of primarySoft — keeps call sites
+                             // that still reference supplierSoft on-brand
   successSoft: "#DCFCE7",   // emerald-100
   warningSoft: "#FEF3C7",   // amber-100
   dangerSoft: "#FEE2E2",    // red-100
@@ -51,6 +57,7 @@ export const Colors = {
   successText: "#047857",   // emerald-700
   warningText: "#92400E",   // amber-800
   dangerText: "#B91C1C",    // red-700
+  supplierText: "#0B5C56",  // primaryDark — supplier brand foreground
 
   // Modal scrim — applied to the dim layer behind full-screen modals. Centralised
   // so every screen's modal matches without re-typing the rgba literal.

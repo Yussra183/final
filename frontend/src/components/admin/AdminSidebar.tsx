@@ -1,13 +1,25 @@
 /**
  * Admin Sidebar — fixed left-hand navigation for the Admin Dashboard.
  *
+ * Modernised navigation surface:
+ *   Dashboard · Suppliers · Riders · Sellers · Customers · Products ·
+ *   Reports · Notifications · Settings · Profile
+ *
+ * The profile chip and the Logout action live in the header (see
+ * AdminLayout) so they appear exactly once and stay reachable on every
+ * screen — including the slide-in mobile drawer. Nested workflows
+ * (Supplier Applications, Rider Applications, Seller Applications,
+ * Orders, Routes, Schedules, Rider Assignments) are no longer top-level
+ * sidebar entries — their pages now expose them as in-page tabs instead.
+ * The routes still exist on the backend and remain reachable by deep
+ * link from elsewhere in the app.
+ *
  * Works as both an embedded panel (desktop) and as a slide-in drawer on
- * smaller viewports. Mirrors the visual language of SupplierSidebar but
- * with the full admin route set: Dashboard, Suppliers, Seller/Rider
- * Applications, Rider Assignments, Sellers, Riders, Customers, Routes &
- * Schedules, Orders, Reports, Settings, Profile, Logout.
+ * smaller viewports.
+ *
+ * All icons come from the shared {@link adminIconGlyph} vocab so every
+ * entry uses the same outline style and the same stroke weight.
  */
-import React from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -16,47 +28,118 @@ import {
   View,
 } from "react-native";
 import { usePathname, useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import {
   Colors,
   FontSize,
   Radius,
+  Shadow,
   Spacing,
 } from "../../../constants/colors";
-import { Avatar } from "../Avatar";
-import { useStore } from "../../store/StoreContext";
-
+import { adminIconGlyph, AdminIconName } from "./Icon";
 export type AdminSidebarRoute = {
   key: string;
   label: string;
-  icon: string;
+  icon: AdminIconName;
   path: string;
   /**
    * The Drawer.Screen route name. Defaults to `key` — but for entries
-   * whose sidebar key differs from the actual filename (e.g. "seller-apps"
-   * → "seller-applications.tsx") this must point to the real file name.
+   * whose sidebar key differs from the actual filename (e.g. "profile"
+   * → "profile.tsx") this must point to the real file name.
    */
   screenName?: string;
-  /** Highlighted "primary" entry (Dashboard); others sit in the main stack. */
-  section?: "main" | "primary";
-  /** Show a small numeric badge to the right of the label. */
-  badge?: number;
+  /** Section the route belongs to. Dashboard is "primary" (top); the
+   *  remaining entries group into "management", "analytics" and "system"
+   *  blocks that render in order with labelled dividers in between. */
+  section?: "primary" | "management" | "analytics" | "system";
+  /** Optional accent color for the leading icon bubble. */
+  accent?: string;
 };
 
 export const ADMIN_SIDEBAR_ROUTES: AdminSidebarRoute[] = [
-  { key: "dashboard", label: "Dashboard", icon: "🏠", path: "/dashboard", section: "primary" },
-  { key: "suppliers", label: "Suppliers", icon: "🏭", path: "/suppliers" },
-  { key: "seller-apps", label: "Seller Applications", icon: "📥", path: "/seller-applications", screenName: "seller-applications" },
-  { key: "rider-apps", label: "Rider Applications", icon: "📥", path: "/rider-applications", screenName: "rider-applications" },
-  { key: "supplier-apps", label: "Supplier Applications", icon: "📥", path: "/supplier-applications", screenName: "supplier-applications" },
-  { key: "assignments", label: "Rider Assignments", icon: "🛵", path: "/rider-assignments", screenName: "rider-assignments" },
-  { key: "sellers", label: "Sellers", icon: "🏪", path: "/sellers" },
-  { key: "riders", label: "Riders", icon: "🪪", path: "/riders" },
-  { key: "customers", label: "Customers", icon: "👥", path: "/customers" },
-  { key: "routes", label: "Routes & Schedules", icon: "🗺️", path: "/routes" },
-  { key: "orders", label: "Orders", icon: "📦", path: "/orders" },
-  { key: "products", label: "Products", icon: "🛢️", path: "/products" },
-  { key: "reports", label: "Reports", icon: "📊", path: "/reports" },
-  { key: "settings", label: "Settings", icon: "⚙️", path: "/settings" },
+  {
+    key: "dashboard",
+    label: "Dashboard",
+    icon: "dashboard",
+    path: "/dashboard",
+    section: "primary",
+    accent: Colors.admin,
+  },
+  // ── Management
+  {
+    key: "suppliers",
+    label: "Suppliers",
+    icon: "suppliers",
+    path: "/suppliers",
+    section: "management",
+    accent: Colors.supplier,
+  },
+  {
+    key: "riders",
+    label: "Riders",
+    icon: "riders",
+    path: "/riders",
+    section: "management",
+    accent: Colors.rider,
+  },
+  {
+    key: "sellers",
+    label: "Sellers",
+    icon: "sellers",
+    path: "/sellers",
+    section: "management",
+    accent: Colors.seller,
+  },
+  {
+    key: "customers",
+    label: "Customers",
+    icon: "customers",
+    path: "/customers",
+    section: "management",
+    accent: Colors.primary,
+  },
+  {
+    key: "products",
+    label: "Products",
+    icon: "products",
+    path: "/products",
+    section: "management",
+    accent: Colors.info,
+  },
+  // ── Analytics
+  {
+    key: "reports",
+    label: "Reports",
+    icon: "reports",
+    path: "/reports",
+    section: "analytics",
+    accent: Colors.accent,
+  },
+  {
+    key: "notifications",
+    label: "Notifications",
+    icon: "notifications",
+    path: "/notifications",
+    section: "analytics",
+    accent: Colors.admin,
+  },
+  // ── System
+  {
+    key: "settings",
+    label: "Settings",
+    icon: "settings",
+    path: "/settings",
+    section: "system",
+    accent: Colors.textSecondary,
+  },
+  {
+    key: "profile",
+    label: "Profile",
+    icon: "profile",
+    path: "/profile",
+    section: "system",
+    accent: Colors.textSecondary,
+  },
 ];
 
 interface Props {
@@ -67,11 +150,6 @@ interface Props {
 }
 
 export function AdminSidebar({ asPanel, onNavigate }: Props) {
-  const { session } = useStore();
-  // The signed-in admin's name drives the profile chip. Falls back to
-  // a generic label when there is no session (the layout redirects those
-  // cases elsewhere — this only matters for the desktop sidebar panel).
-  const adminName = session?.user?.fullName || session?.user?.username || "Admin";
   const router = useRouter();
   const pathname = usePathname();
 
@@ -98,15 +176,66 @@ export function AdminSidebar({ asPanel, onNavigate }: Props) {
     onNavigate?.();
   };
 
-  const handleLogout = () => {
-    router.push("/auth/login" as any);
-    onNavigate?.();
-  };
-
   const containerStyle = [
     styles.root,
     asPanel ? styles.asPanel : styles.asDrawer,
   ];
+
+  const primary = ADMIN_SIDEBAR_ROUTES.filter((r) => r.section === "primary");
+  const management = ADMIN_SIDEBAR_ROUTES.filter((r) => r.section === "management");
+  const analytics = ADMIN_SIDEBAR_ROUTES.filter((r) => r.section === "analytics");
+  const system = ADMIN_SIDEBAR_ROUTES.filter((r) => r.section === "system");
+
+  const renderGroup = (
+    routes: AdminSidebarRoute[],
+    label: string,
+  ) => {
+    if (routes.length === 0) return null;
+    return (
+      <>
+        <View style={styles.sectionDivider}>
+          <Text style={styles.sectionDividerText}>{label}</Text>
+        </View>
+        <View style={styles.menuSection}>
+          {routes.map((r) => {
+            const active = isActive(r.path);
+            return (
+              <TouchableOpacity
+                key={r.key}
+                activeOpacity={0.85}
+                onPress={() => handlePress(r.path)}
+                style={[styles.menuRow, active && styles.menuRowActive]}
+              >
+                <View
+                  style={[
+                    styles.iconBubble,
+                    active
+                      ? { backgroundColor: r.accent ?? Colors.admin }
+                      : { backgroundColor: Colors.surfaceMuted },
+                  ]}
+                >
+                  <Ionicons
+                    name={adminIconGlyph(r.icon)}
+                    size={16}
+                    color={active ? "#FFF" : (r.accent ?? Colors.textSecondary)}
+                  />
+                </View>
+                <Text
+                  style={[
+                    styles.menuLabel,
+                    active && { color: Colors.text, fontWeight: "800" },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {r.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </>
+    );
+  };
 
   return (
     <ScrollView
@@ -117,37 +246,54 @@ export function AdminSidebar({ asPanel, onNavigate }: Props) {
       {/* Brand */}
       <View style={styles.brand}>
         <View style={styles.brandMark}>
-          <Text style={styles.brandMarkText}>G</Text>
+          <Ionicons name="shield-checkmark-outline" size={20} color="#FFF" />
         </View>
         <View style={{ marginLeft: Spacing.md, flex: 1 }}>
-          <Text style={styles.brandTitle}>GasAdmin</Text>
+          <Text style={styles.brandTitle}>System Admin</Text>
           <Text style={styles.brandSubtitle}>Operations Console</Text>
         </View>
       </View>
 
-      {/* Profile chip */}
-      <View style={styles.profileChip}>
-        <Avatar name={adminName} size={44} color={Colors.admin} />
-        <View style={{ marginLeft: Spacing.md, flex: 1 }}>
-          <Text style={styles.profileName} numberOfLines={1}>
-            {adminName}
-          </Text>
-          <Text style={styles.profileMeta} numberOfLines={1}>
-            Super Admin
-          </Text>
-        </View>
-      </View>
-
-      {/* Routes */}
-      <View style={styles.menuSection}>
-        {ADMIN_SIDEBAR_ROUTES.map((r) => {
-          if (r.key === "applications-header") {
+      {/* Primary entry */}
+      {primary.length > 0 ? (
+        <View style={styles.menuSection}>
+          {primary.map((r) => {
+            const active = isActive(r.path);
             return (
-              <View key={r.key} style={styles.sectionHeader}>
-                <Text style={styles.sectionHeaderText}>APPLICATIONS</Text>
-              </View>
+              <TouchableOpacity
+                key={r.key}
+                activeOpacity={0.85}
+                onPress={() => handlePress(r.path)}
+                style={[styles.menuRow, active && styles.menuRowActive]}
+              >
+                <View
+                  style={[
+                    styles.iconBubble,
+                    { backgroundColor: r.accent ?? Colors.admin },
+                  ]}
+                >
+                  <Ionicons name={adminIconGlyph(r.icon)} size={16} color="#FFF" />
+                </View>
+                <Text
+                  style={[
+                    styles.menuLabel,
+                    active && { color: Colors.admin, fontWeight: "800" },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {r.label}
+                </Text>
+              </TouchableOpacity>
             );
-          }
+          })}
+        </View>
+      ) : null}
+
+      <View style={styles.sectionDivider}>
+        <Text style={styles.sectionDividerText}>MANAGEMENT</Text>
+      </View>
+      <View style={styles.menuSection}>
+        {management.map((r) => {
           const active = isActive(r.path);
           return (
             <TouchableOpacity
@@ -159,54 +305,33 @@ export function AdminSidebar({ asPanel, onNavigate }: Props) {
               <View
                 style={[
                   styles.iconBubble,
-                  active && { backgroundColor: Colors.admin },
+                  active
+                    ? { backgroundColor: r.accent ?? Colors.admin }
+                    : { backgroundColor: Colors.surfaceMuted },
                 ]}
               >
-                <Text style={styles.iconBubbleText}>{r.icon}</Text>
+                <Ionicons
+                  name={adminIconGlyph(r.icon)}
+                  size={16}
+                  color={active ? "#FFF" : (r.accent ?? Colors.textSecondary)}
+                />
               </View>
               <Text
                 style={[
                   styles.menuLabel,
-                  active && { color: Colors.admin, fontWeight: "800" },
+                  active && { color: Colors.text, fontWeight: "800" },
                 ]}
                 numberOfLines={1}
               >
                 {r.label}
               </Text>
-              {r.badge ? (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{r.badge}</Text>
-                </View>
-              ) : null}
             </TouchableOpacity>
           );
         })}
       </View>
 
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.menuRow}
-          activeOpacity={0.85}
-          onPress={() => handlePress("/profile")}
-        >
-          <View style={styles.iconBubble}>
-            <Text style={styles.iconBubbleText}>👤</Text>
-          </View>
-          <Text style={styles.menuLabel}>Profile</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.menuRow}
-          activeOpacity={0.85}
-          onPress={handleLogout}
-        >
-          <View style={[styles.iconBubble, { backgroundColor: "#FEE2E2" }]}>
-            <Text style={styles.iconBubbleText}>🚪</Text>
-          </View>
-          <Text style={[styles.menuLabel, { color: Colors.danger }]}>
-            Logout
-          </Text>
-        </TouchableOpacity>
-      </View>
+      {renderGroup(analytics, "ANALYTICS")}
+      {renderGroup(system, "SYSTEM")}
     </ScrollView>
   );
 }
@@ -237,12 +362,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.admin,
     alignItems: "center",
     justifyContent: "center",
-    boxShadow: "0 6px 12px rgba(30,41,59,0.25)",
-  },
-  brandMarkText: {
-    color: "#FFF",
-    fontSize: 22,
-    fontWeight: "900",
+    ...Shadow.card,
   },
   brandTitle: {
     fontSize: FontSize.lg,
@@ -253,6 +373,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textSecondary,
     fontWeight: "600",
+    letterSpacing: 0.4,
   },
   profileChip: {
     flexDirection: "row",
@@ -265,30 +386,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  profileName: {
-    fontSize: FontSize.md,
-    fontWeight: "800",
-    color: Colors.text,
-  },
-  profileMeta: {
-    fontSize: 11,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
   menuSection: {
-    paddingTop: Spacing.lg,
+    paddingTop: Spacing.md,
     paddingHorizontal: Spacing.sm,
   },
-  sectionHeader: {
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.md,
+  sectionDivider: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
     paddingBottom: Spacing.sm,
   },
-  sectionHeaderText: {
+  sectionDividerText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "900",
     color: Colors.textMuted,
-    letterSpacing: 1.2,
+    letterSpacing: 1.5,
   },
   menuRow: {
     flexDirection: "row",
@@ -316,30 +427,5 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.surfaceMuted,
-  },
-  iconBubbleText: {
-    fontSize: 15,
-  },
-  badge: {
-    minWidth: 22,
-    height: 22,
-    paddingHorizontal: 6,
-    borderRadius: 11,
-    backgroundColor: Colors.danger,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  badgeText: {
-    color: "#FFF",
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  footer: {
-    paddingHorizontal: Spacing.sm,
-    paddingTop: Spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    marginTop: Spacing.md,
   },
 });

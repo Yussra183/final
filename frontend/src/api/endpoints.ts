@@ -22,6 +22,7 @@ import {
   Complaint,
   CustomerLocation,
   DeliveryRoute,
+  DeliveryTripStatus,
   GasProduct,
   NotificationItem,
   Order,
@@ -40,6 +41,7 @@ import {
   RiderTeam,
   SellerPermit,
   SellerProfile,
+  ServerDeliveryTrip,
   SupplierApplication,
   SupplierApplicationDocument,
   User,
@@ -925,16 +927,91 @@ export const ComplaintsApi = {
 // supplier's rows.
 export const RoutesApi = {
   list: () => api.get<DeliveryRoute[]>("/api/routes"),
+  /**
+   * Create a route with the V19 crew. {@code riderId} /
+   * {@code vehicleId} / {@code supervisorName} / {@code supervisorPhone}
+   * are all optional — the supplier may save a route without a rider
+   * or vehicle and attach them later via {@link RoutesApi.update}.
+   * The backend validates ownership server-side; submitting an
+   * unrelated rider id returns 400.
+   */
   create: (body: {
     name: string;
     scheduleDay: string;
     scheduleTime: string;
+    riderId?: string | null;
+    vehicleId?: string | null;
+    supervisorName?: string | null;
+    supervisorPhone?: string | null;
   }) => api.post<DeliveryRoute>("/api/routes", body),
+  /**
+   * Edit a route's name / day / time AND V19 crew. Stops are
+   * intentionally NOT accepted here — see {@link RoutesApi.setStops}.
+   *
+   * <p>Pass {@code null} explicitly to clear a crew field
+   * (e.g. {@code riderId: null} removes the assigned rider). The
+   * backend re-validates ownership on every write.</p>
+   */
+  update: (
+    id: string,
+    body: {
+      name: string;
+      scheduleDay: string;
+      scheduleTime: string;
+      riderId?: string | null;
+      vehicleId?: string | null;
+      supervisorName?: string | null;
+      supervisorPhone?: string | null;
+    },
+  ) => api.patch<DeliveryRoute>(`/api/routes/${encodeURIComponent(id)}`, body),
+  /**
+   * Replace the full ordered seller stop list. The supplier is the
+   * only one who can touch the map; the backend rejects sellers
+   * without valid coordinates with a clear 400.
+   */
+  setStops: (id: string, sellerIds: string[]) =>
+    api.put<DeliveryRoute>(`/api/routes/${encodeURIComponent(id)}/stops`, {
+      sellerIds,
+    }),
   setActive: (id: string, active: boolean) =>
     api.patch<DeliveryRoute>(
       `/api/routes/${encodeURIComponent(id)}/active`,
       { active },
     ),
+};
+
+/**
+ * V19 — supplier ↔ rider assignments. The supplier module owns these
+ * endpoints; the legacy {@link RidersApi.list()} is still global so the
+ * Fleet screen can show every rider on the platform (only those on the
+ * supplier's roster are eligible for the Add Route rider picker).
+ */
+export const SupplierRidersApi = {
+  list: () => api.get<Rider[]>("/api/supplier-riders"),
+  link: (riderId: string) =>
+    api.post<{ supplierId: string; riderId: string }>(
+      "/api/supplier-riders",
+      { riderId },
+    ),
+  unlink: (riderId: string) =>
+    api.delete<void>(
+      `/api/supplier-riders/${encodeURIComponent(riderId)}`,
+    ),
+  /**
+   * Supplier-owned rider creation. The supplier's Fleet → Add Rider
+   * form posts here; the backend creates a real `users(role=RIDER)`
+   * row + `rider_profiles` row + `supplier_riders` join row in one
+   * transaction and returns the freshly persisted Rider (with its
+   * real numeric id, e.g. "27") so the picker can use it immediately.
+   */
+  create: (body: {
+    fullName: string;
+    phone?: string;
+    licenseNo?: string;
+    vehicleType?: string;
+    vehiclePlate?: string;
+    vehicleModel?: string;
+  }) => api.post<Rider>("/api/supplier-riders/riders", body),
 };
 
 export const VehiclesApi = {
@@ -948,16 +1025,67 @@ export const VehiclesApi = {
     ),
 };
 
+// ---- Supplier delivery operations: trips -------------------------------
+// Backed by the supplier module's SupplierTripController. A trip is a
+// single execution of a route with a concrete rider / vehicle /
+// supervisor. The route's stops are snapshotted into the trip at
+// create-time so a later route edit cannot disturb a running
+// operation.
+export const TripsApi = {
+  /** List the signed-in supplier's trips. Optional `?status=...` filter. */
+  list: (status?: DeliveryTripStatus) =>
+    api.get<ServerDeliveryTrip[]>(
+      "/api/trips",
+      status ? { status } : undefined,
+    ),
+  /** One trip with its snapshotted stops. */
+  byId: (id: string) =>
+    api.get<ServerDeliveryTrip>(`/api/trips/${encodeURIComponent(id)}`),
+  /**
+   * Create a trip in `planned` state. Stops are snapshotted at
+   * create-time. The supplier must supply a supervisor name + phone —
+   * there is no supervisor role in the system.
+   */
+  create: (body: {
+    routeId: string;
+    riderId?: string;
+    vehicleId?: string;
+    supervisorName: string;
+    supervisorPhone: string;
+  }) => api.post<ServerDeliveryTrip>("/api/trips", body),
+  /**
+   * Transition the trip to `active`. This is the gate that makes the
+   * live position visible to sellers on the route.
+   */
+  start: (id: string) =>
+    api.post<ServerDeliveryTrip>(`/api/trips/${encodeURIComponent(id)}/start`, {}),
+  /** Transition the trip to `completed`. */
+  complete: (id: string) =>
+    api.post<ServerDeliveryTrip>(`/api/trips/${encodeURIComponent(id)}/complete`, {}),
+  /** Mark one stop delivered. */
+  markStopDelivered: (id: string, sellerId: string) =>
+    api.patch<ServerDeliveryTrip>(
+      `/api/trips/${encodeURIComponent(id)}/stops/${encodeURIComponent(sellerId)}`,
+    ),
+};
+
 // ---- Delivery tracking ------------------------------------------------
 
 /**
  * Wire shape shared by every tracking frame (WebSocket outbound and the
  * REST bootstrap endpoint). Mirrors the backend's
  * `tracking.dto.LocationUpdateMessage`.
+ *
+ * <p>Order-scoped frames set {@code orderId}; trip-scoped frames (the
+ * supplier delivery-operations channel) set {@code tripId} and leave
+ * {@code orderId} null. The two channels share the same socket, the
+ * same broadcaster, and the same dedupe — only the channel key
+ * differs.</p>
  */
 export interface LocationUpdateMessage {
   type: "LOCATION_UPDATE" | "ERROR" | "PONG";
-  orderId: number;
+  orderId: number | null;
+  tripId: number | null;
   riderId: number | null;
   lat: number;
   lng: number;
@@ -1011,6 +1139,32 @@ export const TrackingApi = {
   /** Customer / seller → server: bootstrap the rider marker. */
   latest: (orderId: string) =>
     api.get<LocationUpdateMessage>(`/api/orders/${orderId}/tracking/latest`),
+
+  /**
+   * Supplier/rider device → server: publish a sample for a supplier
+   * delivery-operation trip. The publisher is enforced server-side to
+   * be the trip's assigned rider or the owning supplier.
+   */
+  postTripLocation: (
+    tripId: string,
+    body: {
+      lat: number;
+      lng: number;
+      headingDeg?: number;
+      speedMps?: number;
+      accuracyM?: number;
+      status?: string;
+      clientTsMs?: number;
+    },
+  ) => api.post<LocationUpdateMessage>(`/api/trips/${tripId}/location`, body),
+
+  /**
+   * Seller on the route → server: bootstrap the supplier marker on
+   * first paint. The server rejects with 403 if the trip is not
+   * ACTIVE yet or the seller is not on the route.
+   */
+  latestTrip: (tripId: string) =>
+    api.get<LocationUpdateMessage>(`/api/trips/${tripId}/tracking/latest`),
 };
 
 // ---- Payments ----------------------------------------------------------

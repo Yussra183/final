@@ -139,9 +139,16 @@ public class TrackingWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleSubscribe(WebSocketSession session, JsonNode frame) {
+        Long tripId = longOr(frame, "tripId");
+        if (tripId != null) {
+            Long actorId = registry.actorIdOf(session);
+            Role actorRole = registry.roleOf(session);
+            trackingService.subscribeTrip(actorId, actorRole, tripId, session.getId());
+            return;
+        }
         Long orderId = longOr(frame, "orderId");
         if (orderId == null) {
-            sendError(session, "SUBSCRIBE requires 'orderId'.");
+            sendError(session, "SUBSCRIBE requires 'orderId' or 'tripId'.");
             return;
         }
         Long actorId = registry.actorIdOf(session);
@@ -151,11 +158,6 @@ public class TrackingWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleUnsubscribe(WebSocketSession session, JsonNode frame) {
-        Long orderId = longOr(frame, "orderId");
-        if (orderId == null) {
-            sendError(session, "UNSUBSCRIBE requires 'orderId'.");
-            return;
-        }
         // Per-order unsubscribe isn't needed for the MVP: the connection
         // close path drops every subscription. Tell the client to
         // simply close the socket.
@@ -163,9 +165,31 @@ public class TrackingWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleLocationUpdate(WebSocketSession session, JsonNode frame) {
+        Long tripId = longOr(frame, "tripId");
+        if (tripId != null) {
+            Double lat = doubleOr(frame, "lat");
+            Double lng = doubleOr(frame, "lng");
+            if (lat == null || lng == null) {
+                sendError(session, "LOCATION_UPDATE requires 'lat' and 'lng'.");
+                return;
+            }
+            LocationUpdateRequest req = new LocationUpdateRequest(
+                    lat,
+                    lng,
+                    doubleOr(frame, "headingDeg"),
+                    doubleOr(frame, "speedMps"),
+                    doubleOr(frame, "accuracyM"),
+                    textOr(frame, "status", null),
+                    longOr(frame, "clientTsMs")
+            );
+            Long actorId = registry.actorIdOf(session);
+            Role actorRole = registry.roleOf(session);
+            trackingService.ingestForTrip(actorId, actorRole, tripId, req);
+            return;
+        }
         Long orderId = longOr(frame, "orderId");
         if (orderId == null) {
-            sendError(session, "LOCATION_UPDATE requires 'orderId'.");
+            sendError(session, "LOCATION_UPDATE requires 'orderId' or 'tripId'.");
             return;
         }
         Double lat = doubleOr(frame, "lat");

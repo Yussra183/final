@@ -190,7 +190,7 @@ export default function AdminProfilePage() {
               <View style={styles.footerRow}>
                 <AdminButton
                   label="Save Profile"
-                  icon="💾"
+                  icon="upload"
                   onPress={handleSaveProfile}
                 />
               </View>
@@ -271,7 +271,7 @@ export default function AdminProfilePage() {
               <View style={styles.footerRow}>
                 <AdminButton
                   label="Update Password"
-                  icon="🔒"
+                  icon="lock"
                   onPress={handleChangePw}
                   disabled={!pwValid}
                 />
@@ -315,7 +315,7 @@ export default function AdminProfilePage() {
             {!user ? (
               <View style={{ marginTop: Spacing.md }}>
                 <AdminEmptyState
-                  icon="🔐"
+                  icon="lock"
                   title="Not signed in"
                   message="The session has expired. Sign in again to see your account details."
                 />

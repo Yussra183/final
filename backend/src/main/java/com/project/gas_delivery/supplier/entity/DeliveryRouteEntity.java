@@ -42,6 +42,24 @@ public class DeliveryRouteEntity {
     @Column(nullable = false)
     private boolean active = true;
 
+    /**
+     * Default crew captured at route creation. V19 added the four
+     * columns. They are nullable so existing routes (pre-V19) still
+     * serialize cleanly; the trip-create endpoint falls back to them
+     * when the request omits the override.
+     */
+    @Column(name = "rider_id")
+    private Long riderId;
+
+    @Column(name = "vehicle_id")
+    private Long vehicleId;
+
+    @Column(name = "supervisor_name", length = 120)
+    private String supervisorName;
+
+    @Column(name = "supervisor_phone", length = 30)
+    private String supervisorPhone;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -60,6 +78,14 @@ public class DeliveryRouteEntity {
     public void setScheduleTime(String scheduleTime) { this.scheduleTime = scheduleTime; }
     public boolean isActive() { return active; }
     public void setActive(boolean active) { this.active = active; }
+    public Long getRiderId() { return riderId; }
+    public void setRiderId(Long riderId) { this.riderId = riderId; }
+    public Long getVehicleId() { return vehicleId; }
+    public void setVehicleId(Long vehicleId) { this.vehicleId = vehicleId; }
+    public String getSupervisorName() { return supervisorName; }
+    public void setSupervisorName(String supervisorName) { this.supervisorName = supervisorName; }
+    public String getSupervisorPhone() { return supervisorPhone; }
+    public void setSupervisorPhone(String supervisorPhone) { this.supervisorPhone = supervisorPhone; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }

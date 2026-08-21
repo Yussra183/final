@@ -129,23 +129,6 @@ export default function ReportsPage() {
     <AdminLayout
       title="Reports"
       subtitle="Statistics generated from live database records"
-      rightActions={
-        <View style={styles.headerActions}>
-          <AdminButton
-            label="Refresh"
-            icon="↻"
-            variant="secondary"
-            onPress={reloadAll}
-            loading={report.refreshing}
-          />
-          <AdminButton
-            label="Export"
-            icon="⬆️"
-            onPress={handleExport}
-            disabled={!r}
-          />
-        </View>
-      }
       refreshControl={
         <RefreshControl refreshing={report.refreshing} onRefresh={reloadAll} />
       }
@@ -189,37 +172,37 @@ export default function ReportsPage() {
               <AdminStatTile
                 label="Total Orders"
                 value={r.totalOrders}
-                icon="📦"
+                icon="products"
                 tone="primary"
               />
               <AdminStatTile
                 label="Delivered"
                 value={r.deliveredOrders}
-                icon="✅"
+                icon="approve"
                 tone="success"
               />
               <AdminStatTile
                 label="Cancelled"
                 value={r.cancelledOrders}
-                icon="✖️"
+                icon="reject"
                 tone="warning"
               />
               <AdminStatTile
                 label="Rejected"
                 value={r.rejectedOrders}
-                icon="🚫"
+                icon="reject"
                 tone="danger"
               />
               <AdminStatTile
                 label="Revenue"
                 value={formatCurrency(r.revenue)}
-                icon="💰"
+                icon="orders"
                 tone="accent"
               />
               <AdminStatTile
                 label="Average Order"
                 value={formatCurrency(r.averageOrderValue)}
-                icon="🧾"
+                icon="documents"
                 tone="info"
               />
             </View>
@@ -268,7 +251,7 @@ export default function ReportsPage() {
             <AdminCard>
               {r.ordersByDay.length === 0 ? (
                 <AdminEmptyState
-                  icon="📈"
+                  icon="reports"
                   title="No orders in this window"
                   message="Widen the date range, or wait for new orders to be placed."
                 />
@@ -300,7 +283,7 @@ export default function ReportsPage() {
             <AdminCard>
               {statusSlices.length === 0 ? (
                 <AdminEmptyState
-                  icon="🍩"
+                  icon="documents"
                   title="No orders to break down"
                   message="No orders were placed inside this window."
                 />
@@ -314,7 +297,7 @@ export default function ReportsPage() {
             <AdminCard>
               {r.topSellers.length === 0 ? (
                 <AdminEmptyState
-                  icon="🏪"
+                  icon="sellers"
                   title="No delivered orders yet"
                   message="Sellers appear here once their orders reach delivered."
                 />
@@ -363,11 +346,6 @@ export default function ReportsPage() {
 }
 
 const styles = StyleSheet.create({
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
   rangeRow: {
     flexDirection: "row",
     flexWrap: "wrap",

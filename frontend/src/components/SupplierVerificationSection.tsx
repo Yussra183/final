@@ -206,6 +206,7 @@ interface Props {
 export function SupplierVerificationSection({ onApplicationChange }: Props) {
   const store = useStore();
   const session = store.session;
+  const { fetchMySupplierApplication } = store;
   const user = session?.user;
   const cachedApplication = user
     ? store.supplierApplications[user.id]
@@ -272,8 +273,7 @@ export function SupplierVerificationSection({ onApplicationChange }: Props) {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store]);
+  }, [fetchMySupplierApplication]);
 
   // ---- Transient message auto-clear ------------------------------------
   useEffect(() => {

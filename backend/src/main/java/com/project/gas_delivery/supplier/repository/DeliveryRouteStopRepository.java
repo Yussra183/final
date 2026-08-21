@@ -9,4 +9,12 @@ import java.util.List;
 @Repository
 public interface DeliveryRouteStopRepository extends JpaRepository<DeliveryRouteStopEntity, Long> {
     List<DeliveryRouteStopEntity> findByRouteIdOrderBySequenceAsc(Long routeId);
+
+    /**
+     * Wipe every stop on a route in one statement — used by
+     * {@code SupplierLogisticsService.replaceRouteStops} when rewriting
+     * the full ordered list (renumbering sequences 1..N inside one
+     * transaction).
+     */
+    void deleteByRouteId(Long routeId);
 }

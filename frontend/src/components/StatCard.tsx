@@ -1,14 +1,18 @@
 import React from "react";
 import { StyleSheet, Text, View, ViewStyle } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { Card } from "./Card";
 import { Colors, FontSize, Spacing } from "../../constants/colors";
 
 interface Props {
   label: string;
   value: string | number;
+  /** Legacy emoji icon. Used when `iconName` is not provided. */
   icon?: string;
+  /** Preferred Ionicon name. Renders inside a tinted circular tile. */
+  iconName?: keyof typeof Ionicons.glyphMap;
   hint?: string;
-  tone?: "primary" | "secondary" | "accent" | "info" | "warning";
+  tone?: "primary" | "secondary" | "accent" | "info" | "warning" | "supplier";
   style?: ViewStyle;
 }
 
@@ -18,12 +22,14 @@ const toneColors = {
   accent: Colors.accent,
   info: Colors.info,
   warning: Colors.warning,
+  supplier: Colors.supplier,
 };
 
 export function StatCard({
   label,
   value,
   icon,
+  iconName,
   hint,
   tone = "primary",
   style,
@@ -31,8 +37,12 @@ export function StatCard({
   const accent = toneColors[tone];
   return (
     <Card style={[styles.card, style]}>
-      <View style={[styles.iconBox, { backgroundColor: accent + "22" }]}>
-        <Text style={[styles.icon, { color: accent }]}>{icon ?? "•"}</Text>
+      <View style={[styles.iconBox, { backgroundColor: accent + "1A" }]}>
+        {iconName ? (
+          <Ionicons name={iconName} size={18} color={accent} />
+        ) : (
+          <Text style={[styles.icon, { color: accent }]}>{icon ?? "•"}</Text>
+        )}
       </View>
       <Text style={styles.label}>{label}</Text>
       <Text style={[styles.value, { color: accent }]}>{value}</Text>

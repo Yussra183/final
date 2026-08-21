@@ -5,17 +5,17 @@
  * with KPI tiles and a bar chart of deliveries per route.
  *
  * The chart follows the dataviz skill's "single-series bar" form:
- *   • one sequential hue (the supplier brand blue)
- *   • thin bars (28 px) with 4 px rounded data-ends anchored to baseline
- *   • 2 px surface gap between bars and a 2 px ring on hover
+ *   • one sequential hue (the supplier brand indigo)
+ *   • thin bars with rounded data-ends anchored to baseline
  *   • selective direct labels (value on top, route name on x-axis)
  *   • recessive gridlines and baseline
  *   • no legend (one series — x-axis names each bar)
  */
 import React, { useMemo } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useStore } from "../../src/store/StoreContext";
-import { Colors, FontSize, Spacing } from "../../constants/colors";
+import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { Card } from "../../src/components/Card";
 import { StatCard } from "../../src/components/StatCard";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
@@ -66,14 +66,14 @@ export default function SupplierReports() {
           <StatCard
             label="Trips"
             value={totalTrips}
-            icon="🚛"
-            tone="primary"
+            iconName="car-sport-outline"
+            tone="supplier"
             style={{ marginRight: Spacing.sm }}
           />
           <StatCard
             label="Completed"
             value={`${completedTrips}/${totalTrips}`}
-            icon="✅"
+            iconName="checkmark-circle-outline"
             tone="accent"
           />
         </View>
@@ -81,14 +81,14 @@ export default function SupplierReports() {
           <StatCard
             label="Deliveries"
             value={totalDelivered}
-            icon="📦"
+            iconName="cube-outline"
             tone="info"
             style={{ marginRight: Spacing.sm }}
           />
           <StatCard
             label="On-time"
             value={`${onTimeRate}%`}
-            icon="⏱️"
+            iconName="time-outline"
             tone="warning"
           />
         </View>
@@ -98,14 +98,28 @@ export default function SupplierReports() {
         <View style={{ marginHorizontal: Spacing.lg }}>
           <Card>
             <View style={styles.chartHeader}>
-              <Text style={styles.chartTitle}>Stops served by route</Text>
-              <Text style={styles.chartSubtitle}>All-time</Text>
+              <View style={styles.chartTitleRow}>
+                <Ionicons
+                  name="bar-chart"
+                  size={16}
+                  color={Colors.supplier}
+                />
+                <Text style={styles.chartTitle}>Stops served by route</Text>
+              </View>
+              <View style={styles.chartSubChip}>
+                <Text style={styles.chartSubtitle}>All-time</Text>
+              </View>
             </View>
             <View style={styles.chartArea}>
               {/* Subtle horizontal gridlines + y-axis labels */}
               {[1, 0.5, 0].map((frac, idx) => (
-                <View key={idx} style={[styles.gridline, { top: `${(1 - frac) * 100}%` }]}>
-                  <Text style={styles.gridLabel}>{Math.round(maxBarValue * frac)}</Text>
+                <View
+                  key={idx}
+                  style={[styles.gridline, { top: `${(1 - frac) * 100}%` }]}
+                >
+                  <Text style={styles.gridLabel}>
+                    {Math.round(maxBarValue * frac)}
+                  </Text>
                 </View>
               ))}
               {/* Bars */}
@@ -123,13 +137,20 @@ export default function SupplierReports() {
                           ]}
                         />
                       </View>
-                      <Text style={styles.barLabel}>{d.name}</Text>
+                      <Text style={styles.barLabel} numberOfLines={1}>
+                        {d.name}
+                      </Text>
                     </View>
                   );
                 })}
               </View>
             </View>
             <View style={styles.chartFooter}>
+              <Ionicons
+                name="information-circle-outline"
+                size={11}
+                color={Colors.textMuted}
+              />
               <Text style={styles.chartFootnote}>
                 x-axis: route • y-axis: deliveries served
               </Text>
@@ -143,14 +164,14 @@ export default function SupplierReports() {
           <StatCard
             label="Active riders"
             value={riders.filter((r) => r.active).length}
-            icon="🪪"
-            tone="primary"
+            iconName="person-outline"
+            tone="supplier"
             style={{ marginRight: Spacing.sm }}
           />
           <StatCard
             label="Active vehicles"
             value={vehicles.filter((v) => v.active).length}
-            icon="🚚"
+            iconName="car-sport-outline"
             tone="accent"
           />
         </View>
@@ -160,14 +181,14 @@ export default function SupplierReports() {
           <StatCard
             label="Near-shop alerts"
             value={nearArrivalCount}
-            icon="📍"
+            iconName="location-outline"
             tone="info"
             style={{ marginRight: Spacing.sm }}
           />
           <StatCard
             label="Active routes"
             value={routes.filter((r) => r.active).length}
-            icon="🗺️"
+            iconName="map-outline"
             tone="warning"
           />
         </View>
@@ -183,9 +204,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
   title: { fontSize: FontSize.xxl, fontWeight: "800", color: Colors.text },
-  subtitle: { color: Colors.textSecondary, fontSize: FontSize.sm, marginTop: 2 },
+  subtitle: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    marginTop: 2,
+  },
   statsRow: { flexDirection: "row", paddingHorizontal: Spacing.lg },
   sectionTitle: {
     fontSize: FontSize.lg,
@@ -197,12 +223,32 @@ const styles = StyleSheet.create({
   },
   chartHeader: {
     flexDirection: "row",
-    alignItems: "baseline",
+    alignItems: "center",
     justifyContent: "space-between",
     marginBottom: Spacing.sm,
   },
-  chartTitle: { fontWeight: "800", color: Colors.text, fontSize: FontSize.md },
-  chartSubtitle: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: "700" },
+  chartTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  chartTitle: {
+    fontWeight: "800",
+    color: Colors.text,
+    fontSize: FontSize.md,
+  },
+  chartSubChip: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+    backgroundColor: "#EEF2FF",
+  },
+  chartSubtitle: {
+    color: Colors.supplier,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
   chartArea: {
     height: 180,
     position: "relative",
@@ -265,6 +311,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   chartFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     marginTop: Spacing.sm,
   },
   chartFootnote: {

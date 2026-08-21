@@ -328,7 +328,17 @@ export interface RestockRequest {
 export function normalizeRestockStatus(
   raw: RestockRequest["status"] | string | null | undefined
 ): RestockRequest["status"] {
-  switch (raw) {
+  // Case-fold the wire value before the switch so any casing resolves
+  // to the same canonical 8-value bucket. The current backend
+  // serialises status via `SupplyOrderStatus.toJson()` (lowercase),
+  // but older deployments and any future mirror may emit the
+  // canonical Java `name()` form (`"ACCEPTED"`, `"PREPARING"`, …).
+  // Without this fold an unrecognised casing silently falls through
+  // to `default: "pending"` and the supplier app stays on the Accept
+  // / Reject panel after a successful Accept because the JSX still
+  // sees `status === "pending"`.
+  const lc = typeof raw === "string" ? raw.toLowerCase() : raw;
+  switch (lc) {
     case "approved":
     case "accepted":
       return "accepted";
@@ -531,6 +541,19 @@ export type StopStatus =
 /** Trip lifecycle for the Supplier module. */
 export type TripStatus = "draft" | "started" | "in_transit" | "completed";
 
+/**
+ * Server-backed trip lifecycle. Mirrors the backend's
+ * `DeliveryTripStatus` enum (PLANNED → ACTIVE → COMPLETED, plus
+ * CANCELLED). The lowercase union is what arrives on the wire after
+ * Jackson's `@JsonValue` lowercase serialisation.
+ */
+export type DeliveryTripStatus =
+  | "planned"
+  | "ready"
+  | "active"
+  | "completed"
+  | "cancelled";
+
 /** LatLng tuple shared with `src/lib/location.ts`. */
 export interface LatLng {
   lat: number;
@@ -570,6 +593,25 @@ export interface DeliveryRoute {
   polyline: LatLng[];
   /** Optional administrative flag for deactivating without deleting. */
   active: boolean;
+  /**
+   * V19 — default crew captured at Add / Edit Route. The route row is
+   * the durable source: weekly recurrences reuse the same Supervisor /
+   * Rider / Vehicle without re-entry. The {@code ServerDeliveryTrip}
+   * still carries per-instance overrides when a Start Delivery wants
+   * to swap them out for a particular execution.
+   *
+   * <p>All six fields are nullable: a route may be saved without a
+   * rider or vehicle (the supplier uses their own fleet only on
+   * occasions where a particular vehicle is needed). The mobile
+   * surfaces the route as "no crew" until at least one field is set.</p>
+   */
+  riderId?: string | null;
+  riderName?: string | null;
+  riderPhone?: string | null;
+  vehicleId?: string | null;
+  vehiclePlate?: string | null;
+  supervisorName?: string | null;
+  supervisorPhone?: string | null;
 }
 
 /** Vehicle used by the supplier for distribution. */
@@ -799,6 +841,39 @@ export interface DeliveryTrip {
   progress: number;
   /** Per-stop live state — snapshot of the route's stops at trip creation. */
   stops: RouteStop[];
+}
+
+/**
+ * Server-backed delivery trip. Persisted in `delivery_trips`; created
+ * via `TripsApi.create` and moved through {@link DeliveryTripStatus}
+ * via `start` / `complete`. Stops are snapshotted at create-time so a
+ * later route edit cannot disturb an already-running operation.
+ *
+ * <p>Coexists with the in-memory {@link DeliveryTrip} used by the
+ * simulated supplier map; downstream code is migrating to this shape
+ * for the live delivery-operations feature.</p>
+ */
+export interface ServerDeliveryTrip {
+  id: string;
+  supplierId: string;
+  routeId: string;
+  routeName: string;
+  scheduleDay: DeliveryDay;
+  riderId: string | null;
+  riderName: string | null;
+  vehicleId: string | null;
+  vehiclePlate: string | null;
+  /** Free-text supervisor name + phone — there is no supervisor role. */
+  supervisorName: string | null;
+  supervisorPhone: string | null;
+  status: DeliveryTripStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string | null;
+  /** Snapshot of the route's stops at create-time. */
+  stops: RouteStop[];
+  /** Polyline derived from the snapshotted stops. */
+  polyline: LatLng[];
 }
 
 /* ------------------------------------------------------------------ *

@@ -19,6 +19,7 @@ import {
   Shadow,
   Spacing,
 } from "../../../constants/colors";
+import { AdminIcon, AdminIconName } from "./Icon";
 
 export type AdminButtonVariant =
   | "primary"
@@ -32,7 +33,7 @@ interface Props {
   label: string;
   onPress?: () => void;
   variant?: AdminButtonVariant;
-  icon?: string;
+  icon?: AdminIconName;
   size?: "sm" | "md";
   loading?: boolean;
   disabled?: boolean;
@@ -76,7 +77,13 @@ export function AdminButton({
       ) : (
         <View style={styles.inner}>
           {icon ? (
-            <Text style={[styles.icon, { color: visual.text }]}>{icon}</Text>
+            <View style={styles.icon}>
+              <AdminIcon
+                name={icon}
+                size={size === "sm" ? 14 : 16}
+                color={visual.text}
+              />
+            </View>
           ) : null}
           <Text style={[styles.text, { color: visual.text }]}>{label}</Text>
         </View>
@@ -141,7 +148,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   icon: {
-    fontSize: FontSize.sm,
     marginRight: 6,
   },
   text: {

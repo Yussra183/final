@@ -4,6 +4,8 @@
 export { AdminSidebar } from "./AdminSidebar";
 export type { AdminSidebarRoute } from "./AdminSidebar";
 export { AdminLayout } from "./AdminLayout";
+export { AdminTabs } from "./AdminTabs";
+export type { AdminTab } from "./AdminTabs";
 export { AdminCard, AdminCardSection } from "./AdminCard";
 export { AdminStatTile } from "./AdminStatTile";
 export type { StatTone } from "./AdminStatTile";
@@ -40,3 +42,6 @@ export {
 export { AdminEmptyState } from "./AdminEmpty";
 export { AdminAsyncBoundary } from "./AdminAsyncBoundary";
 export { AdminAvatar } from "./AdminAvatar";
+export { AdminIcon } from "./Icon";
+export type { AdminIconName } from "./Icon";
+export { adminIconGlyph } from "./Icon";

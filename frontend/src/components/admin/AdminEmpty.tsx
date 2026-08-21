@@ -10,22 +10,23 @@ import {
   Radius,
   Spacing,
 } from "../../../constants/colors";
+import { AdminIcon, AdminIconName } from "./Icon";
 
 interface Props {
-  icon?: string;
+  icon?: AdminIconName;
   title?: string;
   message?: string;
 }
 
 export function AdminEmptyState({
-  icon = "📭",
+  icon = "documents",
   title = "No records found",
   message = "Try adjusting your search or filters to see results here.",
 }: Props) {
   return (
     <View style={styles.wrap}>
       <View style={styles.iconCircle}>
-        <Text style={styles.iconText}>{icon}</Text>
+        <AdminIcon name={icon} size={36} color={Colors.textSecondary} />
       </View>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.message}>{message}</Text>

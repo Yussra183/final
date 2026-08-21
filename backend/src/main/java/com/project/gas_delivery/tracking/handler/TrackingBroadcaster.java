@@ -63,6 +63,27 @@ public class TrackingBroadcaster {
     }
 
     /**
+     * Send a freshly ingested trip-tracking frame to every subscriber of
+     * {@code tripId}. Mirrors {@link #broadcast(Long, LocationUpdateMessage)}
+     * for the additive trip channel introduced by the supplier delivery-
+     * operations feature. The same broadcaster, the same WebSocket
+     * sessions, the same envelope — only the channel key is different.
+     */
+    public void broadcastTrip(Long tripId, @NonNull LocationUpdateMessage msg) {
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(msg);
+        } catch (Exception e) {
+            log.warn("Tracking serialise failed for trip {}: {}", tripId, e.getMessage());
+            return;
+        }
+        TextMessage frame = new TextMessage(json);
+        for (String sessionId : registry.tripSubscribersOf(tripId)) {
+            sendQuietly(sessionId, frame);
+        }
+    }
+
+    /**
      * Send a single frame to one session — used by the service to
      * replay the cached position right after a SUBSCRIBE.
      */

@@ -4,6 +4,10 @@ import com.project.gas_delivery.auth.enums.Role;
 import com.project.gas_delivery.order.entity.OrderEntity;
 import com.project.gas_delivery.order.enums.OrderStatus;
 import com.project.gas_delivery.order.repository.OrderRepository;
+import com.project.gas_delivery.supplier.entity.DeliveryTripEntity;
+import com.project.gas_delivery.supplier.enums.DeliveryTripStatus;
+import com.project.gas_delivery.supplier.repository.DeliveryTripRepository;
+import com.project.gas_delivery.supplier.repository.DeliveryTripStopRepository;
 import com.project.gas_delivery.tracking.dto.LocationUpdateMessage;
 import com.project.gas_delivery.tracking.dto.LocationUpdateRequest;
 import com.project.gas_delivery.tracking.exception.TrackingForbiddenException;
@@ -108,17 +112,23 @@ public class DeliveryTrackingService {
     private final Map<Long, RiderLocation> latestByOrder = new ConcurrentHashMap<>();
 
     private final OrderRepository orderRepository;
+    private final DeliveryTripRepository tripRepository;
+    private final DeliveryTripStopRepository tripStopRepository;
     private final TrackingBroadcaster broadcaster;
     private final TrackingSessionRegistry sessionRegistry;
     private final ObjectMapper objectMapper;
 
     public DeliveryTrackingService(
             OrderRepository orderRepository,
+            DeliveryTripRepository tripRepository,
+            DeliveryTripStopRepository tripStopRepository,
             TrackingBroadcaster broadcaster,
             TrackingSessionRegistry sessionRegistry,
             ObjectMapper objectMapper
     ) {
         this.orderRepository = orderRepository;
+        this.tripRepository = tripRepository;
+        this.tripStopRepository = tripStopRepository;
         this.broadcaster = broadcaster;
         this.sessionRegistry = sessionRegistry;
         this.objectMapper = objectMapper;
@@ -282,6 +292,167 @@ public class DeliveryTrackingService {
     /** Drop the cached position when an order is delivered/cancelled. */
     public void clearOnDelivery(Long orderId) {
         latestByOrder.remove(orderId);
+    }
+
+    // ---- Trip channel (additive — supplier delivery operations) --------
+    //
+    // Mirrors the order-keyed pipeline above. We deliberately keep the
+    // two paths in the same service so the shared dedupe thresholds
+    // (MIN_DELTA_METERS / HEARTBEAT_MS) and broadcaster/registry wiring
+    // stay in one place. Order ids and trip ids are namespaced in
+    // TrackingSessionRegistry so the two channels cannot collide.
+
+    /**
+     * Cached last-known position per active trip. Trip ids and order
+     * ids share the same numeric space, so this map is kept entirely
+     * separate from {@link #latestByOrder} to avoid one delivery's GPS
+     * surfacing on the other.
+     */
+    private final Map<Long, RiderLocation> latestByTrip = new ConcurrentHashMap<>();
+
+    /**
+     * Latest cached position for {@code tripId}, or {@code null} if the
+     * publisher has not sent anything yet. Mirrors {@link #latest(Long)}
+     * for the additive trip channel.
+     */
+    public LocationUpdateMessage latestTrip(Long tripId) {
+        RiderLocation rl = latestByTrip.get(tripId);
+        return rl == null ? null : rl.message();
+    }
+
+    /**
+     * Drop the cached trip position when the trip is completed or
+     * cancelled, mirroring {@link #clearOnDelivery(Long)} for the
+     * additive trip channel.
+     */
+    public void clearOnTrip(Long tripId) {
+        latestByTrip.remove(tripId);
+    }
+
+    /**
+     * Ingest a location sample for a supplier delivery-operation trip.
+     * The publisher is rejected unless they are the trip's assigned
+     * rider OR the owning supplier (suppliers may drive the vehicle
+     * themselves). Rejected unless the trip is in the ACTIVE state —
+     * this is the gate that hides the position from sellers before
+     * Start Delivery executes.
+     *
+     * @return the {@link LocationUpdateMessage} that was broadcast, or
+     *         {@code null} if the sample was rejected.
+     */
+    public LocationUpdateMessage ingestForTrip(
+            Long actorId,
+            Role actorRole,
+            Long tripId,
+            LocationUpdateRequest req
+    ) {
+        if (actorId == null || actorRole == null) {
+            throw new TrackingForbiddenException(
+                    "Authentication required to publish trip location.");
+        }
+        DeliveryTripEntity trip = tripRepository.findById(tripId)
+                .orElseThrow(() -> new TrackingOrderNotFoundException(
+                        "Trip " + tripId + " not found."));
+        if (trip.getStatus() != DeliveryTripStatus.ACTIVE) {
+            // The "tracking gate": any GPS sample before the trip is
+            // ACTIVE is silently dropped so the cache never holds a
+            // position sellers could later observe.
+            log.debug("Dropping location for non-active trip {}", tripId);
+            return null;
+        }
+        boolean isAssignedRider = actorRole == Role.RIDER
+                && trip.getRiderId() != null
+                && trip.getRiderId().equals(actorId);
+        boolean isOwningSupplier = actorRole == Role.SUPPLIER
+                && trip.getSupplierId() != null
+                && trip.getSupplierId().equals(actorId);
+        if (!isAssignedRider && !isOwningSupplier) {
+            throw new TrackingForbiddenException(
+                    "Only the trip's assigned rider or owning supplier can publish location.");
+        }
+
+        LocationUpdateMessage accepted = latestByTrip.compute(tripId, (id, prev) -> {
+            LocationUpdateMessage candidate = LocationUpdateMessage.tripLocation(
+                    tripId,
+                    isAssignedRider ? actorId : trip.getRiderId(),
+                    req.lat(),
+                    req.lng(),
+                    req.headingDeg(),
+                    req.speedMps(),
+                    req.accuracyM(),
+                    req.status() == null ? "active" : req.status(),
+                    req.clientTsMs() == null
+                            ? Instant.now()
+                            : Instant.ofEpochMilli(req.clientTsMs())
+            );
+            if (prev == null) {
+                return new RiderLocation(candidate, Instant.now());
+            }
+            if (shouldAccept(prev.message(), candidate)) {
+                return new RiderLocation(candidate, Instant.now());
+            }
+            return new RiderLocation(prev.message(), Instant.now());
+        }).message();
+
+        broadcaster.broadcastTrip(tripId, accepted);
+        return accepted;
+    }
+
+    /**
+     * Authorise a viewer to subscribe to a trip's tracking channel.
+     * Mirrors {@link #authorizeViewer} but for the additive trip path:
+     *
+     * <ul>
+     *   <li>{@code ADMIN} — always.</li>
+     *   <li>{@code SUPPLIER} — only if they own the trip.</li>
+     *   <li>{@code SELLER} — only if the seller is a stop on the trip
+     *       AND the trip is {@code ACTIVE}. Before ACTIVE, sellers
+     *       receive 403 (no location). Non-route sellers always 403.</li>
+     * </ul>
+     */
+    public void authorizeTripViewer(Long actorId, Role actorRole, Long tripId) {
+        if (actorRole == null || actorId == null) {
+            throw new TrackingForbiddenException(
+                    "Authentication required to view trip tracking.");
+        }
+        if (actorRole == Role.ADMIN) {
+            return;
+        }
+        DeliveryTripEntity trip = tripRepository.findById(tripId)
+                .orElseThrow(() -> new TrackingOrderNotFoundException(
+                        "Trip " + tripId + " not found."));
+        if (actorRole == Role.SUPPLIER
+                && trip.getSupplierId() != null
+                && trip.getSupplierId().equals(actorId)) {
+            return;
+        }
+        if (actorRole == Role.SELLER) {
+            if (trip.getStatus() != DeliveryTripStatus.ACTIVE) {
+                throw new TrackingForbiddenException(
+                        "Tracking is unavailable before the delivery starts.");
+            }
+            boolean isStop = tripStopRepository.existsByTripIdAndSellerId(tripId, actorId);
+            if (!isStop) {
+                throw new TrackingForbiddenException(
+                        "You are not on this delivery.");
+            }
+            return;
+        }
+        throw new TrackingForbiddenException(
+                "You are not allowed to view this delivery.");
+    }
+
+    /**
+     * Subscribe a session to a trip's tracking channel. Mirrors
+     * {@link #subscribe} for the additive trip path.
+     */
+    public void subscribeTrip(Long actorId, Role actorRole, Long tripId, String sessionId) {
+        authorizeTripViewer(actorId, actorRole, tripId);
+        sessionRegistry.subscribeTrip(tripId, sessionId);
+        LocationUpdateMessage cached = latestTrip(tripId);
+        if (cached != null) {
+            broadcaster.sendToSession(sessionId, cached);
+        }
     }
 
     // ---- Wire helpers ----------------------------------------------------

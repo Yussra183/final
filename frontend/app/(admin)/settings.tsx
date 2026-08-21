@@ -24,6 +24,8 @@ import {
   AdminInput,
   AdminSelect,
 } from "../../src/components/admin";
+import { AdminIcon } from "../../src/components/admin/Icon";
+import type { AdminIconName } from "../../src/components/admin/Icon";
 import {
   Colors,
   FontSize,
@@ -67,9 +69,6 @@ export default function SettingsPage() {
     <AdminLayout
       title="Settings"
       subtitle="Configure system, roles, notifications and security"
-      rightActions={
-        <AdminButton icon="💾" label="Save Changes" onPress={handleSave} />
-      }
     >
       {/* Section tabs */}
       <ScrollView
@@ -79,11 +78,11 @@ export default function SettingsPage() {
       >
         {(
           [
-            { key: "system", label: "System Settings", icon: "⚙️" },
-            { key: "roles", label: "User Roles", icon: "🛡️" },
-            { key: "notifications", label: "Notifications", icon: "🔔" },
-            { key: "security", label: "Security", icon: "🔒" },
-          ] as { key: Section; label: string; icon: string }[]
+            { key: "system", label: "System Settings", icon: "settings" as AdminIconName },
+            { key: "roles", label: "User Roles", icon: "shield" as AdminIconName },
+            { key: "notifications", label: "Notifications", icon: "notifications" as AdminIconName },
+            { key: "security", label: "Security", icon: "lock" as AdminIconName },
+          ] as { key: Section; label: string; icon: AdminIconName }[]
         ).map((t) => {
           const active = section === t.key;
           return (
@@ -93,7 +92,13 @@ export default function SettingsPage() {
               activeOpacity={0.85}
               style={[styles.tab, active && styles.tabActive]}
             >
-              <Text style={styles.tabIcon}>{t.icon}</Text>
+              <View style={styles.tabIcon}>
+                <AdminIcon
+                  name={t.icon}
+                  size={14}
+                  color={active ? "#FFF" : Colors.textSecondary}
+                />
+              </View>
               <Text
                 style={[styles.tabText, active && styles.tabTextActive]}
               >

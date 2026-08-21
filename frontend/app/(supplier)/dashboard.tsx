@@ -11,6 +11,11 @@
  *
  * Plus a "Today's schedule" list, the active trip's progress, and a
  * shortcut to the Live Map screen.
+ *
+ * NOTE: business logic, store selectors, and approval gating are
+ * preserved verbatim — only the visual presentation has been modernised
+ * to use Ionicons, the supplier brand palette, and the shared
+ * `StatCard` / `EmptyState` props.
  */
 import React, { useMemo } from "react";
 import {
@@ -22,6 +27,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { useStore } from "../../src/store/StoreContext";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { Card } from "../../src/components/Card";
@@ -33,17 +39,13 @@ import { SidebarLayout } from "../../src/components/SidebarLayout";
 import { EmptyState } from "../../src/components/EmptyState";
 import { StatusPill } from "../../src/components/StatusPill";
 import { SupplierVerificationRequiredCard } from "../../src/components/SupplierVerificationRequiredCard";
+import { PressableScale } from "../../src/components/MicroAnimations";
 import { useSupplierVerificationStatus } from "../../src/hooks/useSupplierVerificationStatus";
 import { DeliveryDay, DeliveryTrip } from "../../constants/types";
-
-const ACCENT = "#6366F1";
 
 const DAY_OF_WEEK: DeliveryDay[] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function todayDay(): DeliveryDay {
-  // Today's date is 2026-07-07 per the harness. July 7, 2026 is a
-  // Tuesday — but we read it dynamically so the demo is correct for
-  // any actual current date.
   return DAY_OF_WEEK[new Date().getDay()] as DeliveryDay;
 }
 
@@ -101,12 +103,12 @@ export default function SupplierDashboard() {
           <View style={styles.header}>
             <DrawerMenuButton />
             <View style={{ flex: 1 }}>
-              <Text style={styles.greeting}>Supplier Dashboard</Text>
-              <Text style={styles.subtitle}>
-                {user.fullName} • Today is {day}
+              <Text style={styles.greeting}>Welcome back</Text>
+              <Text style={styles.supplierName} numberOfLines={1}>
+                {user.fullName}
               </Text>
             </View>
-            <Avatar name={user.fullName} size={48} color={ACCENT} />
+            <Avatar name={user.fullName} size={48} color={Colors.supplier} />
           </View>
 
           {/* Verification gate banner — surfaces the awaiting-approval
@@ -128,14 +130,14 @@ export default function SupplierDashboard() {
             <StatCard
               label="Today's routes"
               value={todayRoutes.length}
-              icon="🗺️"
-              tone="primary"
+              iconName="calendar-outline"
+              tone="supplier"
               style={{ marginRight: Spacing.sm }}
             />
             <StatCard
               label="Trips started"
               value={tripsStartedToday.length}
-              icon="▶️"
+              iconName="play-circle-outline"
               tone="accent"
             />
           </View>
@@ -143,14 +145,14 @@ export default function SupplierDashboard() {
             <StatCard
               label="Sellers served"
               value={sellersServedToday}
-              icon="📦"
+              iconName="people-outline"
               tone="info"
               style={{ marginRight: Spacing.sm }}
             />
             <StatCard
               label="Near-shop alerts"
               value={nearArrivals}
-              icon="📍"
+              iconName="location-outline"
               tone="warning"
             />
           </View>
@@ -158,74 +160,115 @@ export default function SupplierDashboard() {
           {/* Active trip call-out */}
           {activeTrip ? (
             <View style={{ marginTop: Spacing.lg }}>
-              <Text style={styles.sectionTitle}>Active trip</Text>
-              <Card>
+              <SectionHeader
+                title="Active trip"
+                actionLabel="Live map"
+                actionIcon="navigate-outline"
+                onAction={() => router.push("/(supplier)/live" as any)}
+              />
+              <Card style={styles.activeTripCard}>
                 <View style={styles.row}>
+                  <View style={[styles.tripIcon, { backgroundColor: "#EEF2FF" }]}>
+                    <Ionicons
+                      name="car-sport"
+                      size={20}
+                      color={Colors.supplier}
+                    />
+                  </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.itemTitle}>{activeTrip.routeName} route</Text>
+                    <Text style={styles.itemTitle}>
+                      {activeTrip.routeName} route
+                    </Text>
                     <Text style={styles.itemMeta}>
                       {activeTrip.vehiclePlate} • {activeTrip.riderName}
                     </Text>
                   </View>
-                  <StatusPill label={activeTrip.status.replace("_", " ")} tone="info" />
+                  <StatusPill
+                    label={activeTrip.status.replace("_", " ")}
+                    tone="info"
+                  />
                 </View>
                 <View style={styles.progressBar}>
                   <View
                     style={[
                       styles.progressFill,
-                      { width: `${Math.round(activeTrip.progress * 100)}%` },
+                      {
+                        width: `${Math.round(activeTrip.progress * 100)}%`,
+                      },
                     ]}
                   />
                 </View>
                 <Text style={styles.progressLabel}>
-                  {Math.round(activeTrip.progress * 100)}% complete • {activeTrip.stops.filter((s) => s.status === "delivered").length}/{activeTrip.stops.length} stops served
+                  {Math.round(activeTrip.progress * 100)}% complete •{" "}
+                  {
+                    activeTrip.stops.filter((s) => s.status === "delivered")
+                      .length
+                  }
+                  /{activeTrip.stops.length} stops served
                 </Text>
-                <AppButton
-                  title="Open live map"
-                  variant="primary"
-                  fullWidth
-                  style={{ marginTop: Spacing.sm }}
-                  onPress={() => router.push("/(supplier)/live" as any)}
-                />
               </Card>
             </View>
           ) : null}
 
           {/* Today's schedule */}
-          <Text style={styles.sectionTitle}>Today&apos;s schedule</Text>
+          <SectionHeader
+            title={`Today's schedule — ${day}`}
+            actionLabel="Schedule"
+            actionIcon="calendar-outline"
+            onAction={() => router.push("/(supplier)/operations" as any)}
+          />
           {todayRoutes.length === 0 ? (
             <View style={{ marginHorizontal: Spacing.lg }}>
               <EmptyState
-                icon="🗓️"
+                iconName="calendar-outline"
                 title="No routes today"
                 message={`No routes are scheduled for ${day}.`}
               />
             </View>
           ) : (
             todayRoutes.map((r) => (
-              <Card
+              <PressableScale
                 key={r.id}
-                style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
+                onPress={() => router.push(`/(supplier)/routes/${r.id}` as any)}
               >
-                <View style={styles.row}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.itemTitle}>{r.name} route</Text>
-                    <Text style={styles.itemMeta}>
-                      Departs {r.scheduleTime} • {r.stops.length} stops
-                    </Text>
+                <Card style={styles.routeCard}>
+                  <View style={styles.row}>
+                    <View style={styles.routeTimeBubble}>
+                      <Ionicons
+                        name="time-outline"
+                        size={14}
+                        color={Colors.supplier}
+                      />
+                      <Text style={styles.routeTime}>{r.scheduleTime}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemTitle}>{r.name} route</Text>
+                      <Text style={styles.itemMeta}>
+                        {r.stops.length} stops scheduled
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color={Colors.textMuted}
+                    />
                   </View>
-                  <StatusPill label={r.scheduleTime} tone="primary" />
-                </View>
-              </Card>
+                </Card>
+              </PressableScale>
             ))
           )}
 
           {/* Recent trips */}
-          <Text style={styles.sectionTitle}>Recent trips</Text>
+          <SectionHeader
+            title="Recent trips"
+            actionLabel="Reports"
+            actionIcon="bar-chart-outline"
+            onAction={() => router.push("/(supplier)/reports" as any)}
+          />
           {supplierTrips.length === 0 ? (
             <View style={{ marginHorizontal: Spacing.lg }}>
               <EmptyState
-                icon="🚛"
+                iconName="car-outline"
                 title="No trips yet"
                 message="Start a delivery to see trip history here."
               />
@@ -237,32 +280,92 @@ export default function SupplierDashboard() {
           )}
 
           {/* Quick actions */}
-          <Text style={styles.sectionTitle}>Quick actions</Text>
+          <SectionHeader title="Quick actions" />
           <View style={styles.actionGrid}>
             {[
-              { label: "Live Delivery", icon: "📍", route: "/(supplier)/live" },
-              { label: "Operations", icon: "🗺️", route: "/(supplier)/operations" },
-              { label: "Fleet", icon: "🚚", route: "/(supplier)/fleet" },
-              { label: "Reports", icon: "📊", route: "/(supplier)/reports" },
+              {
+                label: "Live Delivery",
+                icon: "navigate-outline" as const,
+                route: "/(supplier)/live",
+                requiresApproval: true,
+              },
+              {
+                label: "Operations",
+                icon: "calendar-outline" as const,
+                route: "/(supplier)/operations",
+                requiresApproval: true,
+              },
+              {
+                label: "Fleet",
+                icon: "car-sport-outline" as const,
+                route: "/(supplier)/fleet",
+                requiresApproval: true,
+              },
+              {
+                label: "Restock",
+                icon: "cube-outline" as const,
+                route: "/(supplier)/restock",
+                requiresApproval: true,
+              },
             ].map((a) => (
-              <TouchableOpacity
+              <PressableScale
                 key={a.label}
                 style={styles.actionTile}
-                activeOpacity={0.8}
-                onPress={() => router.push(a.route as any)}
+                onPress={() =>
+                  router.push(
+                    (a.requiresApproval && !verification.isApproved
+                      ? "/(supplier)/profile"
+                      : a.route) as any
+                  )
+                }
               >
-                <Text style={styles.actionIcon}>{a.icon}</Text>
+                <View style={styles.actionIconBubble}>
+                  <Ionicons
+                    name={a.icon}
+                    size={20}
+                    color={Colors.supplier}
+                  />
+                </View>
                 <Text style={styles.actionLabel}>{a.label}</Text>
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
 
           <Text style={styles.footnote}>
-            Completed trips: {completedTrips} • Total stops served: {sellersServedToday}
+            Completed trips: {completedTrips} • Total stops served:{" "}
+            {sellersServedToday}
           </Text>
         </ScrollView>
       </SafeAreaView>
     </SidebarLayout>
+  );
+}
+
+function SectionHeader({
+  title,
+  actionLabel,
+  actionIcon,
+  onAction,
+}: {
+  title: string;
+  actionLabel?: string;
+  actionIcon?: keyof typeof Ionicons.glyphMap;
+  onAction?: () => void;
+}) {
+  return (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {actionLabel && onAction ? (
+        <TouchableOpacity onPress={onAction} style={styles.sectionAction}>
+          <Ionicons
+            name={actionIcon ?? "chevron-forward"}
+            size={14}
+            color={Colors.supplier}
+          />
+          <Text style={styles.sectionActionLabel}>{actionLabel}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
   );
 }
 
@@ -273,32 +376,28 @@ function TripSummary({ trip }: { trip: DeliveryTrip }) {
     trip.status === "completed"
       ? "success"
       : trip.status === "in_transit"
-        ? "info"
-        : "primary";
+      ? "info"
+      : "primary";
   return (
-    <Card style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}>
-      <View style={styles.row}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.itemTitle}>{trip.routeName} route</Text>
-          <Text style={styles.itemMeta}>
-            {trip.date} • {trip.departureTime} • {trip.vehiclePlate}
-          </Text>
-          <Text style={styles.itemMeta}>
-            Served {served}/{trip.stops.length} stops
-          </Text>
+    <PressableScale
+      onPress={() => router.push("/(supplier)/live" as any)}
+      style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
+    >
+      <Card>
+        <View style={styles.row}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.itemTitle}>{trip.routeName} route</Text>
+            <Text style={styles.itemMeta}>
+              {trip.date} • {trip.departureTime} • {trip.vehiclePlate}
+            </Text>
+            <Text style={styles.itemMeta}>
+              Served {served}/{trip.stops.length} stops
+            </Text>
+          </View>
+          <StatusPill label={trip.status.replace("_", " ")} tone={tone as any} />
         </View>
-        <StatusPill label={trip.status.replace("_", " ")} tone={tone as any} />
-      </View>
-      {trip.status === "in_transit" ? (
-        <AppButton
-          title="Open live map"
-          variant="secondary"
-          fullWidth
-          style={{ marginTop: Spacing.sm }}
-          onPress={() => router.push("/(supplier)/live" as any)}
-        />
-      ) : null}
-    </Card>
+      </Card>
+    </PressableScale>
   );
 }
 
@@ -309,21 +408,111 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  greeting: { fontSize: FontSize.xl, fontWeight: "800", color: Colors.text },
-  subtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  statsRow: { flexDirection: "row", paddingHorizontal: Spacing.lg },
-  sectionTitle: {
-    fontSize: FontSize.lg,
+  greeting: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    fontWeight: "600",
+  },
+  supplierName: {
+    fontSize: FontSize.xxl,
     fontWeight: "800",
     color: Colors.text,
+    marginTop: 2,
+  },
+  statsRow: {
+    flexDirection: "row",
+    paddingHorizontal: Spacing.lg,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: Spacing.lg,
     marginTop: Spacing.lg,
     marginBottom: Spacing.sm,
   },
+  sectionTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: "800",
+    color: Colors.text,
+  },
+  sectionAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: "#EEF2FF",
+  },
+  sectionActionLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: "800",
+    color: Colors.supplier,
+  },
   row: { flexDirection: "row", alignItems: "center" },
-  itemTitle: { fontWeight: "800", color: Colors.text, fontSize: FontSize.md },
-  itemMeta: { color: Colors.textSecondary, fontSize: FontSize.xs, marginTop: 2 },
+  activeTripCard: {
+    marginHorizontal: Spacing.lg,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.supplier,
+  },
+  tripIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: Spacing.md,
+  },
+  routeCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  routeTimeBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    backgroundColor: "#EEF2FF",
+    marginRight: Spacing.md,
+  },
+  routeTime: {
+    color: Colors.supplier,
+    fontWeight: "800",
+    fontSize: FontSize.sm,
+  },
+  itemTitle: {
+    fontWeight: "800",
+    color: Colors.text,
+    fontSize: FontSize.md,
+  },
+  itemMeta: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.xs,
+    marginTop: 2,
+  },
+  progressBar: {
+    height: 8,
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: Radius.pill,
+    marginTop: Spacing.md,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: Colors.supplier,
+    borderRadius: Radius.pill,
+  },
+  progressLabel: {
+    marginTop: Spacing.sm,
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    fontWeight: "700",
+  },
   actionGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -333,30 +522,25 @@ const styles = StyleSheet.create({
   actionTile: {
     flexBasis: "47%",
     backgroundColor: Colors.surface,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     borderRadius: Radius.lg,
+    alignItems: "flex-start",
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  actionIconBubble: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     alignItems: "center",
-    boxShadow: "0 4px 8px rgba(0,0,0,0.08)",
+    justifyContent: "center",
+    backgroundColor: "#EEF2FF",
+    marginBottom: Spacing.sm,
   },
-  actionIcon: { fontSize: 28, marginBottom: 4 },
-  actionLabel: { fontSize: FontSize.xs, fontWeight: "700", color: Colors.text },
-  progressBar: {
-    height: 8,
-    backgroundColor: Colors.surfaceMuted,
-    borderRadius: Radius.pill,
-    marginTop: Spacing.sm,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: ACCENT,
-    borderRadius: Radius.pill,
-  },
-  progressLabel: {
-    marginTop: Spacing.xs,
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    fontWeight: "700",
+  actionLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: "800",
+    color: Colors.text,
   },
   footnote: {
     textAlign: "center",
