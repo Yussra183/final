@@ -29,6 +29,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Avatar } from "./Avatar";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { useStore } from "../store/StoreContext";
+import { GasHelpButton } from "./GasHelpButton";
 
 interface SellerHeaderProps {
   /** Page name shown as the bar's primary line. */
@@ -99,8 +100,10 @@ export function SellerHeader({ title }: SellerHeaderProps) {
         {title ?? "Seller Portal"}
       </Text>
 
-      {/* Right — notifications + account menu */}
+      {/* Right — gas help + notifications + account menu */}
       <View style={styles.rightCluster}>
+        <GasHelpButton size="header" background={Colors.surfaceMuted} />
+
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={() => (navigation as any).navigate?.("notifications")}

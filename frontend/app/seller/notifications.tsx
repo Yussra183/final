@@ -10,6 +10,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -75,9 +76,11 @@ const CATEGORIES: CategoryDef[] = [
 function NotificationCard({
   item,
   onPress,
+  onLongPress,
 }: {
   item: NotificationItem;
   onPress: () => void;
+  onLongPress: () => void;
 }) {
   const tint =
     item.type === "order"
@@ -102,7 +105,12 @@ function NotificationCard({
             : "information-circle-outline";
 
   return (
-    <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+    >
       <Card
         style={[
           styles.card,
@@ -158,6 +166,7 @@ export default function SellerNotifications() {
     session,
     getNotificationsForUser,
     markNotificationRead,
+    deleteNotification,
     markAllNotificationsRead,
     refresh,
   } = useStore();
@@ -290,6 +299,34 @@ export default function SellerNotifications() {
     [markNotificationRead, router],
   );
 
+  /**
+   * Long-press a notification to reveal Delete / Cancel. Cancel is a
+   * no-op; Delete funnels through the store action so the same
+   * ownership-aware server call + optimistic UI flip run for every
+   * authenticated seller. Already-read rows are deletable exactly
+   * like unread rows — the read/unread surface is untouched.
+   */
+  const promptDelete = useCallback(
+    (n: NotificationItem) => {
+      Alert.alert(
+        "Notification options",
+        "Delete this notification? It will be removed from your list.",
+        [
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => {
+              void deleteNotification(n.id);
+            },
+          },
+          { text: "Cancel", style: "cancel" },
+        ],
+        { cancelable: true },
+      );
+    },
+    [deleteNotification],
+  );
+
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <SellerHeader title="Notifications" />
@@ -399,6 +436,7 @@ export default function SellerNotifications() {
                     key={n.id}
                     item={n}
                     onPress={() => openNotification(n)}
+                    onLongPress={() => promptDelete(n)}
                   />
                 ))}
               </View>

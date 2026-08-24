@@ -329,6 +329,12 @@ interface StoreShape {
   ) => Promise<SupplierApplication>;
   markNotificationRead: (id: string) => Promise<void>;
   /**
+   * Delete a single notification the actor owns. Server-side ownership
+   * check ensures a user can only ever delete their own rows. Already-
+   * read notifications are deletable exactly like unread ones.
+   */
+  deleteNotification: (id: string) => Promise<void>;
+  /**
    * Bulk-mark every notification for the supplied user id (defaults
    * to the signed-in user) as read. Used by the Seller Notifications
    * screen on mount to clear the dashboard badge.
@@ -2182,6 +2188,46 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
+   * Delete a single notification the actor owns. The local row is
+   * removed optimistically so the UI updates immediately; the backend
+   * call is what actually persists the deletion and enforces ownership
+   * (a Seller can only ever delete their own rows — cross-user deletes
+   * resolve to 404 server-side). Already-read notifications are
+   * deletable exactly like unread ones; the read/unread surface is
+   * untouched.
+   *
+   * <p>If the backend call fails we re-insert the row so the UI stays
+   * consistent with the server's source of truth on the next refresh
+   * — mirroring the optimistic / rollback pattern used by the other
+   * mutating actions.</p>
+   */
+  const deleteNotification = useCallback(async (id: string) => {
+    // Capture the row so we can restore it on a network failure.
+    let removed: NotificationItem | undefined;
+    setNotifications((prev) => {
+      removed = prev.find((n) => n.id === id);
+      return prev.filter((n) => n.id !== id);
+    });
+    if (USE_MOCK) return;
+    try {
+      await NotificationsApi.delete(id);
+    } catch (err) {
+      if (removed) {
+        const snapshot = removed;
+        setNotifications((prev) => {
+          if (prev.some((n) => n.id === snapshot.id)) return prev;
+          return [snapshot, ...prev];
+        });
+      }
+      console.warn(
+        "[StoreContext] deleteNotification backend call failed",
+        (err as Error)?.message,
+      );
+      throw err;
+    }
+  }, []);
+
+  /**
    * Bulk-mark every notification that belongs to the supplied user id
    * as read in a single round-trip. Used by the Seller Notifications
    * screen on mount so the unread badge on the dashboard / chrome
@@ -3257,6 +3303,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       approveAdminSupplierApplication,
       rejectAdminSupplierApplication,
       markNotificationRead,
+      deleteNotification,
       markAllNotificationsRead,
       addComplaint,
       resolveComplaint,
@@ -3357,6 +3404,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       approveAdminSupplierApplication,
       rejectAdminSupplierApplication,
       markNotificationRead,
+      deleteNotification,
       markAllNotificationsRead,
       addComplaint,
       resolveComplaint,

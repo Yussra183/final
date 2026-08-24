@@ -15,6 +15,7 @@
  */
 import React, { useCallback, useState } from "react";
 import {
+  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -73,6 +74,7 @@ export default function SupplierNotifications() {
     session,
     getNotificationsForUser,
     markNotificationRead,
+    deleteNotification,
     markAllNotificationsRead,
   } = useStore();
   const user = session?.user!;
@@ -106,6 +108,34 @@ export default function SupplierNotifications() {
       }
     },
     [markNotificationRead, router],
+  );
+
+  /**
+   * Long-press a notification to reveal Delete / Cancel. Cancel is a
+   * no-op; Delete funnels through the store action so the same
+   * ownership-aware server call + optimistic UI flip run for every
+   * authenticated supplier. Already-read rows are deletable exactly
+   * like unread rows — the read/unread surface is untouched.
+   */
+  const promptDelete = useCallback(
+    (n: NotificationItem) => {
+      Alert.alert(
+        "Notification options",
+        "Delete this notification? It will be removed from your list.",
+        [
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => {
+              void deleteNotification(n.id);
+            },
+          },
+          { text: "Cancel", style: "cancel" },
+        ],
+        { cancelable: true },
+      );
+    },
+    [deleteNotification],
   );
 
   const markAllRead = () => {
@@ -212,6 +242,7 @@ export default function SupplierNotifications() {
               <NotificationRow
                 item={item}
                 onPress={() => openNotification(item)}
+                onLongPress={() => promptDelete(item)}
               />
             )}
           />
@@ -224,9 +255,11 @@ export default function SupplierNotifications() {
 function NotificationRow({
   item,
   onPress,
+  onLongPress,
 }: {
   item: NotificationItem;
   onPress: () => void;
+  onLongPress: () => void;
 }) {
   const tone = (() => {
     switch (item.type) {
@@ -260,7 +293,12 @@ function NotificationRow({
     }
   })();
   return (
-    <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+    >
       <Card style={[styles.card, !item.read && styles.unread]}>
         <View style={styles.row}>
           <View

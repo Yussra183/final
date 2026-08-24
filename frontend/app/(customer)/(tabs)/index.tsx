@@ -47,6 +47,7 @@ import {
   type NearbySellerMarker,
 } from "../../../src/components/NearbySellersMap";
 import { PressableScale, PulseDot } from "../../../src/components/MicroAnimations";
+import { GasHelpButton } from "../../../src/components/GasHelpButton";
 import { useStore } from "../../../src/store/StoreContext";
 import { useNearbySellers } from "../../../src/hooks/useNearbySellers";
 import { useCustomerLocation } from "../../../src/hooks/useCustomerLocation";
@@ -300,30 +301,33 @@ export default function CustomerHome() {
       edges={["top"]}
     >
       {/* ---------------- Header ---------------- */}
-      {/* Minimal app bar: title left-aligned, notification bell on the
-          right. The drawer and its hamburger are gone; logout lives in
-          the Profile tab. */}
+      {/* Minimal app bar: title left-aligned, gas-help + notification
+          buttons on the right. The drawer and its hamburger are gone;
+          logout lives in the Profile tab. */}
       <View style={styles.header}>
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle}>Home</Text>
         </View>
 
-        <TouchableOpacity
-          accessibilityLabel="View notifications"
-          style={[styles.iconBtn, styles.notifBtn]}
-          onPress={() => router.push("/(customer)/notifications" as any)}
-        >
-          <Ionicons
-            name="notifications-outline"
-            size={20}
-            color={Colors.primary}
-          />
-          {unreadCount > 0 ? (
-            <View style={styles.notifDotWrap}>
-              <PulseDot size={10} color={Colors.danger} />
-            </View>
-          ) : null}
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <GasHelpButton />
+          <TouchableOpacity
+            accessibilityLabel="View notifications"
+            style={[styles.iconBtn, styles.notifBtn]}
+            onPress={() => router.push("/(customer)/notifications" as any)}
+          >
+            <Ionicons
+              name="notifications-outline"
+              size={20}
+              color={Colors.primary}
+            />
+            {unreadCount > 0 ? (
+              <View style={styles.notifDotWrap}>
+                <PulseDot size={10} color={Colors.danger} />
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ---------------- Places chip strip ---------------- */}
@@ -699,6 +703,11 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: -3,
     right: -3,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
   },
   headerTitleWrap: {
     flex: 1,

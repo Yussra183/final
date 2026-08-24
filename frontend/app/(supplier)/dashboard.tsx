@@ -32,14 +32,15 @@ import { useStore } from "../../src/store/StoreContext";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { Card } from "../../src/components/Card";
 import { StatCard } from "../../src/components/StatCard";
-import { Avatar } from "../../src/components/Avatar";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { AppButton } from "../../src/components/AppButton";
 import { SidebarLayout } from "../../src/components/SidebarLayout";
 import { EmptyState } from "../../src/components/EmptyState";
 import { StatusPill } from "../../src/components/StatusPill";
+import { SupplierHeaderAvatar } from "../../src/components/SupplierHeaderAvatar";
 import { SupplierVerificationRequiredCard } from "../../src/components/SupplierVerificationRequiredCard";
 import { PressableScale } from "../../src/components/MicroAnimations";
+import { GasHelpButton } from "../../src/components/GasHelpButton";
 import { useSupplierVerificationStatus } from "../../src/hooks/useSupplierVerificationStatus";
 import { DeliveryDay, DeliveryTrip } from "../../constants/types";
 
@@ -108,7 +109,8 @@ export default function SupplierDashboard() {
                 {user.fullName}
               </Text>
             </View>
-            <Avatar name={user.fullName} size={48} color={Colors.supplier} />
+            <GasHelpButton size="header" background={Colors.surfaceMuted} />
+            <SupplierHeaderAvatar size={48} />
           </View>
 
           {/* Verification gate banner — surfaces the awaiting-approval
@@ -119,7 +121,7 @@ export default function SupplierDashboard() {
               <SupplierVerificationRequiredCard
                 info={verification}
                 onOpenVerification={() =>
-                  router.push("/(supplier)/profile" as any)
+                  router.push("/(supplier)/license" as any)
                 }
               />
             </View>

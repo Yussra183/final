@@ -815,6 +815,15 @@ export const NotificationsApi = {
    */
   markAllRead: () =>
     api.post<{ updated: number }>("/api/notifications/read-all"),
+  /**
+   * Delete a single notification owned by the actor. Server-side
+   * ownership check rejects cross-user deletes with 404 — a Seller
+   * cannot delete another Seller's row, a Customer cannot delete a
+   * Seller's row, and so on. Already-read notifications are deletable
+   * exactly like unread ones; the existing read/unread surface is
+   * untouched.
+   */
+  delete: (id: string) => api.delete<void>(`/api/notifications/${id}`),
 };
 
 // ---- Admin -------------------------------------------------------------

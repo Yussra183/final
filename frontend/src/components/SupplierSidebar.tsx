@@ -40,11 +40,13 @@ export type SupplierSidebarRoute = {
  * The supplier dashboard is split into two sections:
  *
  *   • primary — the consolidated logistics dashboard (Dashboard,
- *     Operations, Live Delivery, Fleet, Reports, Profile,
- *     Notifications).
+ *     Operations, Live Delivery, Fleet, Reports, Profile, License,
+ *     Notifications). License is the dedicated verification / official
+ *     supplier certificate surface — Help lives on the Dashboard header
+ *     (the cross-role `/gas-help` route) so there is no Guide item.
  *   • legacy   — the original restock-requests dashboard, now folded
  *                into a single tabbed "Restock" page (Home, Requests,
- *                Deliveries) and the standalone Guide.
+ *                Deliveries).
  *
  * Routes flagged `requiresApproval` render with a lock affordance until
  * the supplier's application is APPROVED.
@@ -61,7 +63,7 @@ export const SUPPLIER_SIDEBAR_ROUTES: SupplierSidebarRoute[] = [
   // Legacy — kept from the original restock-requests dashboard, now a
   // single tabbed page that surfaces Home / Requests / Deliveries.
   { key: "restock", label: "Restock Requests", icon: "cube-outline", path: "/(supplier)/restock", section: "legacy", requiresApproval: true },
-  { key: "guide", label: "Guide", icon: "book-outline", path: "/(supplier)/guide", section: "legacy" },
+  { key: "license", label: "License", icon: "shield-checkmark-outline", path: "/(supplier)/license", section: "primary" },
 ];
 
 interface Props {

@@ -6,6 +6,8 @@ import com.project.gas_delivery.notification.dto.NotificationDto;
 import com.project.gas_delivery.notification.service.NotificationService;
 import com.project.gas_delivery.order.exception.NotAuthorizedException;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,6 +30,16 @@ import java.util.Map;
  *   <li>{@code POST /api/notifications/read-all}      – mark every
  *                                                        notification read
  *                                                        in a single call.</li>
+ *   <li>{@code DELETE /api/notifications/{id}}        – delete one
+ *                                                        notification the
+ *                                                        actor owns.
+ *                                                        Ownership is
+ *                                                        enforced server-side
+ *                                                        so a user can only
+ *                                                        remove their own
+ *                                                        rows; already-read
+ *                                                        notifications are
+ *                                                        deletable too.</li>
  * </ul>
  *
  * The actor must be authenticated — the same {@link AuthFilter} that gates
@@ -61,6 +73,22 @@ public class NotificationController {
         Long actorId = requireActor(request);
         int updated = notificationService.markAllRead(actorId);
         return Map.of("updated", updated);
+    }
+
+    /**
+     * Delete a single notification owned by the actor.
+     *
+     * <p>Returns 204 No Content on success. The service layer enforces
+     * ownership — cross-user deletes resolve to 404, identical to
+     * {@code markRead} — so this endpoint is safe to expose without a
+     * role check. Authentication is unchanged; read/unread logic is
+     * untouched; only the targeted row is removed.</p>
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(HttpServletRequest request, @PathVariable Long id) {
+        Long actorId = requireActor(request);
+        notificationService.delete(id, actorId);
+        return ResponseEntity.noContent().build();
     }
 
     private static Long requireActor(HttpServletRequest request) {

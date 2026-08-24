@@ -70,6 +70,38 @@ public class NotificationService {
         return notificationRepository.markAllRead(userId);
     }
 
+    /**
+     * Delete a single notification owned by the actor.
+     *
+     * <p>Ownership is enforced server-side: a notification is only removed
+     * when its {@code user_id} matches the authenticated actor. If the row
+     * does not exist OR it belongs to a different user we surface the same
+     * 404 response — same pattern as {@link #markRead(Long, Long)} — so
+     * notification ids never leak across users. This guarantees:</p>
+     *
+     * <ul>
+     *   <li>Seller A can only ever delete Seller A's rows.</li>
+     *   <li>Seller B cannot delete Seller A's rows.</li>
+     *   <li>A customer cannot delete a seller's notification.</li>
+     *   <li>Read/unread status is irrelevant — already-read rows are
+     *       deletable exactly the same way unread rows are.</li>
+     * </ul>
+     *
+     * <p>Creation logic and the rest of the read/unread surface are
+     * untouched.</p>
+     */
+    @Transactional
+    public void delete(Long notificationId, Long actorId) {
+        NotificationEntity entity = notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Notification " + notificationId + " not found."));
+        if (!entity.getUserId().equals(actorId)) {
+            // Treat as not-found to avoid leaking notification ids across users.
+            throw new ResourceNotFoundException("Notification " + notificationId + " not found.");
+        }
+        notificationRepository.delete(entity);
+    }
+
     @Transactional(readOnly = true)
     public long unreadCount(Long userId) {
         return notificationRepository.countByUserIdAndReadFalse(userId);

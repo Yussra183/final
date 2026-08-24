@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -25,6 +25,7 @@ import { AppInput } from "../../../src/components/AppInput";
 import { AppButton } from "../../../src/components/AppButton";
 import { StatusPill } from "../../../src/components/StatusPill";
 import { PulseDot } from "../../../src/components/MicroAnimations";
+import { GasHelpButton } from "../../../src/components/GasHelpButton";
 import { useStore } from "../../../src/store/StoreContext";
 import { isEmail, isPhone } from "../../../src/utils/validators";
 import { formatDate } from "../../../src/utils/format";
@@ -34,13 +35,11 @@ import { formatDate } from "../../../src/utils/format";
  *
  * A complete, inline-editable profile:
  *   • Personal: fullName, username, phone, email
- *   • Address: region, district, ward, street, fullAddress
  *   • Account: registration date / status / id
  *   • Security: change-password link
  *   • Session: Log out (with confirmation)
  *
- * Edits persist through `updateProfile` (personal) and
- * `saveCustomerLocation` (address, backend geocodes) — same calls the
+ * Edits persist through `updateProfile` (personal) — same call the
  * page used before the bottom-tab restructure.
  *
  * The Log out button replaces the in-app-bar logout that lived on
@@ -52,7 +51,6 @@ export default function CustomerProfileScreen() {
   const {
     session,
     updateProfile,
-    saveCustomerLocation,
     logout,
     getNotificationsForUser,
   } = useStore();
@@ -69,14 +67,6 @@ export default function CustomerProfileScreen() {
   const [phone, setPhone] = useState(user?.phone ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
 
-  // Location fields. These are the keys the nearby-seller pipeline
-  // reads, so saving here refreshes the Home screen's list.
-  const [region, setRegion] = useState(user?.region ?? "");
-  const [district, setDistrict] = useState(user?.district ?? "");
-  const [ward, setWard] = useState(user?.ward ?? "");
-  const [street, setStreet] = useState(user?.street ?? "");
-  const [fullAddress, setFullAddress] = useState(user?.address ?? "");
-
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -85,11 +75,11 @@ export default function CustomerProfileScreen() {
    * Re-seed the form whenever the signed-in user changes.
    *
    * `useState` initializers run only on the FIRST render. The saved
-   * location arrives asynchronously — the store fetches it from
-   * `GET /api/customers/me` just after login — and the drawer navigator
-   * keeps this screen mounted across navigations. Without this effect
-   * the inputs keep their initial empty values and the saved location
-   * appears not to have persisted at all, even though it loaded fine.
+   * profile data arrives asynchronously — the store fetches it just
+   * after login — and the bottom-tab navigator keeps this screen
+   * mounted across navigations. Without this effect the inputs keep
+   * their initial empty values and the saved profile appears not to
+   * have persisted at all, even though it loaded fine.
    *
    * Keyed on the individual fields rather than the `user` object so a
    * new object identity with identical values doesn't clobber
@@ -101,38 +91,16 @@ export default function CustomerProfileScreen() {
     setUsername(user.username ?? "");
     setPhone(user.phone ?? "");
     setEmail(user.email ?? "");
-    setRegion(user.region ?? "");
-    setDistrict(user.district ?? "");
-    setWard(user.ward ?? "");
-    setStreet(user.street ?? "");
-    setFullAddress(user.address ?? "");
   }, [
     user?.id,
     user?.fullName,
     user?.username,
     user?.phone,
     user?.email,
-    user?.region,
-    user?.district,
-    user?.ward,
-    user?.street,
-    user?.address,
   ]);
 
   // ---- Derived data -----------------------------------------------------
-  /**
-   * Composed `fullAddress` fallback. If the user leaves the explicit
-   * "Full Address" blank we synthesize one from the granular fields so
-   * the home-screen filter has something to match on.
-   */
-  const composedAddress = useMemo(() => {
-    const tail = [street, ward, district, region]
-      .map((p) => (p ?? "").trim())
-      .filter(Boolean);
-    return tail.join(", ");
-  }, [street, ward, district, region]);
-
-  const effectiveFullAddress = fullAddress.trim() || composedAddress;
+  // (no derived values needed for the personal-only profile)
 
   const accountStatus: "Active" | "Suspended" = (user as any)?.active
     ? "Active"
@@ -178,11 +146,6 @@ export default function CustomerProfileScreen() {
     if (!username.trim()) next.username = "Username is required";
     if (!isEmail(email)) next.email = "Valid email is required";
     if (!isPhone(phone)) next.phone = "Valid phone number is required";
-    if (!region.trim()) next.region = "Region is required";
-    if (!district.trim()) next.district = "District is required";
-    if (!street.trim()) next.street = "Street / area is required";
-    if (!effectiveFullAddress)
-      next.fullAddress = "Full address is required";
     return next;
   };
 
@@ -199,8 +162,8 @@ export default function CustomerProfileScreen() {
 
     setSaving(true);
     try {
-      // 1. Personal information (name / username / phone / email).
-      //    Unchanged path — still goes through `updateProfile`.
+      // Personal information (name / username / phone / email).
+      // Still goes through `updateProfile`.
       await updateProfile({
         fullName: fullName.trim(),
         username: username.trim(),
@@ -208,22 +171,9 @@ export default function CustomerProfileScreen() {
         email: email.trim(),
       });
 
-      // 2. Location. Persisted to `customer_profiles` via
-      //    `PUT /api/customers/me`. We deliberately send no lat/lng —
-      //    the backend geocodes the address and returns the resolved
-      //    coordinates, which the store merges into the session so the
-      //    Home screen's nearby list refreshes on the next render.
-      await saveCustomerLocation({
-        region: region.trim(),
-        district: district.trim(),
-        ward: ward.trim(),
-        street: street.trim(),
-        address: effectiveFullAddress,
-      });
-
       Alert.alert(
         "Profile updated",
-        "Your changes have been saved. Nearby sellers on the home screen will refresh automatically.",
+        "Your changes have been saved.",
       );
     } catch (err) {
       Alert.alert(
@@ -266,6 +216,8 @@ export default function CustomerProfileScreen() {
             </View>
           ) : null}
         </TouchableOpacity>
+
+        <GasHelpButton />
       </View>
 
       <KeyboardAvoidingView
@@ -333,59 +285,6 @@ export default function CustomerProfileScreen() {
               autoCapitalize="none"
               placeholder="you@example.com"
               error={errors.email}
-            />
-          </Card>
-
-          {/* ---------------- Location Information ---------------- */}
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Location Information</Text>
-            <StatusPill label="Used for nearby sellers" tone="info" />
-          </View>
-          <Card>
-            <Text style={styles.helperText}>
-              Your address determines which gas sellers appear on your Home
-              screen. Update any field to refresh the nearby list.
-            </Text>
-            <AppInput
-              label="Region"
-              value={region}
-              onChangeText={setRegion}
-              placeholder="e.g. Zanzibar Urban West"
-              error={errors.region}
-            />
-            <AppInput
-              label="District"
-              value={district}
-              onChangeText={setDistrict}
-              placeholder="e.g. Urban"
-              error={errors.district}
-            />
-            <AppInput
-              label="Ward"
-              value={ward}
-              onChangeText={setWard}
-              placeholder="e.g. Malindi"
-            />
-            <AppInput
-              label="Street / Area"
-              value={street}
-              onChangeText={setStreet}
-              placeholder="e.g. Stone Town"
-              error={errors.street}
-            />
-            <AppInput
-              label="Full Address"
-              value={fullAddress}
-              onChangeText={setFullAddress}
-              placeholder="e.g. Stone Town, Zanzibar"
-              multiline
-              numberOfLines={2}
-              error={errors.fullAddress}
-              helperText={
-                composedAddress
-                  ? `Will be saved as: ${composedAddress}`
-                  : undefined
-              }
             />
           </Card>
 
@@ -555,13 +454,6 @@ const styles = StyleSheet.create({
   },
 
   /* ----- Section titles ----- */
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.sm,
-  },
   sectionTitle: {
     fontSize: FontSize.lg,
     fontWeight: "800",
@@ -611,14 +503,6 @@ const styles = StyleSheet.create({
   },
   btnEmoji: {
     fontSize: 16,
-  },
-
-  /* ----- Helpers ----- */
-  helperText: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    lineHeight: 20,
-    marginBottom: Spacing.md,
   },
 
   /* ----- Security card ----- */

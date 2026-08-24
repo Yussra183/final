@@ -78,7 +78,7 @@ export function SupplierApprovalGate({ title, children }: Props) {
         <SupplierVerificationRequiredCard
           info={verification}
           onOpenVerification={() =>
-            router.push("/(supplier)/profile" as any)
+            router.push("/(supplier)/license" as any)
           }
         />
       </ScrollView>

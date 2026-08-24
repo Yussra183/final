@@ -18,6 +18,7 @@ import { Card } from "../../src/components/Card";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
 import { LogoutButton } from "../../src/components/LogoutButton";
+import { GasHelpButton } from "../../src/components/GasHelpButton";
 import { RiderVerificationRequiredCard } from "../../src/components/RiderVerificationRequiredCard";
 import { useRiderVerificationStatus } from "../../src/hooks/useRiderVerificationStatus";
 import { OrdersApi, SellersApi } from "../../src/api/endpoints";
@@ -227,7 +228,12 @@ export default function RiderDashboard() {
         title="Available Deliveries"
         subtitle={riderBusy ? "Status: BUSY" : "Status: AVAILABLE"}
         left={<DrawerMenuButton />}
-        right={<LogoutButton />}
+        right={
+          <View style={{ flexDirection: "row", alignItems: "center", gap: Spacing.sm }}>
+            <GasHelpButton />
+            <LogoutButton />
+          </View>
+        }
       />
 
       {!verification.isApproved ? (

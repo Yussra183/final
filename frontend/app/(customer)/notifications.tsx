@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import {
+  Alert,
   Animated,
   Easing,
   FlatList,
@@ -47,9 +48,41 @@ const TYPE_META: Record<
 };
 
 export default function NotificationsScreen() {
-  const { session, getNotificationsForUser, markNotificationRead } = useStore();
+  const {
+    session,
+    getNotificationsForUser,
+    markNotificationRead,
+    deleteNotification,
+  } = useStore();
   const user = session?.user!;
   const list = getNotificationsForUser(user.id);
+
+  /**
+   * Long-press a notification to reveal Delete / Cancel. Cancel is a
+   * no-op so users can dismiss the action sheet without losing the row.
+   * Delete funnels through the store action so the same ownership-aware
+   * server call + optimistic UI flip run for every role.
+   */
+  const promptDelete = useCallback(
+    (n: NotificationItem) => {
+      Alert.alert(
+        "Notification options",
+        "Delete this notification? It will be removed from your list.",
+        [
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => {
+              void deleteNotification(n.id);
+            },
+          },
+          { text: "Cancel", style: "cancel" },
+        ],
+        { cancelable: true },
+      );
+    },
+    [deleteNotification],
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -74,7 +107,13 @@ export default function NotificationsScreen() {
             message="You're all caught up!"
           />
         }
-        renderItem={({ item }) => <NotificationRow item={item} onPress={() => markNotificationRead(item.id)} />}
+        renderItem={({ item }) => (
+          <NotificationRow
+            item={item}
+            onPress={() => markNotificationRead(item.id)}
+            onLongPress={() => promptDelete(item)}
+          />
+        )}
       />
     </View>
   );
@@ -83,13 +122,14 @@ export default function NotificationsScreen() {
 interface RowProps {
   item: NotificationItem;
   onPress: () => void;
+  onLongPress: () => void;
 }
 
 /**
  * Single notification row — extracted so we can use local animation
  * refs without re-mounting the full list.
  */
-function NotificationRow({ item, onPress }: RowProps) {
+function NotificationRow({ item, onPress, onLongPress }: RowProps) {
   const meta = TYPE_META[item.type] ?? TYPE_META.system;
   const slide = useRef(new Animated.Value(0)).current;
 
@@ -113,7 +153,12 @@ function NotificationRow({ item, onPress }: RowProps) {
         ],
       }}
     >
-      <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={onPress}
+        onLongPress={onLongPress}
+        delayLongPress={350}
+      >
         <Card
           style={[
             {
