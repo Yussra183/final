@@ -5,10 +5,13 @@ import com.project.gas_delivery.auth.dto.LoginRequest;
 import com.project.gas_delivery.auth.dto.RegisterRequest;
 import com.project.gas_delivery.auth.entity.User;
 import com.project.gas_delivery.auth.enums.Role;
+import com.project.gas_delivery.auth.exception.AccountPendingApprovalException;
 import com.project.gas_delivery.auth.exception.BadRequestException;
 import com.project.gas_delivery.auth.repository.UserRepository;
 import com.project.gas_delivery.auth.service.AuthService;
 import com.project.gas_delivery.auth.service.SessionService;
+import com.project.gas_delivery.permit.enums.PermitStatus;
+import com.project.gas_delivery.permit.repository.RiderApplicationRepository;
 import com.project.gas_delivery.seller.entity.SellerProfileEntity;
 import com.project.gas_delivery.seller.repository.SellerProfileRepository;
 import com.project.gas_delivery.seller.service.GeocodingService;
@@ -59,17 +62,20 @@ public class AuthServiceImpl implements AuthService {
     private final SessionService sessionService;
     private final SellerProfileRepository sellerProfileRepository;
     private final GeocodingService geocodingService;
+    private final RiderApplicationRepository riderApplicationRepository;
 
     public AuthServiceImpl(UserRepository userRepository,
                            PasswordEncoder passwordEncoder,
                            SessionService sessionService,
                            SellerProfileRepository sellerProfileRepository,
-                           GeocodingService geocodingService) {
+                           GeocodingService geocodingService,
+                           RiderApplicationRepository riderApplicationRepository) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.sessionService = sessionService;
         this.sellerProfileRepository = sellerProfileRepository;
         this.geocodingService = geocodingService;
+        this.riderApplicationRepository = riderApplicationRepository;
     }
 
     @Override
@@ -250,6 +256,14 @@ public class AuthServiceImpl implements AuthService {
         // login here is sufficient — no extra "is active" check is
         // needed on the seller path.
         //
+        // Riders are gated more strictly: unlike sellers (whose permit
+        // flow requires login), riders can complete their verification
+        // via the pre-approval `RiderVerificationController` endpoints
+        // before logging in. Therefore we close the login path for any
+        // rider whose `rider_applications.status` is not APPROVED. The
+        // same logic does not apply to suppliers yet (see audit
+        // recommendation C5 — out of scope for the rider-only fix).
+        //
         // Non-seller inactive accounts (legacy admin-disabled) keep the
         // original bad-credentials fallback so the seller-specific
         // branches above it stay un-branched.
@@ -258,6 +272,17 @@ public class AuthServiceImpl implements AuthService {
                 LOG.info("[AUTH_DIAG] branch=account_disabled user_id={}", user.getId());
             }
             throw new BadCredentialsException("Account is disabled");
+        }
+
+        if (user.getRole() == Role.RIDER
+                && !riderApplicationRepository
+                        .findRiderIdsByStatus(PermitStatus.APPROVED)
+                        .contains(user.getId())) {
+            if (LOG.isInfoEnabled()) {
+                LOG.info("[AUTH_DIAG] branch=rider_pending_approval user_id={}", user.getId());
+            }
+            throw new AccountPendingApprovalException(
+                    "Your rider application is pending admin approval.");
         }
 
         String token = issueToken(user);

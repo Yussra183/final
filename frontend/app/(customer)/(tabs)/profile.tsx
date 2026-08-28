@@ -37,21 +37,18 @@ import { formatDate } from "../../../src/utils/format";
  *   • Personal: fullName, username, phone, email
  *   • Account: registration date / status / id
  *   • Security: change-password link
- *   • Session: Log out (with confirmation)
  *
  * Edits persist through `updateProfile` (personal) — same call the
  * page used before the bottom-tab restructure.
  *
- * The Log out button replaces the in-app-bar logout that lived on
- * the drawer-era Home screen. Tapping it clears the session via the
- * store's `logout()` action and routes back to `/auth/login`.
+ * Logout is no longer surfaced here — it lives in the avatar
+ * dropdown menu on the Home tab (and every other authed surface).
  */
 export default function CustomerProfileScreen() {
   const router = useRouter();
   const {
     session,
     updateProfile,
-    logout,
     getNotificationsForUser,
   } = useStore();
   const user = session?.user;
@@ -121,25 +118,6 @@ export default function CustomerProfileScreen() {
     );
   };
 
-  /**
-   * Log out with confirmation. Same destructive Alert pattern the Home
-   * screen used under the drawer; just relocated here because the
-   * app bar no longer hosts a logout button.
-   */
-  const handleLogout = () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Logout",
-        style: "destructive",
-        onPress: () => {
-          logout();
-          router.replace("/auth/login" as any);
-        },
-      },
-    ]);
-  };
-
   const validate = (): Record<string, string> => {
     const next: Record<string, string> = {};
     if (!fullName.trim()) next.fullName = "Full name is required";
@@ -194,7 +172,7 @@ export default function CustomerProfileScreen() {
       {/* ---------------- Header ---------------- */}
       {/* Minimal app bar: title left-aligned, notification bell on the
           right — same pattern as the Home tab. The drawer and its
-          hamburger are gone; logout lives at the bottom of the screen. */}
+          hamburger are gone; logout lives in the avatar dropdown menu. */}
       <View style={styles.header}>
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle}>My Profile</Text>
@@ -326,27 +304,6 @@ export default function CustomerProfileScreen() {
               leftIcon={<Text style={styles.btnEmoji}>🔒</Text>}
               onPress={handleChangePassword}
             />
-          </Card>
-
-          {/* ---------------- Log out ---------------- */}
-          <Text style={styles.sectionTitle}>Session</Text>
-          <Card style={styles.logoutCard}>
-            <Text style={styles.logoutHelper}>
-              Sign out of this device. You can sign back in any time
-              with your username and password.
-            </Text>
-            <Pressable
-              onPress={handleLogout}
-              style={({ pressed }) => [
-                styles.logoutBtn,
-                pressed && styles.logoutBtnPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Log out"
-            >
-              <Ionicons name="log-out-outline" size={20} color="#FFF" />
-              <Text style={styles.logoutBtnText}>Log out</Text>
-            </Pressable>
           </Card>
 
           {/* Spacer above the save button so content isn't covered. */}
@@ -508,34 +465,6 @@ const styles = StyleSheet.create({
   /* ----- Security card ----- */
   securityCard: {
     paddingVertical: Spacing.md,
-  },
-
-  /* ----- Log out card ----- */
-  logoutCard: {
-    paddingVertical: Spacing.md,
-  },
-  logoutHelper: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    lineHeight: 20,
-    marginBottom: Spacing.md,
-  },
-  logoutBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.xs,
-    backgroundColor: "#B91C1C",
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.md,
-  },
-  logoutBtnPressed: {
-    opacity: 0.85,
-  },
-  logoutBtnText: {
-    color: "#FFF",
-    fontSize: FontSize.md,
-    fontWeight: "800",
   },
 
   /* ----- Footer / save ----- */

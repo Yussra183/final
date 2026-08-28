@@ -103,7 +103,9 @@ class OrderServiceStockIntegrationTest {
                 orderRepository, userRepository, sellerRiderRepository,
                 riderProfileRepository, riderApplicationRepository,
                 deliveryTrackingService, stockService, productRepository,
-                notificationService, paymentService, entityManager
+                notificationService, paymentService,
+                new com.project.gas_delivery.order.service.PickupConfig(15L),
+                entityManager
         );
     }
 

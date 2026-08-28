@@ -95,6 +95,25 @@ public class OrderEntity {
     @Column(name = "reject_reason", length = 500)
     private String rejectReason;
 
+    /**
+     * Server-relative deadline by which the assigned rider must complete
+     * pickup. While {@link #getStatus()} is {@code ASSIGNED} or
+     * {@code PICKUP_CONFIRMATION_PENDING} and {@code heldUntil} is in the
+     * past, the row is fair game for the expiration sweep that reverts
+     * the order back to {@code ACCEPTED}.
+     */
+    @Column(name = "held_until")
+    private Instant heldUntil;
+
+    /**
+     * Server timestamp of the physical handover — set when the seller
+     * confirms pickup. Distinct from {@link #updatedAt} (which moves on
+     * every status change) so the rider app can show the exact moment
+     * without consulting the status history.
+     */
+    @Column(name = "picked_up_at")
+    private Instant pickedUpAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -251,6 +270,22 @@ public class OrderEntity {
 
     public void setRejectReason(String rejectReason) {
         this.rejectReason = rejectReason;
+    }
+
+    public Instant getHeldUntil() {
+        return heldUntil;
+    }
+
+    public void setHeldUntil(Instant heldUntil) {
+        this.heldUntil = heldUntil;
+    }
+
+    public Instant getPickedUpAt() {
+        return pickedUpAt;
+    }
+
+    public void setPickedUpAt(Instant pickedUpAt) {
+        this.pickedUpAt = pickedUpAt;
     }
 
     public Instant getCreatedAt() {

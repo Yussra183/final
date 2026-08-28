@@ -76,6 +76,7 @@ class OrderServiceRiderDispatchTest {
                 productRepository,
                 notificationService,
                 paymentService,
+                new com.project.gas_delivery.order.service.PickupConfig(15L),
                 entityManager
         );
     }

@@ -33,7 +33,19 @@ public record OrderResponse(
         DeliveryLocationDto deliveryLocation,
         String phone,
         String notes,
-        String rejectReason
+        String rejectReason,
+        /**
+         * ISO-8601 server timestamp of the claim deadline. Surfaced so the
+         * rider app can render a countdown without re-deriving it. Null
+         * for orders that haven't been claimed.
+         */
+        String heldUntil,
+        /**
+         * ISO-8601 server timestamp of the physical handover. Distinct
+         * from {@code updatedAt} so the rider/seller UI can show the
+         * moment the package actually changed hands.
+         */
+        String pickedUpAt
 ) {
 
     public static OrderResponse from(OrderEntity e) {
@@ -55,7 +67,9 @@ public record OrderResponse(
                 new DeliveryLocationDto(e.getDeliveryAddress(), e.getDeliveryLat(), e.getDeliveryLng()),
                 e.getPhone(),
                 e.getNotes(),
-                e.getRejectReason()
+                e.getRejectReason(),
+                e.getHeldUntil() == null ? null : e.getHeldUntil().toString(),
+                e.getPickedUpAt() == null ? null : e.getPickedUpAt().toString()
         );
     }
 }

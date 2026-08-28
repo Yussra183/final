@@ -48,6 +48,7 @@ import {
 } from "../../../src/components/NearbySellersMap";
 import { PressableScale, PulseDot } from "../../../src/components/MicroAnimations";
 import { GasHelpButton } from "../../../src/components/GasHelpButton";
+import { CustomerHeaderAvatar } from "../../../src/components/CustomerHeaderAvatar";
 import { useStore } from "../../../src/store/StoreContext";
 import { useNearbySellers } from "../../../src/hooks/useNearbySellers";
 import { useCustomerLocation } from "../../../src/hooks/useCustomerLocation";
@@ -302,8 +303,8 @@ export default function CustomerHome() {
     >
       {/* ---------------- Header ---------------- */}
       {/* Minimal app bar: title left-aligned, gas-help + notification
-          buttons on the right. The drawer and its hamburger are gone;
-          logout lives in the Profile tab. */}
+          buttons on the right. The customer avatar (with Profile +
+          Logout dropdown) lives on the far right. */}
       <View style={styles.header}>
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle}>Home</Text>
@@ -327,6 +328,7 @@ export default function CustomerHome() {
               </View>
             ) : null}
           </TouchableOpacity>
+          <CustomerHeaderAvatar />
         </View>
       </View>
 

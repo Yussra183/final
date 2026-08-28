@@ -54,7 +54,7 @@ import { AppButton } from "../../src/components/AppButton";
 import { StatusPill } from "../../src/components/StatusPill";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
-import { LogoutButton } from "../../src/components/LogoutButton";
+import { RiderHeaderAvatar } from "../../src/components/RiderHeaderAvatar";
 import { ApiError } from "../../src/api/errors";
 import { API_CONFIG } from "../../src/api/config";
 import {
@@ -136,7 +136,7 @@ function permitStatusTone(
 
 export default function RiderProfile() {
   const router = useRouter();
-  const { session, logout } = useStore();
+  const { session } = useStore();
   // `session!` is safe at this point — the rider layout guards the
   // route — but use a defensive fallback so a stray undefined never
   // throws during the first render of a newly-registered rider.
@@ -426,7 +426,7 @@ export default function RiderProfile() {
       <ScreenHeader
         title="Profile"
         left={<DrawerMenuButton />}
-        right={<LogoutButton />}
+        right={<RiderHeaderAvatar size={48} />}
       />
       <ScrollView
         contentContainerStyle={{ paddingBottom: Spacing.xxl }}
@@ -803,26 +803,6 @@ export default function RiderProfile() {
                   </View>
                 )}
               </Card>
-
-              {/* ============== Logout ============== */}
-              <AppButton
-                title="Logout"
-                variant="outline"
-                fullWidth
-                style={{ marginTop: Spacing.xl }}
-                onPress={() =>
-                  Alert.alert("Logout", "Sign out of your account?", [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Logout",
-                      style: "destructive",
-                      onPress: () => {
-                        logout();
-                      },
-                    },
-                  ])
-                }
-              />
             </>
           ) : null}
         </View>

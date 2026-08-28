@@ -400,11 +400,19 @@ export class OrderService {
           { status: "accepted", at: now },
           { status: "assigned", at: now },
         ];
+      case "pickup_pending":
+        return [
+          { status: "pending", at: created },
+          { status: "accepted", at: now },
+          { status: "assigned", at: now },
+          { status: "pickup_pending", at: now },
+        ];
       case "picked_up":
         return [
           { status: "pending", at: created },
           { status: "accepted", at: now },
           { status: "assigned", at: now },
+          { status: "pickup_pending", at: now },
           { status: "picked_up", at: now },
         ];
       case "in_transit":
@@ -412,6 +420,7 @@ export class OrderService {
           { status: "pending", at: created },
           { status: "accepted", at: now },
           { status: "assigned", at: now },
+          { status: "pickup_pending", at: now },
           { status: "picked_up", at: now },
           { status: "in_transit", at: now },
         ];
@@ -420,6 +429,7 @@ export class OrderService {
           { status: "pending", at: created },
           { status: "accepted", at: now },
           { status: "assigned", at: now },
+          { status: "pickup_pending", at: now },
           { status: "picked_up", at: now },
           { status: "in_transit", at: now },
           { status: "delivered", at: now },

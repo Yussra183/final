@@ -52,6 +52,24 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
             """)
     List<OrderEntity> findAvailableForDispatch();
 
+    /**
+     * Active holds whose {@code held_until} has elapsed. Backs the
+     * scheduled expiration sweep — when the rider doesn't make it to the
+     * seller in time, the order reverts to {@code accepted} so other
+     * riders can pick it up. Covered by
+     * {@code idx_orders_held_until}.
+     */
+    @Query("""
+            SELECT o FROM OrderEntity o
+            WHERE o.heldUntil IS NOT NULL
+              AND o.heldUntil < :now
+              AND o.status IN (
+                  com.project.gas_delivery.order.enums.OrderStatus.ASSIGNED,
+                  com.project.gas_delivery.order.enums.OrderStatus.PICKUP_CONFIRMATION_PENDING
+              )
+            """)
+    List<OrderEntity> findExpiredHolds(@Param("now") java.time.Instant now);
+
     long countByStatus(OrderStatus status);
 
     long countByStatusAndRiderIdIsNull(OrderStatus status);

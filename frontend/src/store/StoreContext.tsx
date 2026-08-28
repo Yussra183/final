@@ -189,6 +189,24 @@ interface StoreShape {
     orderId: string,
     next: "picked_up" | "in_transit" | "delivered",
   ) => Promise<void>;
+  /**
+   * Rider asks the seller to confirm physical handover. Flips the
+   * order to `pickup_pending`. Idempotent — re-issuing the request
+   * while the order is already `pickup_pending` is a server-side no-op.
+   */
+  requestPickupConfirmation: (orderId: string) => Promise<void>;
+  /**
+   * Seller (owner) confirms the rider physically received the order.
+   * Flips `pickup_pending` → `picked_up`. Idempotent at the SQL guard
+   * level; a duplicate call after the order has advanced throws
+   * INVALID_TRANSITION.
+   */
+  confirmPickup: (orderId: string) => Promise<void>;
+  /**
+   * Rider voluntarily releases the hold so another rider can pick up
+   * the order. Flips `assigned` → `accepted` and nulls `riderId`.
+   */
+  cancelHold: (orderId: string) => Promise<void>;
   /** Orders currently eligible for this user to claim. */
   availableOrdersForUser: () => Order[];
   /** Legacy verbs kept for screens still on the in-memory mock. */
@@ -776,17 +794,43 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       PermitsApi.list(),
       NotificationsApi.list(),
       ComplaintsApi.list(),
-      // FR-06: approved-supplier picker. Cheap single SELECT; included
-      // here so a seller's restock form has the picker populated the
-      // moment they reach the screen. Riders/customers don't need it
-      // but the endpoint is open to any authenticated seller/supplier/
-      // admin and the result is harmless to keep in memory.
-      SuppliersApi.approved(),
     ]);
     const value = <T,>(r: PromiseSettledResult<T>, fallback: T): T =>
       r.status === "fulfilled" ? r.value : fallback;
     setUsers(value<User[]>(results[0], []));
     setProducts(value<GasProduct[]>(results[1], []));
+
+    // FR-06: approved-supplier picker. The backend gates this endpoint
+    // to SELLER / SUPPLIER / ADMIN only — calling it for CUSTOMER or
+    // RIDER roles triggers a 403 ("Only sellers, suppliers, and admins
+    // can list approved suppliers") which surfaces as the first
+    // failure of `refresh()` and taints the post-login screen with a
+    // misleading "Login failed" alert even though authentication
+    // succeeded. Keep this out of the unconditional `Promise.allSettled`
+    // above and gate it on the actor's role (mirrors the restock list
+    // pattern below). A failed fetch is logged and falls back to an
+    // empty picker; the seller restock form will retry on demand when
+    // the seller actually needs the picker.
+    if (
+      actorAtStart?.role === "seller" ||
+      actorAtStart?.role === "supplier" ||
+      actorAtStart?.role === "admin"
+    ) {
+      try {
+        const approved = await SuppliersApi.approved();
+        setApprovedSuppliers(approved);
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(
+            "[SUPPLIERS][REFRESH_APPROVED_FAILED]",
+            (err as Error)?.message,
+          );
+        }
+        setApprovedSuppliers([]);
+      }
+    } else {
+      setApprovedSuppliers([]);
+    }
 
     // Supplier logistics: routes and vehicles are scoped server-side to
     // the signed-in supplier. Only fetch them when the actor is a
@@ -878,7 +922,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setPermits(value<PermitApplication[]>(results[5], []));
     setNotifications(value<NotificationItem[]>(results[6], []));
     setComplaints(value<Complaint[]>(results[7], []));
-    setApprovedSuppliers(value<ApprovedSupplier[]>(results[8], []));
 
     // Restock requests are server-side gated to SELLER / SUPPLIER /
     // ADMIN. Keep this out of the unconditional `Promise.allSettled`
@@ -1470,6 +1513,48 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       applyServiceResult(result.order, result.auditNotes);
     },
     [session, orders, applyServiceResult],
+  );
+
+  /**
+   * Rider asks the seller to confirm physical handover. Thin wrapper
+   * around {@link OrdersApi.requestPickup} — the order is upserted
+   * into the local store on success so the rider sees the
+   * `pickup_pending` state immediately without waiting for the next
+   * `refresh()` round-trip.
+   */
+  const requestPickupConfirmation = useCallback(
+    async (orderId: string) => {
+      if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
+      const updated = await OrdersApi.requestPickup(orderId);
+      applyServiceResult(updated, []);
+    },
+    [session, applyServiceResult],
+  );
+
+  /**
+   * Seller confirms the rider physically received the order. Thin
+   * wrapper around {@link OrdersApi.confirmPickup}.
+   */
+  const confirmPickup = useCallback(
+    async (orderId: string) => {
+      if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
+      const updated = await OrdersApi.confirmPickup(orderId);
+      applyServiceResult(updated, []);
+    },
+    [session, applyServiceResult],
+  );
+
+  /**
+   * Rider voluntarily releases the hold. Thin wrapper around
+   * {@link OrdersApi.cancelHold}.
+   */
+  const cancelHold = useCallback(
+    async (orderId: string) => {
+      if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
+      const updated = await OrdersApi.cancelHold(orderId);
+      applyServiceResult(updated, []);
+    },
+    [session, applyServiceResult],
   );
 
   /**
@@ -3270,6 +3355,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelOrder,
       claimOrder,
       advanceDelivery,
+      requestPickupConfirmation,
+      confirmPickup,
+      cancelHold,
       availableOrdersForUser,
       updateOrderStatus,
       assignRider,
@@ -3371,6 +3459,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelOrder,
       claimOrder,
       advanceDelivery,
+      requestPickupConfirmation,
+      confirmPickup,
+      cancelHold,
       availableOrdersForUser,
       updateOrderStatus,
       assignRider,

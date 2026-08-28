@@ -20,6 +20,14 @@ public enum OrderStatus {
     PENDING,
     ACCEPTED,
     ASSIGNED,
+    /**
+     * Rider has reached the seller's pickup point and is waiting for the
+     * seller to confirm physical handover. Sits between {@link #ASSIGNED}
+     * and {@link #PICKED_UP} so the system can distinguish "rider is on
+     * the way", "rider is asking for handover", and "rider physically
+     * has the package".
+     */
+    PICKUP_CONFIRMATION_PENDING,
     PICKED_UP,
     IN_TRANSIT,
     DELIVERED,
@@ -33,6 +41,7 @@ public enum OrderStatus {
             case PENDING -> "pending";
             case ACCEPTED -> "accepted";
             case ASSIGNED -> "assigned";
+            case PICKUP_CONFIRMATION_PENDING -> "pickup_pending";
             case PICKED_UP -> "picked_up";
             case IN_TRANSIT -> "in_transit";
             case DELIVERED -> "delivered";

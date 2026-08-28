@@ -9,6 +9,7 @@ export type OrderStatus =
   | "pending"
   | "accepted"
   | "assigned"
+  | "pickup_pending"
   | "picked_up"
   | "in_transit"
   | "delivered"
@@ -209,6 +210,18 @@ export interface Order {
    * before the seller acts. Surfaced to the other party verbatim.
    */
   rejectReason?: string;
+  /**
+   * ISO-8601 server timestamp of the claim deadline. The rider app
+   * surfaces this as a countdown; once it elapses the backend reverts
+   * the order to {@code accepted} so another rider can pick it up.
+   */
+  heldUntil?: string | null;
+  /**
+   * ISO-8601 server timestamp of the physical handover (seller-confirmed
+   * pickup). Distinct from {@code updatedAt} so the UI can show the
+   * exact moment without consulting the status history.
+   */
+  pickedUpAt?: string | null;
 }
 
 // =========================================================================

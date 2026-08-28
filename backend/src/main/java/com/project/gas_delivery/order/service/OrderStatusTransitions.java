@@ -39,9 +39,30 @@ public final class OrderStatusTransitions {
         RULES.put(OrderStatus.ACCEPTED,
                 Map.of(OrderStatus.ASSIGNED, EnumSet.of(ActorRole.RIDER)));
 
-        // ASSIGNED → PICKED_UP → IN_TRANSIT → DELIVERED — rider milestones
+        // ASSIGNED → PICKUP_CONFIRMATION_PENDING — rider asks the seller
+        // for handover. The system treats this as a server-side signal
+        // that the rider has reached the pickup point.
         RULES.put(OrderStatus.ASSIGNED,
-                Map.of(OrderStatus.PICKED_UP, EnumSet.of(ActorRole.RIDER)));
+                Map.of(
+                        OrderStatus.PICKUP_CONFIRMATION_PENDING,
+                        EnumSet.of(ActorRole.RIDER)
+                ));
+
+        // PICKUP_CONFIRMATION_PENDING → PICKED_UP — only the seller can
+        // confirm that physical handover happened. The rider's own
+        // confirmation is intentionally NOT a valid transition.
+        RULES.put(OrderStatus.PICKUP_CONFIRMATION_PENDING,
+                Map.of(
+                        OrderStatus.PICKED_UP,
+                        EnumSet.of(ActorRole.SELLER)
+                ));
+
+        // ASSIGNED → ACCEPTED — rider voluntarily releases the hold.
+        // The expiration sweep reuses the same back-transition.
+        RULES.put(OrderStatus.ASSIGNED,
+                Map.of(OrderStatus.ACCEPTED, EnumSet.of(ActorRole.RIDER)));
+
+        // PICKED_UP → IN_TRANSIT → DELIVERED — rider milestones
         RULES.put(OrderStatus.PICKED_UP,
                 Map.of(OrderStatus.IN_TRANSIT, EnumSet.of(ActorRole.RIDER)));
         RULES.put(OrderStatus.IN_TRANSIT,

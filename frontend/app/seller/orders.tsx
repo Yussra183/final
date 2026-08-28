@@ -65,7 +65,7 @@ const TABS: TabDef[] = [
     key: "accepted",
     label: "Accepted",
     icon: "checkmark-circle-outline",
-    statuses: ["accepted", "assigned"],
+    statuses: ["accepted", "assigned", "pickup_pending"],
   },
   {
     key: "preparing",
@@ -149,14 +149,17 @@ function OrderCard({
   onAccept,
   onReject,
   onView,
+  onConfirmPickup,
 }: {
   order: Order;
   tab: TabKey;
   onAccept: (o: Order) => void;
   onReject: (o: Order) => void;
   onView: (o: Order) => void;
+  onConfirmPickup: (o: Order) => void;
 }) {
   const first = order.items[0];
+  const awaitingPickupConfirmation = order.status === "pickup_pending";
   return (
     <Card style={styles.orderCard}>
       {/* Top row — order # + status */}
@@ -172,6 +175,32 @@ function OrderCard({
           tone={orderTone(order.status)}
         />
       </View>
+
+      {/* Pickup banner — surfaces the pickup-confirmation state to the
+          seller so they know they must hand over the package. */}
+      {awaitingPickupConfirmation ? (
+        <View style={styles.pickupBanner}>
+          <Ionicons name="alert-circle" size={18} color={Colors.warning} />
+          <Text style={styles.pickupBannerText}>
+            {order.riderName ?? "The rider"} is requesting pickup
+            confirmation. Hand over the package to mark the order picked up.
+          </Text>
+        </View>
+      ) : order.status === "assigned" && order.riderName ? (
+        <View style={styles.riderEnRoute}>
+          <Ionicons name="bicycle-outline" size={16} color={Colors.info} />
+          <Text style={styles.riderEnRouteText}>
+            {order.riderName} is coming to collect this order.
+          </Text>
+        </View>
+      ) : order.status === "picked_up" ? (
+        <View style={styles.pickedUpBanner}>
+          <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
+          <Text style={styles.pickedUpBannerText}>
+            Rider has picked up the order.
+          </Text>
+        </View>
+      ) : null}
 
       {/* Body — items summary */}
       <View style={styles.bodyRow}>
@@ -229,6 +258,16 @@ function OrderCard({
               <Text style={styles.actionBtnText}>Reject</Text>
             </TouchableOpacity>
           </>
+        ) : null}
+
+        {awaitingPickupConfirmation ? (
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.btnConfirmPickup]}
+            onPress={() => onConfirmPickup(order)}
+          >
+            <Ionicons name="hand-left-outline" size={16} color={Colors.textInverse} />
+            <Text style={styles.actionBtnText}>Confirm Pickup</Text>
+          </TouchableOpacity>
         ) : null}
 
         <TouchableOpacity
@@ -420,6 +459,7 @@ export default function SellerOrders() {
     acceptOrder,
     rejectOrder,
     refresh,
+    confirmPickup,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<TabKey>("new");
@@ -543,6 +583,33 @@ export default function SellerOrders() {
     }
   };
 
+  const onConfirmPickup = (o: Order) => {
+    Alert.alert(
+      "Confirm pickup?",
+      `Confirm that ${o.riderName ?? "the rider"} has physically received order #${o.id.slice(-4)}. This starts the delivery.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Confirm Pickup",
+          onPress: async () => {
+            try {
+              await confirmPickup(o.id);
+              Alert.alert(
+                "Pickup confirmed",
+                `Rider has picked up order #${o.id.slice(-4)}.`,
+              );
+            } catch (err) {
+              Alert.alert(
+                "Could not confirm pickup",
+                (err as Error)?.message ?? "Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <SellerHeader title="Orders" />
@@ -580,6 +647,7 @@ export default function SellerOrders() {
               onAccept={onAccept}
               onReject={onReject}
               onView={setDetailsOrder}
+              onConfirmPickup={onConfirmPickup}
             />
           ))
         )}
@@ -752,10 +820,64 @@ const styles = StyleSheet.create({
   },
   btnAccept: { backgroundColor: Colors.success },
   btnReject: { backgroundColor: Colors.danger },
+  btnConfirmPickup: { backgroundColor: Colors.warning },
   btnView: {
     backgroundColor: Colors.primarySoft,
     borderWidth: 1,
     borderColor: Colors.primary,
+  },
+
+  // Pickup state banners — surface the pickup-confirmation flow to the
+  // seller without forcing them to read the StatusPill alone.
+  pickupBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    backgroundColor: Colors.warning + "1A",
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    marginBottom: Spacing.sm,
+  },
+  pickupBannerText: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: FontSize.sm,
+    fontWeight: "700",
+  },
+  riderEnRoute: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: Spacing.sm,
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: Radius.md,
+    marginBottom: Spacing.sm,
+  },
+  riderEnRouteText: {
+    color: Colors.text,
+    fontSize: FontSize.xs,
+    fontWeight: "700",
+    flex: 1,
+  },
+  pickedUpBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    backgroundColor: Colors.success + "1A",
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.success,
+    marginBottom: Spacing.sm,
+  },
+  pickedUpBannerText: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: FontSize.sm,
+    fontWeight: "700",
   },
   actionBtnText: {
     color: Colors.textInverse,

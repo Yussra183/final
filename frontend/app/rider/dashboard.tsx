@@ -17,7 +17,7 @@ import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { Card } from "../../src/components/Card";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { DrawerMenuButton } from "../../src/components/DrawerMenuButton";
-import { LogoutButton } from "../../src/components/LogoutButton";
+import { RiderHeaderAvatar } from "../../src/components/RiderHeaderAvatar";
 import { GasHelpButton } from "../../src/components/GasHelpButton";
 import { RiderVerificationRequiredCard } from "../../src/components/RiderVerificationRequiredCard";
 import { useRiderVerificationStatus } from "../../src/hooks/useRiderVerificationStatus";
@@ -231,7 +231,7 @@ export default function RiderDashboard() {
         right={
           <View style={{ flexDirection: "row", alignItems: "center", gap: Spacing.sm }}>
             <GasHelpButton />
-            <LogoutButton />
+            <RiderHeaderAvatar size={48} />
           </View>
         }
       />

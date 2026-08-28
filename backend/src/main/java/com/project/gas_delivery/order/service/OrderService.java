@@ -49,6 +49,30 @@ public interface OrderService {
     OrderResponse advance(Long actorId, Role actorRole, Long orderId, OrderStatus next, String note);
 
     /**
+     * Rider asks the seller to confirm physical handover. Order must be
+     * {@code ASSIGNED} and held by this rider. Idempotent: a rider who
+     * calls it twice without seller confirmation still sees
+     * {@code PICKUP_CONFIRMATION_PENDING}.
+     */
+    OrderResponse requestPickupConfirmation(Long actorId, Role actorRole, Long orderId);
+
+    /**
+     * Seller (owner) confirms the rider has physically received the
+     * order. Order must be {@code PICKUP_CONFIRMATION_PENDING} and owned
+     * by this seller. Idempotent: a second confirmation by the same
+     * seller after {@code PICKED_UP} lands is rejected as an invalid
+     * transition.
+     */
+    OrderResponse confirmPickup(Long actorId, Role actorRole, Long orderId);
+
+    /**
+     * Rider voluntarily releases the hold. Order must be
+     * {@code ASSIGNED} and held by this rider. Restores the order to
+     * {@code ACCEPTED} so other eligible riders can claim it.
+     */
+    OrderResponse cancelHold(Long actorId, Role actorRole, Long orderId);
+
+    /**
      * List orders, filtered by role + ownership. When the caller is a
      * customer/seller/rider, the corresponding id filter is forced so
      * they can't read other people's orders.

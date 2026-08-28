@@ -666,12 +666,21 @@ function RestockDeliveriesSection() {
   const { session, getRestockForSupplier } = useStore();
   const user = session?.user!;
   const all = getRestockForSupplier(user.id);
+  // Wire the Deliveries tab to the canonical lowercase status values
+  // (`dispatched`, `delivered`, `rejected`) the backend now emits via
+  // `SupplyOrderStatus.toJson()`. The previous raw-string filter
+  // (`in_transit` / `approved` / `delivered` / `rejected`) was written
+  // against the legacy wire shape and matched nothing in the live API,
+  // so the Active + History buckets rendered empty forever. Routing
+  // through `normalizeRestockStatus` keeps the screen working even if
+  // the legacy aliases ever reappear in an older deployment.
   const active = all.filter(
-    (r) => r.status === "in_transit" || r.status === "approved",
+    (r) => normalizeRestockStatus(r.status) === "dispatched",
   );
-  const history = all.filter(
-    (r) => r.status === "delivered" || r.status === "rejected",
-  );
+  const history = all.filter((r) => {
+    const s = normalizeRestockStatus(r.status);
+    return s === "delivered" || s === "rejected";
+  });
 
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
@@ -715,10 +724,15 @@ function RestockDeliveriesSection() {
                   To {item.sellerName} • {formatDate(item.createdAt)}
                 </Text>
               </View>
-              <StatusPill
-                label={item.status.replace("_", " ")}
-                tone={item.status === "in_transit" ? "info" : "primary"}
-              />
+              {(() => {
+                const s = normalizeRestockStatus(item.status);
+                return (
+                  <StatusPill
+                    label={RESTOCK_STATUS_LABELS[s]}
+                    tone={s === "dispatched" ? "info" : "primary"}
+                  />
+                );
+              })()}
             </View>
           </Card>
         ))
@@ -743,34 +757,37 @@ function RestockDeliveriesSection() {
           />
         </View>
       ) : (
-        history.map((item) => (
-          <Card
-            key={`h-${item.id}`}
-            style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
-          >
-            <View style={styles.row}>
-              <View style={styles.supplierBubble}>
-                <Ionicons
-                  name="cube-outline"
-                  size={18}
-                  color={Colors.supplier}
+        history.map((item) => {
+          const s = normalizeRestockStatus(item.status);
+          return (
+            <Card
+              key={`h-${item.id}`}
+              style={{ marginHorizontal: Spacing.lg, marginBottom: Spacing.sm }}
+            >
+              <View style={styles.row}>
+                <View style={styles.supplierBubble}>
+                  <Ionicons
+                    name="cube-outline"
+                    size={18}
+                    color={Colors.supplier}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.itemTitle}>
+                    {item.productName} ({item.size}) ×{item.quantity}
+                  </Text>
+                  <Text style={styles.itemMeta}>
+                    {item.sellerName} • {formatDate(item.createdAt)}
+                  </Text>
+                </View>
+                <StatusPill
+                  label={RESTOCK_STATUS_LABELS[s]}
+                  tone={s === "delivered" ? "success" : "danger"}
                 />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.itemTitle}>
-                  {item.productName} ({item.size}) ×{item.quantity}
-                </Text>
-                <Text style={styles.itemMeta}>
-                  {item.sellerName} • {formatDate(item.createdAt)}
-                </Text>
-              </View>
-              <StatusPill
-                label={item.status}
-                tone={item.status === "delivered" ? "success" : "danger"}
-              />
-            </View>
-          </Card>
-        ))
+            </Card>
+          );
+        })
       )}
     </ScrollView>
   );

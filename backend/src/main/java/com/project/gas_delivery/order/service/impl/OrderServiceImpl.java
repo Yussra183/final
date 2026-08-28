@@ -16,6 +16,7 @@ import com.project.gas_delivery.order.repository.OrderRepository;
 import com.project.gas_delivery.order.service.OrderService;
 import com.project.gas_delivery.order.service.OrderStatusTransitions;
 import com.project.gas_delivery.order.service.OrderStatusTransitions.ActorRole;
+import com.project.gas_delivery.order.service.PickupConfig;
 import com.project.gas_delivery.notification.service.NotificationService;
 import com.project.gas_delivery.permit.enums.PermitStatus;
 import com.project.gas_delivery.permit.repository.RiderApplicationRepository;
@@ -65,6 +66,7 @@ public class OrderServiceImpl implements OrderService {
     private final ProductRepository productRepository;
     private final NotificationService notificationService;
     private final PaymentService paymentService;
+    private final PickupConfig pickupConfig;
     private final EntityManager entityManager;
 
     public OrderServiceImpl(OrderRepository orderRepository,
@@ -77,6 +79,7 @@ public class OrderServiceImpl implements OrderService {
                             ProductRepository productRepository,
                             NotificationService notificationService,
                             PaymentService paymentService,
+                            PickupConfig pickupConfig,
                             EntityManager entityManager) {
         this.orderRepository = orderRepository;
         this.userRepository = userRepository;
@@ -88,6 +91,7 @@ public class OrderServiceImpl implements OrderService {
         this.productRepository = productRepository;
         this.notificationService = notificationService;
         this.paymentService = paymentService;
+        this.pickupConfig = pickupConfig;
         this.entityManager = entityManager;
     }
 
@@ -284,12 +288,19 @@ public class OrderServiceImpl implements OrderService {
         // response is consistent with what subsequent reads will see,
         // avoiding any RETURNING-column ordering shenanigans with native
         // results.
+        //
+        // `held_until` is stamped at claim time so the
+        // PickupHoldExpirationTask can reap stale holds without scanning
+        // the whole table.
+        java.time.Instant heldUntil = java.time.Instant.now()
+                .plus(pickupConfig.holdDuration());
         @SuppressWarnings("unchecked")
         List<Object> rows = entityManager.createNativeQuery("""
                 UPDATE orders
                    SET rider_id   = :riderId,
                        rider_name = :riderName,
                        status     = 'ASSIGNED',
+                       held_until = :heldUntil,
                        updated_at = CURRENT_TIMESTAMP
                  WHERE id = :id
                    AND rider_id IS NULL
@@ -298,6 +309,7 @@ public class OrderServiceImpl implements OrderService {
                 """)
                 .setParameter("riderId", riderId)
                 .setParameter("riderName", riderName)
+                .setParameter("heldUntil", java.sql.Timestamp.from(heldUntil))
                 .setParameter("id", orderId)
                 .getResultList();
 
@@ -333,6 +345,106 @@ public class OrderServiceImpl implements OrderService {
         }
         requireOwnership(order, actorId, ActorRole.RIDER, next);
         return setStatus(order, next);
+    }
+
+    // ---- pickup confirmation flow -------------------------------------
+
+    @Override
+    @Transactional
+    public OrderResponse requestPickupConfirmation(Long actorId, Role actorRole, Long orderId) {
+        requireRole(actorRole, Role.RIDER);
+        OrderEntity order = loadOrder(orderId);
+        if (order.getRiderId() == null || !order.getRiderId().equals(actorId)) {
+            throw new NotAuthorizedException(
+                    "Only the assigned rider can request pickup confirmation.");
+        }
+        if (order.getHeldUntil() != null && order.getHeldUntil().isBefore(java.time.Instant.now())) {
+            throw new InvalidTransitionException(
+                    "Your hold on this order has expired. The order is available again.");
+        }
+        requireOwnership(order, actorId, ActorRole.RIDER, OrderStatus.PICKUP_CONFIRMATION_PENDING);
+        OrderStatus previousStatus = order.getStatus();
+        OrderResponse response = setStatus(order, OrderStatus.PICKUP_CONFIRMATION_PENDING);
+        log.info("[ORDER_LIFECYCLE][PICKUP_REQUESTED] orderId={} riderId={} oldStatus={} newStatus={}",
+                order.getId(), order.getRiderId(), previousStatus, order.getStatus());
+        notifyPickupRequested(order);
+        return response;
+    }
+
+    @Override
+    @Transactional
+    public OrderResponse confirmPickup(Long actorId, Role actorRole, Long orderId) {
+        requireRole(actorRole, Role.SELLER);
+        OrderEntity order = loadOrder(orderId);
+        if (!actorId.equals(order.getSellerId())) {
+            throw new NotAuthorizedException(
+                    "You can only confirm pickup for orders assigned to your shop.");
+        }
+        // Idempotency — a second confirm by the same seller after
+        // PICKED_UP is rejected as an invalid transition.
+        requireOwnership(order, actorId, ActorRole.SELLER, OrderStatus.PICKED_UP);
+        java.time.Instant now = java.time.Instant.now();
+        order.setPickedUpAt(now);
+        OrderStatus previousStatus = order.getStatus();
+        OrderResponse response = setStatus(order, OrderStatus.PICKED_UP);
+        log.info("[ORDER_LIFECYCLE][PICKUP_CONFIRMED] orderId={} sellerId={} oldStatus={} newStatus={} riderId={}",
+                order.getId(), order.getSellerId(), previousStatus, order.getStatus(), order.getRiderId());
+        notifyPickupConfirmed(order);
+        return response;
+    }
+
+    @Override
+    @Transactional
+    public OrderResponse cancelHold(Long actorId, Role actorRole, Long orderId) {
+        requireRole(actorRole, Role.RIDER);
+        OrderEntity order = loadOrder(orderId);
+        if (order.getRiderId() == null || !order.getRiderId().equals(actorId)) {
+            throw new NotAuthorizedException(
+                    "Only the assigned rider can release this hold.");
+        }
+        requireOwnership(order, actorId, ActorRole.RIDER, OrderStatus.ACCEPTED);
+        Long priorRiderId = order.getRiderId();
+        String priorRiderName = order.getRiderName();
+        // Atomic — another rider who clicked Accept at exactly the same
+        // moment would have failed the original `rider_id IS NULL` guard
+        // in `claim`. Releasing the hold here re-creates the same
+        // condition for the next rider.
+        @SuppressWarnings("unchecked")
+        List<Object> rows = entityManager.createNativeQuery("""
+                UPDATE orders
+                   SET rider_id   = NULL,
+                       rider_name = NULL,
+                       status     = 'ACCEPTED',
+                       held_until = NULL,
+                       picked_up_at = NULL,
+                       updated_at = CURRENT_TIMESTAMP
+                 WHERE id = :id
+                   AND rider_id = :riderId
+                   AND status = 'ASSIGNED'
+                RETURNING id
+                """)
+                .setParameter("riderId", actorId)
+                .setParameter("id", orderId)
+                .getResultList();
+        if (rows.isEmpty()) {
+            throw new InvalidTransitionException(
+                    "Could not release hold; another action may have already updated this order.");
+        }
+        // Free the rider up for another claim.
+        riderProfileRepository.findById(actorId).ifPresent(profile -> {
+            profile.setAvailable(true);
+            riderProfileRepository.save(profile);
+        });
+        entityManager.flush();
+        entityManager.clear();
+        OrderEntity released = loadOrder(orderId);
+        log.info("[ORDER_LIFECYCLE][HOLD_RELEASED] orderId={} priorRiderId={} priorRiderName={} newStatus={}",
+                released.getId(), priorRiderId, priorRiderName, released.getStatus());
+        notifyHoldReleased(released, priorRiderName);
+        // Re-broadcast to available riders so the freed order reappears
+        // in everyone's dispatch queue.
+        notifyReadyForPickup(released);
+        return OrderResponse.from(released);
     }
 
     // ---- queries --------------------------------------------------------
@@ -544,6 +656,163 @@ public class OrderServiceImpl implements OrderService {
                 riderName + " accepted order #" + order.getId() + ". Prepare pickup for dispatch.",
                 data
         );
+    }
+
+    private void notifyPickupRequested(OrderEntity order) {
+        String riderName = order.getRiderName() == null || order.getRiderName().isBlank()
+                ? "The rider"
+                : order.getRiderName();
+        String data = "{" +
+                "\"orderId\":\"" + order.getId() + "\"," +
+                "\"riderId\":\"" + order.getRiderId() + "\"," +
+                "\"sellerId\":\"" + order.getSellerId() + "\"" +
+                "}";
+        notificationService.notify(
+                order.getSellerId(),
+                "delivery",
+                "Pickup confirmation required",
+                riderName + " is at your shop and is requesting pickup confirmation for order #"
+                        + order.getId() + ".",
+                data
+        );
+        notificationService.notify(
+                order.getRiderId(),
+                "delivery",
+                "Waiting for seller confirmation",
+                "Waiting for " + order.getSellerName() + " to confirm pickup of order #"
+                        + order.getId() + ".",
+                data
+        );
+    }
+
+    private void notifyPickupConfirmed(OrderEntity order) {
+        String data = "{" +
+                "\"orderId\":\"" + order.getId() + "\"," +
+                "\"riderId\":\"" + (order.getRiderId() == null ? "" : order.getRiderId()) + "\"," +
+                "\"sellerId\":\"" + order.getSellerId() + "\"" +
+                "}";
+        if (order.getRiderId() != null) {
+            notificationService.notify(
+                    order.getRiderId(),
+                    "delivery",
+                    "Pickup confirmed",
+                    "Pickup confirmed. You have received order #" + order.getId()
+                            + " from " + order.getSellerName() + ".",
+                    data
+            );
+        }
+        notificationService.notify(
+                order.getSellerId(),
+                "delivery",
+                "Rider has picked up the order",
+                "Rider has picked up order #" + order.getId() + ".",
+                data
+        );
+        notificationService.notify(
+                order.getCustomerId(),
+                "delivery",
+                "Delivery started",
+                "Your order #" + order.getId() + " is now on its way.",
+                data
+        );
+    }
+
+    private void notifyHoldReleased(OrderEntity order, String priorRiderName) {
+        String riderLabel = priorRiderName == null || priorRiderName.isBlank()
+                ? "The rider"
+                : priorRiderName;
+        String data = "{" +
+                "\"orderId\":\"" + order.getId() + "\"," +
+                "\"sellerId\":\"" + order.getSellerId() + "\"" +
+                "}";
+        notificationService.notify(
+                order.getSellerId(),
+                "delivery",
+                "Rider released the hold",
+                riderLabel + " released the hold on order #" + order.getId()
+                        + ". The order is available again.",
+                data
+        );
+    }
+
+    /**
+     * Reap a single expired hold. Called by the scheduled
+     * {@code PickupHoldExpirationTask}. Reverts the row to {@code accepted},
+     * nulls the rider, notifies the seller and the expired rider, and
+     * re-broadcasts so other riders can pick it up.
+     *
+     * <p>Returns {@code true} if a hold was actually reverted, {@code false}
+     * otherwise (race with another transition).</p>
+     */
+    @Transactional
+    public boolean expireHold(Long orderId) {
+        OrderEntity order = loadOrder(orderId);
+        if (order.getStatus() != OrderStatus.ASSIGNED
+                && order.getStatus() != OrderStatus.PICKUP_CONFIRMATION_PENDING) {
+            return false;
+        }
+        if (order.getHeldUntil() == null
+                || order.getHeldUntil().isAfter(java.time.Instant.now())) {
+            return false;
+        }
+        Long priorRiderId = order.getRiderId();
+        String priorRiderName = order.getRiderName();
+        @SuppressWarnings("unchecked")
+        List<Object> rows = entityManager.createNativeQuery("""
+                UPDATE orders
+                   SET rider_id     = NULL,
+                       rider_name   = NULL,
+                       status       = 'ACCEPTED',
+                       held_until   = NULL,
+                       picked_up_at = NULL,
+                       updated_at   = CURRENT_TIMESTAMP
+                 WHERE id = :id
+                   AND held_until IS NOT NULL
+                   AND held_until < CURRENT_TIMESTAMP
+                   AND status IN ('ASSIGNED', 'PICKUP_CONFIRMATION_PENDING')
+                RETURNING id
+                """)
+                .setParameter("id", orderId)
+                .getResultList();
+        if (rows.isEmpty()) {
+            return false;
+        }
+        // Free the rider up for another claim.
+        if (priorRiderId != null) {
+            riderProfileRepository.findById(priorRiderId).ifPresent(profile -> {
+                profile.setAvailable(true);
+                riderProfileRepository.save(profile);
+            });
+        }
+        entityManager.flush();
+        entityManager.clear();
+        OrderEntity released = loadOrder(orderId);
+        log.info("[ORDER_LIFECYCLE][HOLD_EXPIRED] orderId={} priorRiderId={} priorRiderName={}",
+                released.getId(), priorRiderId, priorRiderName);
+        String data = "{" +
+                "\"orderId\":\"" + released.getId() + "\"," +
+                "\"sellerId\":\"" + released.getSellerId() + "\"" +
+                "}";
+        notificationService.notify(
+                released.getSellerId(),
+                "delivery",
+                "Rider hold expired",
+                "The previous rider's hold on order #" + released.getId()
+                        + " expired. The order is available again.",
+                data
+        );
+        if (priorRiderId != null) {
+            notificationService.notify(
+                    priorRiderId,
+                    "delivery",
+                    "Pickup hold expired",
+                    "Your hold on order #" + released.getId() + " expired before pickup.",
+                    data
+            );
+        }
+        // Re-broadcast to available riders.
+        notifyReadyForPickup(released);
+        return true;
     }
 
     private String buildRiderNotificationData(OrderEntity order) {

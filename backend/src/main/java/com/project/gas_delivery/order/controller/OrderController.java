@@ -138,6 +138,53 @@ public class OrderController {
         return orderService.advance(actorId, actorRole, id, req.status(), req.note());
     }
 
+    // ---- pickup confirmation flow -------------------------------------
+
+    /**
+     * Rider asks the seller to confirm physical handover. The seller
+     * still owns the {@link OrderResponse#getStatus() PICKED_UP} gate —
+     * this endpoint only flips the order into
+     * {@code PICKUP_CONFIRMATION_PENDING}.
+     */
+    @PostMapping("/{id}/request-pickup")
+    public OrderResponse requestPickup(
+            HttpServletRequest request,
+            @PathVariable Long id
+    ) {
+        Long actorId = requireActorId(request);
+        Role actorRole = requireActorRole(request);
+        return orderService.requestPickupConfirmation(actorId, actorRole, id);
+    }
+
+    /**
+     * Seller (owner) confirms the rider has physically received the
+     * order. Flips {@code PICKUP_CONFIRMATION_PENDING} →
+     * {@code PICKED_UP} and stamps {@code picked_up_at}.
+     */
+    @PostMapping("/{id}/confirm-pickup")
+    public OrderResponse confirmPickup(
+            HttpServletRequest request,
+            @PathVariable Long id
+    ) {
+        Long actorId = requireActorId(request);
+        Role actorRole = requireActorRole(request);
+        return orderService.confirmPickup(actorId, actorRole, id);
+    }
+
+    /**
+     * Rider voluntarily releases the hold. Restores the order to
+     * {@code accepted} so other eligible riders can pick it up.
+     */
+    @PostMapping("/{id}/cancel-hold")
+    public OrderResponse cancelHold(
+            HttpServletRequest request,
+            @PathVariable Long id
+    ) {
+        Long actorId = requireActorId(request);
+        Role actorRole = requireActorRole(request);
+        return orderService.cancelHold(actorId, actorRole, id);
+    }
+
     // ---- helpers --------------------------------------------------------
 
     private static Long requireActorId(HttpServletRequest request) {

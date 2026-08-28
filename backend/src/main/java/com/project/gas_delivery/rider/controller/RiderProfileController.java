@@ -5,6 +5,7 @@ import com.project.gas_delivery.auth.security.AuthFilter;
 import com.project.gas_delivery.rider.dto.AssignedSellerDto;
 import com.project.gas_delivery.rider.dto.RiderContactPatch;
 import com.project.gas_delivery.rider.dto.RiderProfileDto;
+import com.project.gas_delivery.rider.security.ApprovedRiderGuard;
 import com.project.gas_delivery.rider.service.RiderProfileService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
@@ -51,9 +52,14 @@ import java.util.Map;
 public class RiderProfileController {
 
     private final RiderProfileService riderProfileService;
+    private final ApprovedRiderGuard approvedRiderGuard;
 
-    public RiderProfileController(RiderProfileService riderProfileService) {
+    public RiderProfileController(
+            RiderProfileService riderProfileService,
+            ApprovedRiderGuard approvedRiderGuard
+    ) {
         this.riderProfileService = riderProfileService;
+        this.approvedRiderGuard = approvedRiderGuard;
     }
 
     @GetMapping("/api/riders")
@@ -74,12 +80,9 @@ public class RiderProfileController {
             @PathVariable Long riderId,
             @RequestBody Map<String, Object> body
     ) {
-        Long actorId = AuthFilter.currentActorId(request);
-        Role actorRole = AuthFilter.currentActorRole(request);
-        if (actorRole != Role.RIDER) {
-            throw new com.project.gas_delivery.order.exception.NotAuthorizedException(
-                    "Only riders can toggle availability.");
-        }
+        // Role + APPROVED check — a pending rider must not be able to
+        // self-list in the dispatch queue by flipping availability to true.
+        Long actorId = approvedRiderGuard.requireApprovedRider(request);
         Object raw = body.get("available");
         if (raw == null) {
             throw new com.project.gas_delivery.auth.exception.BadRequestException(

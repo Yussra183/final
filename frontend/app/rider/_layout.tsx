@@ -20,7 +20,6 @@ import { Drawer } from "expo-router/drawer";
 import {
   DrawerContentScrollView,
   type DrawerContentComponentProps,
-  type DrawerItem,
 } from "@react-navigation/drawer";
 import {
   ScrollView,
@@ -33,6 +32,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useStore } from "../../src/store/StoreContext";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
 import { useRiderVerificationStatus } from "../../src/hooks/useRiderVerificationStatus";
+import { RiderHeaderAvatar } from "../../src/components/RiderHeaderAvatar";
 
 interface RiderRoute {
   key: string;
@@ -42,7 +42,7 @@ interface RiderRoute {
   /**
    * Rider *business* features stay locked until the admin approves the
    * application. Account-level routes (Dashboard, Notifications,
-   * Profile, Safety Guidelines) are always reachable.
+   * Profile) are always reachable.
    */
   requiresApproval?: boolean;
 }
@@ -53,8 +53,12 @@ const RIDER_ROUTES: RiderRoute[] = [
   { key: "active-delivery", label: "Active Delivery", icon: "navigate-outline", path: "/rider/active-delivery", requiresApproval: true },
   { key: "delivery-history", label: "Delivery History", icon: "time-outline", path: "/rider/delivery-history", requiresApproval: true },
   { key: "earnings", label: "Earnings", icon: "cash-outline", path: "/rider/earnings", requiresApproval: true },
+  // Account-level route — reachable even before admin signs the rider's
+  // application off (matches the policy in the file header: Notifications,
+  // Profile, etc. are visible to every rider regardless of approval
+  // state).
+  { key: "notifications", label: "Notifications", icon: "notifications-outline", path: "/rider/notifications" },
   { key: "licences", label: "Licences", icon: "shield-checkmark-outline", path: "/rider/licences" },
-  { key: "safety-guidelines", label: "Safety Guidelines", icon: "shield-checkmark-outline", path: "/rider/safety-guidelines" },
   { key: "profile", label: "Profile", icon: "person-circle-outline", path: "/rider/profile" },
 ];
 
@@ -66,6 +70,7 @@ const ICON_MAP: Record<string, keyof typeof Ionicons.glyphMap> = {
   "cash-outline": "cash-outline",
   "shield-checkmark-outline": "shield-checkmark-outline",
   "person-circle-outline": "person-circle-outline",
+  "notifications-outline": "notifications-outline",
 };
 
 /**
@@ -98,11 +103,39 @@ function RiderDrawerContent(props: DrawerContentComponentProps) {
   return (
     <DrawerContentScrollView {...props} contentContainerStyle={styles.drawerContent}>
       <View style={styles.drawerHeader}>
-        <View style={styles.logo}>
-          <Text style={styles.logoEmoji}>🛵</Text>
+        <View style={styles.identityRow}>
+          <RiderHeaderAvatar />
+          <View style={styles.identityText}>
+            <Text style={styles.brand} numberOfLines={1}>
+              {user?.fullName ?? "Rider"}
+            </Text>
+            <Text style={styles.brandSub} numberOfLines={1}>
+              @{user?.username ?? "rider"} • Rider
+            </Text>
+            <View
+              style={[
+                styles.statusChip,
+                isApproved
+                  ? styles.statusChipApproved
+                  : styles.statusChipPending,
+              ]}
+            >
+              <View
+                style={[
+                  styles.statusDot,
+                  {
+                    backgroundColor: isApproved
+                      ? Colors.success
+                      : Colors.warning,
+                  },
+                ]}
+              />
+              <Text style={styles.statusChipText}>
+                {isApproved ? "Verified rider" : "Verification pending"}
+              </Text>
+            </View>
+          </View>
         </View>
-        <Text style={styles.brand}>Gas Delivery</Text>
-        <Text style={styles.brandSub}>Rider Portal</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.menuSection}>
@@ -181,7 +214,7 @@ export default function RiderLayout() {
       <TypedDrawer.Screen name="active-delivery" />
       <TypedDrawer.Screen name="delivery-history" />
       <TypedDrawer.Screen name="earnings" />
-      <TypedDrawer.Screen name="safety-guidelines" />
+      <TypedDrawer.Screen name="notifications" />
       <TypedDrawer.Screen name="my-team" />
       <TypedDrawer.Screen name="licences" />
       <TypedDrawer.Screen name="profile" />
@@ -201,25 +234,49 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     marginHorizontal: 0,
   },
-  logo: {
-    width: 56,
-    height: 56,
-    borderRadius: Radius.lg,
-    backgroundColor: "#FFFFFF",
+  identityRow: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  logoEmoji: { fontSize: 28 },
+  identityText: {
+    flex: 1,
+  },
   brand: {
     color: Colors.textInverse,
-    fontSize: FontSize.xl,
+    fontSize: FontSize.lg,
     fontWeight: "800",
   },
   brandSub: {
     color: "#D1FAE5",
     fontSize: FontSize.sm,
     marginTop: 2,
+  },
+  statusChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    marginTop: Spacing.sm,
+  },
+  statusChipApproved: {
+    backgroundColor: "rgba(255,255,255,0.25)",
+  },
+  statusChipPending: {
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusChipText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.xs,
+    fontWeight: "700",
   },
   menuSection: {
     paddingHorizontal: Spacing.sm,

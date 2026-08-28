@@ -45,8 +45,13 @@ export const ORDER_TRANSITIONS: ReadonlyArray<TransitionRule> = [
   { from: "pending", to: "cancelled", actors: ["customer"] },
   // A rider claims an accepted order.
   { from: "accepted", to: "assigned", actors: ["rider"] },
+  // Rider voluntarily releases the hold so another rider can pick it up.
+  { from: "assigned", to: "accepted", actors: ["rider"] },
+  // Rider signals arrival and asks the seller for physical handover.
+  { from: "assigned", to: "pickup_pending", actors: ["rider"] },
+  // Seller confirms the rider physically received the order.
+  { from: "pickup_pending", to: "picked_up", actors: ["seller"] },
   // Rider updates delivery progress.
-  { from: "assigned", to: "picked_up", actors: ["rider"] },
   { from: "picked_up", to: "in_transit", actors: ["rider"] },
   { from: "in_transit", to: "delivered", actors: ["rider"] },
 ];
@@ -81,6 +86,8 @@ export const orderStatusLabel = (s: OrderStatus): string => {
       return "Accepted";
     case "assigned":
       return "Rider Assigned";
+    case "pickup_pending":
+      return "Awaiting Pickup Confirmation";
     case "picked_up":
       return "Picked Up";
     case "in_transit":
@@ -103,6 +110,8 @@ export const orderTone = (s: OrderStatus): Tone => {
     case "accepted":
     case "assigned":
       return "info";
+    case "pickup_pending":
+      return "warning";
     case "picked_up":
     case "in_transit":
       return "primary";

@@ -69,7 +69,8 @@ export default function ActiveDelivery() {
   const router = useRouter();
   const navigation = useNavigation<DrawerNavigationProp<any>>();
   const { id } = useLocalSearchParams<{ id?: string }>();
-  const { orders, advanceDelivery, session } = useStore();
+  const { orders, advanceDelivery, session, requestPickupConfirmation, cancelHold } =
+    useStore();
   const order = id ? orders.find((o) => o.id === id) : undefined;
   // Verification status — keeps the existing disabled gates on the
   // action buttons, plus the inline lock banner + modal that explain
@@ -219,6 +220,39 @@ export default function ActiveDelivery() {
     order.status !== "delivered" &&
     order.status !== "cancelled" &&
     order.status !== "rejected";
+
+  // Pickup hold countdown. Only meaningful for the pre-pickup phases —
+  // the server reverts to `accepted` automatically when this hits zero,
+  // so the value is purely visual.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (
+      order?.status !== "assigned" &&
+      order?.status !== "pickup_pending"
+    ) {
+      return;
+    }
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [order?.status]);
+  const heldUntilMs = order?.heldUntil
+    ? new Date(order.heldUntil).getTime()
+    : null;
+  const remainingMs =
+    heldUntilMs == null ? null : Math.max(0, heldUntilMs - now);
+  const remainingLabel =
+    remainingMs == null
+      ? null
+      : (() => {
+          const totalSec = Math.ceil(remainingMs / 1000);
+          const m = Math.floor(totalSec / 60);
+          const s = totalSec % 60;
+          return `${m}:${s.toString().padStart(2, "0")}`;
+        })();
+
+  const showPickupSection =
+    isRiderAssignee &&
+    (order.status === "assigned" || order.status === "pickup_pending");
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -371,6 +405,105 @@ export default function ActiveDelivery() {
           <Text style={styles.value}>{order.sellerName}</Text>
         </Card>
 
+        {showPickupSection ? (
+          <Card style={{ marginTop: Spacing.md }}>
+            <View style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.heading}>
+                  {order.status === "pickup_pending"
+                    ? "Waiting for seller confirmation"
+                    : "Pickup"}
+                </Text>
+                <Text style={styles.sub}>
+                  {order.status === "pickup_pending"
+                    ? `${order.sellerName} has been notified. Confirm pickup on arrival so they can hand over the package.`
+                    : `Travel to ${order.sellerName} and request pickup when you arrive. The seller will confirm the handover.`}
+                </Text>
+              </View>
+            </View>
+            {remainingLabel ? (
+              <Text style={styles.holdTimer}>
+                Hold expires in {remainingLabel}
+              </Text>
+            ) : null}
+            <View style={{ marginTop: Spacing.md, gap: Spacing.sm }}>
+              {order.status === "assigned" ? (
+                <AppButton
+                  title="Request Pickup Confirmation"
+                  fullWidth
+                  disabled={!isApproved}
+                  onPress={async () => {
+                    if (!isApproved) {
+                      onLockedAction();
+                      return;
+                    }
+                    try {
+                      await requestPickupConfirmation(order.id);
+                      Alert.alert(
+                        "Pickup requested",
+                        `${order.sellerName} has been notified.`,
+                      );
+                    } catch (err) {
+                      const code =
+                        err instanceof OrderServiceError ? err.code : undefined;
+                      const message =
+                        code === "INVALID_TRANSITION"
+                          ? "Your hold on this order has expired. Return to the requests list."
+                          : (err as Error)?.message ??
+                            "Could not request pickup confirmation.";
+                      Alert.alert("Could not request pickup", message);
+                    }
+                  }}
+                />
+              ) : (
+                <View style={styles.waitingPill}>
+                  <Ionicons
+                    name="hourglass-outline"
+                    size={18}
+                    color={Colors.warning}
+                  />
+                  <Text style={styles.waitingText}>
+                    Waiting for {order.sellerName} to confirm…
+                  </Text>
+                </View>
+              )}
+              <AppButton
+                title="Cancel Hold"
+                variant="outline"
+                fullWidth
+                disabled={!isApproved}
+                onPress={() => {
+                  if (!isApproved) {
+                    onLockedAction();
+                    return;
+                  }
+                  Alert.alert(
+                    "Release this hold?",
+                    "The order will return to the available queue so another rider can pick it up.",
+                    [
+                      { text: "Keep hold", style: "cancel" },
+                      {
+                        text: "Release",
+                        style: "destructive",
+                        onPress: async () => {
+                          try {
+                            await cancelHold(order.id);
+                          } catch (err) {
+                            Alert.alert(
+                              "Could not release hold",
+                              (err as Error)?.message ?? "Please try again.",
+                            );
+                          }
+                        },
+                      },
+                    ],
+                  );
+                }}
+              />
+            </View>
+          </Card>
+        ) : null}
+
         <Card style={{ marginTop: Spacing.md }}>
           <Text style={styles.heading}>Delivery progress</Text>
           <OrderStatusTimeline order={order} compact />
@@ -501,5 +634,27 @@ const styles = StyleSheet.create({
   },
   cardLocked: {
     opacity: 0.55,
+  },
+  holdTimer: {
+    marginTop: Spacing.md,
+    color: Colors.warning,
+    fontWeight: "800",
+    fontSize: FontSize.md,
+  },
+  waitingPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: 12,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.warning + "1A",
+    borderWidth: 1,
+    borderColor: Colors.warning,
+  },
+  waitingText: {
+    color: Colors.text,
+    fontWeight: "700",
+    flex: 1,
   },
 });

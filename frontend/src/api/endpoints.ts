@@ -583,6 +583,31 @@ export const OrdersApi = {
     api.post<Order>(`/api/orders/${id}/claim`, { riderId, riderName }),
 
   /**
+   * Rider (assignee) signals arrival at the seller and asks the seller
+   * to confirm physical handover. The server only flips the order to
+   * `pickup_pending` — the seller still owns the `picked_up` gate.
+   */
+  requestPickup: (id: string) =>
+    api.post<Order>(`/api/orders/${id}/request-pickup`, {}),
+
+  /**
+   * Seller (owner) confirms the rider has physically received the
+   * order. Server enforces: only the order's seller can confirm; the
+   * order must be in `pickup_pending`; the action is idempotent at
+   * the SQL level.
+   */
+  confirmPickup: (id: string) =>
+    api.post<Order>(`/api/orders/${id}/confirm-pickup`, {}),
+
+  /**
+   * Rider voluntarily releases the hold so other riders can pick the
+   * order up. Server enforces: only the assignee can release; the
+   * order must be in `assigned`.
+   */
+  cancelHold: (id: string) =>
+    api.post<Order>(`/api/orders/${id}/cancel-hold`, {}),
+
+  /**
    * Backend's proximity-ranked queue of orders a rider is eligible to
    * claim. Filter is optional — the server applies a default radius.
    */

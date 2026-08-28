@@ -4,6 +4,8 @@ import com.project.gas_delivery.auth.enums.Role;
 import com.project.gas_delivery.order.entity.OrderEntity;
 import com.project.gas_delivery.order.enums.OrderStatus;
 import com.project.gas_delivery.order.repository.OrderRepository;
+import com.project.gas_delivery.permit.enums.PermitStatus;
+import com.project.gas_delivery.permit.repository.RiderApplicationRepository;
 import com.project.gas_delivery.supplier.entity.DeliveryTripEntity;
 import com.project.gas_delivery.supplier.enums.DeliveryTripStatus;
 import com.project.gas_delivery.supplier.repository.DeliveryTripRepository;
@@ -114,6 +116,7 @@ public class DeliveryTrackingService {
     private final OrderRepository orderRepository;
     private final DeliveryTripRepository tripRepository;
     private final DeliveryTripStopRepository tripStopRepository;
+    private final RiderApplicationRepository riderApplicationRepository;
     private final TrackingBroadcaster broadcaster;
     private final TrackingSessionRegistry sessionRegistry;
     private final ObjectMapper objectMapper;
@@ -122,6 +125,7 @@ public class DeliveryTrackingService {
             OrderRepository orderRepository,
             DeliveryTripRepository tripRepository,
             DeliveryTripStopRepository tripStopRepository,
+            RiderApplicationRepository riderApplicationRepository,
             TrackingBroadcaster broadcaster,
             TrackingSessionRegistry sessionRegistry,
             ObjectMapper objectMapper
@@ -129,6 +133,7 @@ public class DeliveryTrackingService {
         this.orderRepository = orderRepository;
         this.tripRepository = tripRepository;
         this.tripStopRepository = tripStopRepository;
+        this.riderApplicationRepository = riderApplicationRepository;
         this.broadcaster = broadcaster;
         this.sessionRegistry = sessionRegistry;
         this.objectMapper = objectMapper;
@@ -161,6 +166,17 @@ public class DeliveryTrackingService {
         if (order.getRiderId() == null || !order.getRiderId().equals(actorId)) {
             throw new TrackingForbiddenException(
                     "Only the assigned rider can send location updates.");
+        }
+        // Defence-in-depth — even if the rider was approved when they
+        // claimed the order, an admin can flip their application back to
+        // REJECTED afterwards. The claim path is gated, but the GPS path
+        // historically was not. Lock it down here so the rider cannot
+        // keep broadcasting after losing their approval.
+        if (!riderApplicationRepository
+                .findRiderIdsByStatus(PermitStatus.APPROVED)
+                .contains(actorId)) {
+            throw new TrackingForbiddenException(
+                    "Your rider application is not approved.");
         }
         if (isTerminal(order.getStatus())) {
             // Reject silently — the rider app will already have stopped
@@ -369,6 +385,16 @@ public class DeliveryTrackingService {
         if (!isAssignedRider && !isOwningSupplier) {
             throw new TrackingForbiddenException(
                     "Only the trip's assigned rider or owning supplier can publish location.");
+        }
+        // Mirror the order-keyed APPROVED check above for the rider path.
+        // The supplier has its own verification gate; we only enforce
+        // here that a rider who lost their approval cannot keep streaming
+        // a trip's GPS after the fact.
+        if (isAssignedRider && !riderApplicationRepository
+                .findRiderIdsByStatus(PermitStatus.APPROVED)
+                .contains(actorId)) {
+            throw new TrackingForbiddenException(
+                    "Your rider application is not approved.");
         }
 
         LocationUpdateMessage accepted = latestByTrip.compute(tripId, (id, prev) -> {

@@ -52,6 +52,7 @@ export interface LiveDeliveryTrackerProps {
     | "pending"
     | "accepted"
     | "assigned"
+    | "pickup_pending"
     | "picked_up"
     | "in_transit"
     | "delivered"
