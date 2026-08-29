@@ -217,41 +217,6 @@ export function NearbySellersMap({
 }: NearbySellersMapProps) {
   const mapRef = useRef<MapView | null>(null);
 
-  useEffect(() => {
-    if (typeof __DEV__ === "undefined" || !__DEV__) return;
-    console.log("[SELLER_DEBUG][MAP]", {
-      mapCenterLat: center.lat,
-      mapCenterLng: center.lng,
-      sellerLat: markers[0]?.lat ?? null,
-      sellerLng: markers[0]?.lng ?? null,
-      markerCount: markers.length,
-    });
-    console.log("[MAP_CAMERA_DEBUG]", {
-      mapCenterLat: center.lat,
-      mapCenterLng: center.lng,
-      sellerLat: markers[0]?.lat ?? null,
-      sellerLng: markers[0]?.lng ?? null,
-      markerCount: markers.length,
-    });
-  }, [center.lat, center.lng, markers]);
-
-  useEffect(() => {
-    if (typeof __DEV__ === "undefined" || !__DEV__) return;
-    markers.forEach((seller) => {
-      const latitude = Number(seller.lat);
-      const longitude = Number(seller.lng);
-      console.log("[SELLER_DEBUG][COORDINATES]", {
-        id: seller.id,
-        latitude,
-        longitude,
-        latitudeFinite: Number.isFinite(latitude),
-        longitudeFinite: Number.isFinite(longitude),
-        locationStatus: (seller as NearbySellerMarker & { locationStatus?: "OK" | "MISSING" })
-          .locationStatus ?? "OK",
-      });
-    });
-  }, [markers]);
-
   // Filter once. The Home page already filters out non-finite coords,
   // but we double-check here so the bbox/fit math never chokes.
   const finiteMarkers = useMemo(
@@ -583,8 +548,15 @@ export function NearbySellersMap({
       >
         {clusteredMarkers.map((m) => {
           const richName = m.name ?? m.label;
-          const latitude = Number(m.lat);
-          const longitude = Number(m.lng);
+          // Cluster helper assigns `_renderCoord` so two sellers
+          // sharing the same GPS point render side-by-side instead
+          // of stacking into a single invisible pin. Fall back to
+          // the marker's own lat/lng when no offset was assigned.
+          const renderCoord =
+            (m as NearbySellerMarker & { _renderCoord?: { lat: number; lng: number } })._renderCoord ??
+            { lat: m.lat, lng: m.lng };
+          const latitude = Number(renderCoord.lat);
+          const longitude = Number(renderCoord.lng);
           const showAlertBadge =
             m.hasAlert === true ||
             (typeof m.badgeCount === "number" && m.badgeCount > 0) ||
@@ -596,29 +568,37 @@ export function NearbySellersMap({
               : m.status === "Closed"
                 ? Colors.border
                 : m.color ?? "#0F766E";
-          const locationStatus = (
-            m as NearbySellerMarker & { locationStatus?: "OK" | "MISSING" }
-          ).locationStatus ?? "OK";
-          if (typeof __DEV__ !== "undefined" && __DEV__) {
-            console.log("[SELLER_MARKER_DEBUG]", {
-                sellerId: m.id,
-                sellerName: richName ?? null,
-                latitude,
-                longitude,
-                locationStatus,
-                markerCount: clusteredMarkers.length,
-            });
-          }
           if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
             return null;
           }
+          // Clamp the rendered coordinate to the Unguja box. Without
+          // this, a seller whose saved coords are slightly off-island
+          // (e.g. a freshly-geocoded row that hasn't snapped to the
+          // centroid yet) renders a pin in the Indian Ocean and is
+          // effectively invisible. The marker keeps its original
+          // `lat`/`lng` for clustering; only the rendered pin moves.
+          const pinCoord = clampCoordToUnguja({ latitude, longitude });
           return (
             <Marker
               key={`seller-${m.id}`}
-              coordinate={{ latitude, longitude }}
+              coordinate={{ latitude: pinCoord.lat, longitude: pinCoord.lng }}
               anchor={{ x: 0.5, y: 1 }}
+              // Default `tracksViewChanges` on Android is `true`.
+              // We keep it that way because the marker carries
+              // CUSTOM CHILDREN (a coloured bubble + label). With
+              // `false`, Android skips the initial `setNativeProps`
+              // pass that commits the child View tree, and the pin
+              // never paints on first render.
+              //
+              // The previous stack-overflow error came from a
+              // different combination: a per-render `__DEV__`
+              // `console.log` inside this render path + frequent
+              // parent re-renders driven by the gas-filter chip
+              // strip. Both have been removed, so the marker View
+              // tree is now stable across renders and `tracksViewChanges`
+              // defaults no longer cause a recursion.
               tracksViewChanges
-              tracksInfoWindowChanges
+              tracksInfoWindowChanges={false}
               onPress={(e) => {
                 e?.stopPropagation?.();
                 onMarkerTap?.(m.id);

@@ -57,10 +57,12 @@ import {
 import { TrackingApi } from "../../src/api/endpoints";
 import { useRiderLock } from "../../src/hooks/useRiderLock";
 
-type ProgressStatus = "picked_up" | "in_transit" | "delivered";
+type ProgressStatus = "in_transit" | "delivered";
 
+// `picked_up` is deliberately absent: only the SELLER can move an order
+// into `picked_up`, by confirming physical handover. The rider's path to
+// that state is "Request Pickup Confirmation" in the pickup card below.
 const STEP_BUTTONS: { status: ProgressStatus; label: string }[] = [
-  { status: "picked_up", label: "Mark as Picked Up" },
   { status: "in_transit", label: "Start Delivery" },
   { status: "delivered", label: "Mark as Delivered" },
 ];
@@ -192,6 +194,25 @@ export default function ActiveDelivery() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Pickup hold countdown. Only meaningful for the pre-pickup phases —
+  // the server reverts to `accepted` automatically when this hits zero,
+  // so the value is purely visual.
+  //
+  // These hooks MUST run before any early-return so the hook count is
+  // stable across renders (rules-of-hooks). When `order` is undefined
+  // the effect short-circuits and the timer is never started.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (
+      order?.status !== "assigned" &&
+      order?.status !== "pickup_pending"
+    ) {
+      return;
+    }
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [order?.status]);
+
   if (!order) {
     return (
       <SafeAreaEmpty
@@ -204,7 +225,6 @@ export default function ActiveDelivery() {
   }
 
   const nextStep = STEP_BUTTONS.find((s) => {
-    if (s.status === "picked_up") return order.status === "assigned";
     if (s.status === "in_transit") return order.status === "picked_up";
     if (s.status === "delivered") return order.status === "in_transit";
     return false;
@@ -215,27 +235,16 @@ export default function ActiveDelivery() {
   // seeing it (the gate is also enforced server-side).
   const isRiderAssignee =
     !!session?.user?.id && session.user.id === order.riderId;
-  const showTrackingCta =
-    isRiderAssignee &&
-    order.status !== "delivered" &&
-    order.status !== "cancelled" &&
-    order.status !== "rejected";
+  // The pickup gate, mirrored from the server. GPS only becomes
+  // available once the SELLER has confirmed handover, so holding the
+  // order or merely arriving at the seller must not expose the control.
+  // `DeliveryTrackingService.ingest` rejects samples in any other state,
+  // so this is presentation only — the backend is authoritative.
+  const isPickupConfirmed =
+    order.status === "picked_up" || order.status === "in_transit";
+  const showTrackingCta = isRiderAssignee && isPickupConfirmed;
 
-  // Pickup hold countdown. Only meaningful for the pre-pickup phases —
-  // the server reverts to `accepted` automatically when this hits zero,
-  // so the value is purely visual.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (
-      order?.status !== "assigned" &&
-      order?.status !== "pickup_pending"
-    ) {
-      return;
-    }
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [order?.status]);
-  const heldUntilMs = order?.heldUntil
+  const heldUntilMs = order.heldUntil
     ? new Date(order.heldUntil).getTime()
     : null;
   const remainingMs =
@@ -318,7 +327,7 @@ export default function ActiveDelivery() {
                 <Text style={styles.sub}>
                   {trackingActive
                     ? "Your live location is being shared with the customer and seller."
-                    : "Start GPS tracking so the customer and seller can see you on the map."}
+                    : "Pickup confirmed. Please turn on GPS tracking so the customer and seller can see you on the map."}
                 </Text>
               </View>
               <Ionicons
@@ -426,6 +435,18 @@ export default function ActiveDelivery() {
                 Hold expires in {remainingLabel}
               </Text>
             ) : null}
+            {/* The GPS gate, explained. The rider sees why tracking is
+                unavailable rather than just a missing button. */}
+            <View style={styles.gpsLockedPill}>
+              <Ionicons
+                name="location-outline"
+                size={18}
+                color={Colors.textSecondary}
+              />
+              <Text style={styles.gpsLockedText}>
+                GPS tracking will start after the seller confirms pickup.
+              </Text>
+            </View>
             <View style={{ marginTop: Spacing.md, gap: Spacing.sm }}>
               {order.status === "assigned" ? (
                 <AppButton
@@ -655,6 +676,24 @@ const styles = StyleSheet.create({
   waitingText: {
     color: Colors.text,
     fontWeight: "700",
+    flex: 1,
+  },
+  gpsLockedPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+    paddingVertical: 12,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.border + "40",
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  gpsLockedText: {
+    color: Colors.textSecondary,
+    fontWeight: "600",
+    fontSize: FontSize.xs,
     flex: 1,
   },
 });

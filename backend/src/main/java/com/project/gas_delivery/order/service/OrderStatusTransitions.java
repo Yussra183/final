@@ -39,28 +39,28 @@ public final class OrderStatusTransitions {
         RULES.put(OrderStatus.ACCEPTED,
                 Map.of(OrderStatus.ASSIGNED, EnumSet.of(ActorRole.RIDER)));
 
-        // ASSIGNED → PICKUP_CONFIRMATION_PENDING — rider asks the seller
-        // for handover. The system treats this as a server-side signal
-        // that the rider has reached the pickup point.
-        RULES.put(OrderStatus.ASSIGNED,
-                Map.of(
-                        OrderStatus.PICKUP_CONFIRMATION_PENDING,
-                        EnumSet.of(ActorRole.RIDER)
-                ));
+        // ASSIGNED — two legal exits for the rider. Both live in ONE map:
+        //   • PICKUP_CONFIRMATION_PENDING — rider reached the seller and
+        //     asks for physical handover.
+        //   • ACCEPTED — rider voluntarily releases the hold. The
+        //     expiration sweep reuses the same back-transition.
+        // These were previously two separate RULES.put(ASSIGNED, …) calls,
+        // where the second silently clobbered the first and made
+        // "Request Pickup Confirmation" an illegal transition.
+        Map<OrderStatus, Set<ActorRole>> fromAssigned = new EnumMap<>(OrderStatus.class);
+        fromAssigned.put(OrderStatus.PICKUP_CONFIRMATION_PENDING, EnumSet.of(ActorRole.RIDER));
+        fromAssigned.put(OrderStatus.ACCEPTED, EnumSet.of(ActorRole.RIDER));
+        RULES.put(OrderStatus.ASSIGNED, fromAssigned);
 
-        // PICKUP_CONFIRMATION_PENDING → PICKED_UP — only the seller can
-        // confirm that physical handover happened. The rider's own
-        // confirmation is intentionally NOT a valid transition.
-        RULES.put(OrderStatus.PICKUP_CONFIRMATION_PENDING,
-                Map.of(
-                        OrderStatus.PICKED_UP,
-                        EnumSet.of(ActorRole.SELLER)
-                ));
-
-        // ASSIGNED → ACCEPTED — rider voluntarily releases the hold.
-        // The expiration sweep reuses the same back-transition.
-        RULES.put(OrderStatus.ASSIGNED,
-                Map.of(OrderStatus.ACCEPTED, EnumSet.of(ActorRole.RIDER)));
+        // PICKUP_CONFIRMATION_PENDING — only the seller can confirm that
+        // physical handover happened; the rider's own confirmation is
+        // intentionally NOT a valid transition. The rider may still
+        // release the hold, and the expiration sweep reuses that same
+        // back-transition when the deadline passes.
+        Map<OrderStatus, Set<ActorRole>> fromPickupPending = new EnumMap<>(OrderStatus.class);
+        fromPickupPending.put(OrderStatus.PICKED_UP, EnumSet.of(ActorRole.SELLER));
+        fromPickupPending.put(OrderStatus.ACCEPTED, EnumSet.of(ActorRole.RIDER));
+        RULES.put(OrderStatus.PICKUP_CONFIRMATION_PENDING, fromPickupPending);
 
         // PICKED_UP → IN_TRANSIT → DELIVERED — rider milestones
         RULES.put(OrderStatus.PICKED_UP,

@@ -21,7 +21,7 @@
  * right. The drawer (and its hamburger) is gone; logout now lives
  * inside the Profile tab.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FlatList,
   Pressable,
@@ -31,7 +31,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
   Colors,
@@ -56,9 +56,10 @@ import { identityColor } from "../../../src/lib/identityColor";
 import {
   gasBrandsForSellerInventory,
   gasSizesForSellerInventory,
+  eligibleSellersForGas,
+  availableGasPairsForSellers,
 } from "../../../src/utils/sellers";
 import {
-  UNGUJA_PLACES,
   nearestPlaceName,
 } from "../../../src/lib/ungujaPlaces";
 import { isFiniteNumber } from "../../../src/components/mapPickerBridge";
@@ -66,6 +67,10 @@ import type { NearbySeller } from "../../../src/utils/sellers";
 
 export default function CustomerHome() {
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    gasBrand?: string | string[];
+    cylinderSize?: string | string[];
+  }>();
   const { session, getNotificationsForUser, sellers: storeSellers, products } =
     useStore();
 
@@ -97,6 +102,70 @@ export default function CustomerHome() {
   const { sellers, usingDefaultLocation, effectiveLocation } =
     useNearbySellers(apiSellers);
 
+  // Gas filter — `null` means "show every approved seller in range,
+  // exactly as before this refactor". When both fields are set, the
+  // `eligibleSellers` memo below layers the four-key inventory
+  // predicate over the server-validated seller pool.
+  const [gasBrand, setGasBrand] = useState<string | null>(null);
+  const [cylinderSize, setCylinderSize] = useState<string | null>(null);
+  // Bolt-lite: highlighted seller (tapped on the map or in the sheet)
+  // — used to paint both the pin and the matching card in the
+  // selected colour. Declared here so the stale-selection `useEffect`
+  // below can reference it; the original useState lived further down.
+  const [selectedSellerId, setSelectedSellerId] = useState<string | null>(
+    null,
+  );
+
+  // One-shot bootstrap from URL params — the seller-details screen's
+  // "View eligible sellers" CTA pushes here with the same chip
+  // pre-selected so the customer lands on Home with the filter still
+  // active. We snapshot the params on first render only; later
+  // navigation between Home ↔ details ↔ place-order never re-applies
+  // them so the chip stays exactly where the customer left it.
+  useEffect(() => {
+    const gb = Array.isArray(params.gasBrand) ? params.gasBrand[0] : params.gasBrand;
+    const cs = Array.isArray(params.cylinderSize)
+      ? params.cylinderSize[0]
+      : params.cylinderSize;
+    if (gb && cs) {
+      setGasBrand(gb);
+      setCylinderSize(cs);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Gas inventory overlay. The server-validated `sellers` pool above
+  // is the authoritative result — distance, radius, active/open rules
+  // are owned by `useNearbySellers` / `SellersApi.list`. The gas
+  // filter is layered on top using the already-loaded `products`
+  // slice so we never make a second network round-trip just to ask
+  // "who stocks X". When no chip is active, `eligibleSellers ===
+  // sellers` byte-for-byte, preserving today's initial render.
+  const eligibleSellers = useMemo<NearbySeller[]>(() => {
+    if (!gasBrand || !cylinderSize) return sellers;
+    return eligibleSellersForGas(sellers, products, gasBrand, cylinderSize);
+  }, [sellers, products, gasBrand, cylinderSize]);
+
+  // Stock-derived chip list — one entry per (brand, size) that at
+  // least one nearby seller currently carries. Re-derives on
+  // `apiSellers` / `products` changes so a fresh refresh of either
+  // slice shows the chips the customer can actually order today.
+  const gasPairs = useMemo(
+    () => availableGasPairsForSellers(apiSellers, products),
+    [apiSellers, products],
+  );
+
+  // Stale-selection handling: if the customer has a highlighted
+  // seller (tapped on the map / sheet) and the active gas filter
+  // excludes them, drop the highlight so the customer is not nudged
+  // into a seller that can't fulfil the chosen gas.
+  useEffect(() => {
+    if (!selectedSellerId) return;
+    if (!eligibleSellers.some((s) => s.id === selectedSellerId)) {
+      setSelectedSellerId(null);
+    }
+  }, [eligibleSellers, selectedSellerId]);
+
   // Live device location — drives the "You" pin on the map. Once
   // permission is granted this hook subscribes to watchPositionAsync,
   // so the pin keeps moving with the customer (throttled to 3 s / 5 m).
@@ -112,21 +181,9 @@ export default function CustomerHome() {
   // recentre target).
   const [sheetOpen, setSheetOpen] = useState(false);
   const [recenterToken, setRecenterToken] = useState(0);
-  // Place-chip selection state is kept so the chip strip still shows
-  // its active highlight, but it no longer drives a camera recentre —
-  // the map stays framed on "user + all nearby sellers" at all times.
-  // Tapping a seller pin still opens the seller-details screen via
-  // `onMarkerTap` below.
-  const [activePlaceId, setActivePlaceId] = useState<string | null>(null);
   // Bolt-lite: privacy-style toggle that hides the customer's "You"
   // pin AND the underlying native blue dot together. Default ON.
   const [showUserPin, setShowUserPin] = useState(true);
-  // Bolt-lite: highlighted seller (tapped on the map or in the sheet)
-  // — used to paint both the pin and the matching card in the
-  // selected colour.
-  const [selectedSellerId, setSelectedSellerId] = useState<string | null>(
-    null,
-  );
 
   const user = session?.user;
   const unreadCount = user
@@ -142,8 +199,12 @@ export default function CustomerHome() {
   // Bolt-lite: also carry the business name, open/closed status,
   // distance, and cylinder sizes through to the marker so the
   // `<NearbySellersMap>` can render richer pin labels.
+  // Gas filter: the marker list now derives from `eligibleSellers`
+  // (server-validated pool + inventory overlay). When no chip is
+  // active this is byte-for-byte identical to the previous
+  // `sellers`-driven mapper.
   const { mappedMarkers, mappedSellers } = useMemo(() => {
-    const mapped: NearbySellerMarker[] = sellers
+    const mapped: NearbySellerMarker[] = eligibleSellers
       .filter(
         (s) => isFiniteNumber(s.lat) && isFiniteNumber(s.lng),
       )
@@ -164,40 +225,8 @@ export default function CustomerHome() {
           locationStatus: "OK",
         };
       });
-    if (__DEV__) {
-      console.log(
-        "[SELLER_DEBUG][MARKERS]",
-        mapped.map((m) => ({
-          id: m.id,
-          name: m.name,
-          lat: m.lat,
-          lng: m.lng,
-          locationStatus: m.locationStatus ?? "OK",
-        })),
-      );
-      // Diagnostic: log every approved seller that reached the
-      // marker mapper so we can confirm each one carries its OWN
-      // lat/lng (and that all of them reach the map, not just one).
-      // Wrapped in __DEV__ so this never ships to production
-      // bundles.
-      console.info(
-        "[CUSTOMER_HOME][NEARBY_SELLERS_MARKERS]",
-        JSON.stringify({
-          totalSellersReturned: sellers.length,
-          markersGenerated: mapped.length,
-          missingLocationSellers: sellers.length - mapped.length,
-          markers: mapped.map((m) => ({
-            id: m.id,
-            name: m.name,
-            lat: m.lat,
-            lng: m.lng,
-            locationStatus: m.locationStatus,
-          })),
-        }),
-      );
-    }
-    return { mappedMarkers: mapped, mappedSellers: sellers };
-  }, [sellers, storeSellers]);
+    return { mappedMarkers: mapped, mappedSellers: eligibleSellers };
+  }, [eligibleSellers]);
 
   // Open the seller-details screen with the tapped id. From the
   // sheet we close the bottom sheet first so the route push doesn't
@@ -332,61 +361,81 @@ export default function CustomerHome() {
         </View>
       </View>
 
-      {/* ---------------- Places chip strip ---------------- */}
-      {/* Horizontal scroll of Unguja places; tap a chip to recentre
-          the map on that place. The active chip is highlighted. */}
-      <View style={styles.placesWrap}>
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={UNGUJA_PLACES}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.placesList}
-          renderItem={({ item }) => {
-            const active = item.id === activePlaceId;
-            return (
-              <PressableScale
+      {/* ---------------- Gas filter chip strip ---------------- */}
+      {/* Inventory-driven filter: one chip per (brand, size) that at
+          least one nearby seller currently stocks. Tapping a chip
+          narrows the map + bottom-sheet list to sellers that actually
+          have that gas in stock; tapping the active chip clears the
+          filter (returns to today's full pool). No chip is rendered
+          when no nearby seller has any in-stock gas — the screen
+          stays byte-for-byte identical to the pre-refactor build. */}
+      {gasPairs.length > 0 ? (
+        <View style={styles.gasWrap}>
+          <View style={styles.gasHeader}>
+            <Ionicons name="flame-outline" size={14} color={Colors.primary} />
+            <Text style={styles.gasHeaderText}>Filter by gas</Text>
+            {gasBrand && cylinderSize ? (
+              <TouchableOpacity
                 onPress={() => {
-                  // Toggle: tapping the same chip again clears it and
-                  // the map returns to the bbox-fit view.
-                  setActivePlaceId((current) =>
-                    current === item.id ? null : item.id,
-                  );
+                  setGasBrand(null);
+                  setCylinderSize(null);
                 }}
-                style={StyleSheet.flatten([
-                  styles.placeChip,
-                  active && styles.placeChipActive,
-                ])}
                 accessibilityRole="button"
-                accessibilityLabel={`Centre map on ${item.name}`}
+                accessibilityLabel="Clear gas filter"
               >
-                <Ionicons
-                  name={
-                    active
-                      ? "location"
-                      : item.region === "Zanzibar City"
-                      ? "business"
-                      : item.region === "North" || item.region === "South"
-                      ? "sunny-outline"
-                      : "navigate-outline"
-                  }
-                  size={12}
-                  color={active ? "#FFF" : Colors.primary}
-                />
-                <Text
-                  style={[
-                    styles.placeChipText,
-                    active && styles.placeChipTextActive,
-                  ]}
-                  numberOfLines={1}
+                <Text style={styles.gasClearText}>Clear</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <FlatList
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            data={gasPairs}
+            keyExtractor={(item) => `${item.brand}|${item.size}`}
+            contentContainerStyle={styles.gasList}
+            renderItem={({ item }) => {
+              const active = gasBrand === item.brand && cylinderSize === item.size;
+              return (
+                <PressableScale
+                  onPress={() => {
+                    // Toggle: tapping the active chip clears the
+                    // filter; tapping any other chip activates it.
+                    if (active) {
+                      setGasBrand(null);
+                      setCylinderSize(null);
+                    } else {
+                      setGasBrand(item.brand);
+                      setCylinderSize(item.size);
+                    }
+                  }}
+                  style={StyleSheet.flatten([
+                    styles.gasChip,
+                    active && styles.gasChipActive,
+                  ])}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`Filter by ${item.brand} ${item.size}`}
                 >
-                  {item.name}
-                </Text>
-              </PressableScale>
-            );
-          }}
-        />
-      </View>
+                  <Ionicons
+                    name="flame"
+                    size={12}
+                    color={active ? "#FFF" : Colors.primary}
+                  />
+                  <Text
+                    style={[
+                      styles.gasChipText,
+                      active && styles.gasChipTextActive,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.brand.replace(" Gas", "")} • {item.size}
+                  </Text>
+                </PressableScale>
+              );
+            }}
+          />
+        </View>
+      ) : null}
 
       {/* ---------------- Map ---------------- */}
       <View style={styles.mapWrap}>
@@ -484,6 +533,8 @@ export default function CustomerHome() {
                   ? "Set a delivery address to see sellers"
                   : mappedSellers.length === 0
                   ? "No sellers yet"
+                  : gasBrand && cylinderSize
+                  ? `No sellers have ${gasBrand} ${cylinderSize} in stock`
                   : "No sellers in your area"}
               </Text>
               <Text style={styles.mapEmptyText}>
@@ -491,6 +542,8 @@ export default function CustomerHome() {
                   ? "Set a delivery address on your profile to see sellers in your area."
                   : mappedSellers.length === 0
                   ? "We're working on onboarding sellers across Zanzibar. Check back soon."
+                  : gasBrand && cylinderSize
+                  ? "Try a different gas, or clear the filter to see every nearby seller."
                   : "The approved sellers we found are outside the 25 km service radius. Pull the list to see them anyway."}
               </Text>
               <PressableScale
@@ -510,7 +563,11 @@ export default function CustomerHome() {
       <Sheet
         visible={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        title={`Nearby sellers (${mappedMarkers.length})`}
+        title={
+          gasBrand && cylinderSize
+            ? `Sellers with ${gasBrand} ${cylinderSize} (${mappedMarkers.length})`
+            : `Nearby sellers (${mappedMarkers.length})`
+        }
       >
         <FlatList
           data={mappedSellers}
@@ -519,6 +576,21 @@ export default function CustomerHome() {
           ItemSeparatorComponent={() => (
             <View style={styles.sheetDivider} />
           )}
+          ListHeaderComponent={
+            gasBrand && cylinderSize ? (
+              <View style={styles.sheetFilterBanner}>
+                <Ionicons
+                  name="flame"
+                  size={14}
+                  color={Colors.primary}
+                />
+                <Text style={styles.sheetFilterBannerText}>
+                  Showing sellers that have {gasBrand} {cylinderSize}{" "}
+                  in stock. Tap a chip again to clear.
+                </Text>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.sheetEmpty}>
               <Ionicons
@@ -526,9 +598,15 @@ export default function CustomerHome() {
                 size={32}
                 color={Colors.textMuted}
               />
-              <Text style={styles.sheetEmptyTitle}>No sellers nearby</Text>
+              <Text style={styles.sheetEmptyTitle}>
+                {gasBrand && cylinderSize
+                  ? `No sellers with ${gasBrand} ${cylinderSize}`
+                  : "No sellers nearby"}
+              </Text>
               <Text style={styles.sheetEmptyText}>
-                Pull down the map to refresh, or update your delivery address.
+                {gasBrand && cylinderSize
+                  ? "Try a different gas, or clear the filter to see every nearby seller."
+                  : "Pull down the map to refresh, or update your delivery address."}
               </Text>
             </View>
           }
@@ -655,18 +733,38 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  /* ----- Places chip strip ----- */
-  placesWrap: {
+  /* ----- Gas filter strip ----- */
+  gasWrap: {
     backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  placesList: {
+  gasHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+  },
+  gasHeaderText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    fontWeight: "800",
+    color: Colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  gasClearText: {
+    fontSize: FontSize.xs,
+    fontWeight: "800",
+    color: Colors.primary,
+  },
+  gasList: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
     gap: Spacing.xs,
   },
-  placeChip: {
+  gasChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
@@ -677,17 +775,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  placeChipActive: {
+  gasChipActive: {
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
-  placeChipText: {
+  gasChipText: {
     fontSize: FontSize.xs,
     fontWeight: "700",
     color: Colors.text,
   },
-  placeChipTextActive: {
+  gasChipTextActive: {
     color: "#FFF",
+  },
+  sheetFilterBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.primarySoft,
+    marginHorizontal: Spacing.sm,
+    marginTop: Spacing.sm,
+    borderRadius: Radius.md,
+  },
+  sheetFilterBannerText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    fontWeight: "700",
+    color: Colors.primary,
   },
   iconBtn: {
     width: 40,

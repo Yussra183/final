@@ -32,6 +32,16 @@ import type { Router } from "expo-router";
 import type { NearbySeller } from "./sellers";
 
 /**
+ * Optional gas pre-fill for the order form. Both fields must be
+ * provided together; partial values are ignored so the place-order
+ * screen falls back to its existing seller-scoped brand/size memos.
+ */
+export interface PlaceOrderGasPrefill {
+  gasBrand?: string;
+  cylinderSize?: string;
+}
+
+/**
  * Pipe-joined arrays survive the URL param round-trip safely without
  * JSON-encoding. The order screen splits them back on `|`.
  * Empty values are dropped so we don't pass blank brand/size slots.
@@ -50,7 +60,10 @@ function joinPipe(items: string[] | undefined | null): string {
  * imperative gesture from a sheet row) can still reuse the payload
  * shape.
  */
-export function orderParamsForSeller(seller: NearbySeller): {
+export function orderParamsForSeller(
+  seller: NearbySeller,
+  gasPrefill?: PlaceOrderGasPrefill,
+): {
   pathname: "/(customer)/place-order";
   params: {
     sellerId: string;
@@ -58,17 +71,28 @@ export function orderParamsForSeller(seller: NearbySeller): {
     sellerLocation: string;
     sellerGasTypes: string;
     sellerSizes: string;
+    gasBrand?: string;
+    cylinderSize?: string;
   };
 } {
+  const params: ReturnType<typeof orderParamsForSeller>["params"] = {
+    sellerId: seller.id,
+    sellerName: seller.name,
+    sellerLocation: seller.location,
+    sellerGasTypes: joinPipe(seller.gasTypes),
+    sellerSizes: joinPipe(seller.cylinderSizes),
+  };
+  // Only forward gas pre-fill when both fields are present — a
+  // partial pre-fill would lock the place-order screen into a brand
+  // without a size, which the existing `sellerBrands`/`sellerSizes`
+  // memos already guard against.
+  if (gasPrefill && gasPrefill.gasBrand && gasPrefill.cylinderSize) {
+    params.gasBrand = gasPrefill.gasBrand;
+    params.cylinderSize = gasPrefill.cylinderSize;
+  }
   return {
     pathname: "/(customer)/place-order" as const,
-    params: {
-      sellerId: seller.id,
-      sellerName: seller.name,
-      sellerLocation: seller.location,
-      sellerGasTypes: joinPipe(seller.gasTypes),
-      sellerSizes: joinPipe(seller.cylinderSizes),
-    },
+    params,
   };
 }
 
@@ -83,6 +107,9 @@ export function orderParamsForSeller(seller: NearbySeller): {
 export function placeOrderForSeller(
   seller: NearbySeller,
   router: Pick<Router, "push">,
+  gasPrefill?: PlaceOrderGasPrefill,
 ): void {
-  router.push(orderParamsForSeller(seller) as unknown as Parameters<Router["push"]>[0]);
+  router.push(
+    orderParamsForSeller(seller, gasPrefill) as unknown as Parameters<Router["push"]>[0],
+  );
 }

@@ -64,6 +64,7 @@ import {
   type NearbySeller,
   gasBrandsForSellerInventory,
   gasSizesForSellerInventory,
+  sellerHasGasInStock,
 } from "../../../src/utils/sellers";
 import { ALL_GAS_SIZES, GAS_BRANDS } from "../../../constants/gasCatalog";
 
@@ -152,9 +153,29 @@ function useSellerDetails(id: string): {
 
 export default function CustomerSellerDetail() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{
+    id: string;
+    gasBrand?: string;
+    cylinderSize?: string;
+  }>();
   const id = typeof params.id === "string" ? params.id : "";
+  const gasBrand = typeof params.gasBrand === "string" ? params.gasBrand : undefined;
+  const cylinderSize =
+    typeof params.cylinderSize === "string" ? params.cylinderSize : undefined;
   const { seller, loading, error } = useSellerDetails(id);
+  const { products } = useStore();
+
+  // Gas-filter guard: when the customer navigated here from the Home
+  // gas-filter chip, the seller must actually have that gas in stock
+  // before we let them proceed to "Place Order". The check uses the
+  // same four-key predicate as the Home filter so the customer
+  // cannot be routed into a seller that the chip strip just hid.
+  const hasSelectedGas =
+    !gasBrand || !cylinderSize
+      ? true
+      : seller
+        ? sellerHasGasInStock(products, seller.id, gasBrand, cylinderSize)
+        : true;
 
   // -------- Render -------------------------------------------------
   return (
@@ -346,6 +367,39 @@ export default function CustomerSellerDetail() {
             </Card>
           ) : null}
 
+          {/* ---- Selected-gas guard ---- */}
+          {/* Only rendered when the customer arrived via a Home gas
+              filter and this seller does NOT have that gas in stock.
+              Keeps the rest of the page byte-for-byte identical. */}
+          {gasBrand && cylinderSize && !hasSelectedGas ? (
+            <Card style={styles.card}>
+              <View style={styles.guardHeader}>
+                <Ionicons
+                  name="flame-outline"
+                  size={18}
+                  color={Colors.danger}
+                />
+                <Text style={styles.cardTitle}>Selected gas not in stock here</Text>
+              </View>
+              <Text style={styles.guardText}>
+                {seller.name} doesn&apos;t currently have {gasBrand}{" "}
+                {cylinderSize}. Pick a different gas or browse sellers
+                that do.
+              </Text>
+              <AppButton
+                title="View eligible sellers"
+                variant="primary"
+                style={{ marginTop: Spacing.md }}
+                onPress={() =>
+                  router.replace({
+                    pathname: "/(customer)" as any,
+                    params: { gasBrand, cylinderSize },
+                  } as any)
+                }
+              />
+            </Card>
+          ) : null}
+
           {/* Spacer for the in-flow footer below. */}
           <View style={{ height: Spacing.xl }} />
 
@@ -357,15 +411,38 @@ export default function CustomerSellerDetail() {
               onPress={() => router.back()}
               style={{ flex: 1 }}
             />
-            <AppButton
-              title="Place Order"
-              variant="primary"
-              leftIcon={
-                <Ionicons name="add-circle-outline" size={16} color="#FFF" />
-              }
-              onPress={() => placeOrderForSeller(seller, router)}
-              style={{ flex: 1.4 }}
-            />
+            {gasBrand && cylinderSize && !hasSelectedGas ? (
+              // Seller lacks the chosen gas — keep the primary CTA
+              // disabled in spirit (no "Place Order" exists here),
+              // and offer the customer a way back to Home where the
+              // filter chip is still active.
+              <AppButton
+                title="Pick a different gas"
+                variant="primary"
+                onPress={() =>
+                  router.replace({
+                    pathname: "/(customer)" as any,
+                    params: { gasBrand, cylinderSize },
+                  } as any)
+                }
+                style={{ flex: 1.4 }}
+              />
+            ) : (
+              <AppButton
+                title="Place Order"
+                variant="primary"
+                leftIcon={
+                  <Ionicons name="add-circle-outline" size={16} color="#FFF" />
+                }
+                onPress={() =>
+                  placeOrderForSeller(seller, router, {
+                    gasBrand,
+                    cylinderSize,
+                  })
+                }
+                style={{ flex: 1.4 }}
+              />
+            )}
           </View>
         </ScrollView>
       )}
@@ -558,5 +635,18 @@ const styles = StyleSheet.create({
   footer: {
     flexDirection: "row",
     gap: Spacing.sm,
+  },
+
+  /* ----- Selected-gas guard ----- */
+  guardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  guardText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginTop: Spacing.sm,
+    lineHeight: 20,
   },
 });

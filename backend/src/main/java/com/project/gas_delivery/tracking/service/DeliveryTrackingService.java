@@ -185,6 +185,18 @@ public class DeliveryTrackingService {
             log.debug("Dropping location for terminal order {}", orderId);
             return null;
         }
+        // The pickup gate. GPS only becomes live once the SELLER has
+        // confirmed physical handover (PICKED_UP) — holding or merely
+        // arriving at the seller (ASSIGNED / PICKUP_CONFIRMATION_PENDING)
+        // must not put the rider on anyone's map. Mirrors the
+        // trip-channel gate in `ingestForTrip`, but this one is a hard
+        // error rather than a silent drop: the rider app must be told
+        // why its stream was refused so it can surface the "waiting for
+        // seller confirmation" state instead of silently burning battery.
+        if (!isTrackable(order.getStatus())) {
+            throw new TrackingForbiddenException(
+                    "Tracking starts after the seller confirms pickup.");
+        }
 
         // Atomic dedupe-and-store. We serialise per-orderId so two
         // concurrent samples from the same rider cannot both pass the
@@ -523,6 +535,17 @@ public class DeliveryTrackingService {
         return s == OrderStatus.DELIVERED
                 || s == OrderStatus.CANCELLED
                 || s == OrderStatus.REJECTED;
+    }
+
+    /**
+     * Whether an order is far enough along its lifecycle for the rider's
+     * GPS to be broadcast. Only the post-handover states qualify — the
+     * seller's pickup confirmation ({@code PICKED_UP}) is the gate, and
+     * {@code IN_TRANSIT} is the state the rider moves to right after.
+     */
+    private static boolean isTrackable(OrderStatus s) {
+        return s == OrderStatus.PICKED_UP
+                || s == OrderStatus.IN_TRANSIT;
     }
 
     private static double haversineMeters(double lat1, double lng1,

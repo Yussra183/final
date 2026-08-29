@@ -32,15 +32,30 @@ import {
 
 export default function PlaceOrderScreen() {
   const router = useRouter();
-  const { sellerId } = useLocalSearchParams<{ sellerId?: string }>();
+  const { sellerId, gasBrand: gasBrandParam, cylinderSize: cylinderSizeParam } =
+    useLocalSearchParams<{
+      sellerId?: string;
+      gasBrand?: string;
+      cylinderSize?: string;
+    }>();
   const { session, sellers, products, placeOrder } = useStore();
   const user = session?.user!;
 
   const [selectedSellerId, setSelectedSellerId] = useState(
     sellerId ?? sellers[0]?.sellerId ?? "",
   );
-  const [gasBrand, setGasBrand] = useState("");
-  const [size, setSize] = useState("");
+  // Gas pre-fill: when the customer reached this screen via the new
+  // Home gas-filter flow, both `gasBrand` and `cylinderSize` are
+  // passed in. The existing `sellerBrands` / `sellerSizes` memos
+  // below already verify the seller actually carries those products,
+  // so any unrecognised pre-fill is silently dropped — no surprise
+  // state for the customer.
+  const [gasBrand, setGasBrand] = useState(
+    typeof gasBrandParam === "string" ? gasBrandParam : "",
+  );
+  const [size, setSize] = useState(
+    typeof cylinderSizeParam === "string" ? cylinderSizeParam : "",
+  );
   const [quantity, setQuantity] = useState("1");
   const [address, setAddress] = useState(user.address ?? "");
   const [phone, setPhone] = useState(user.phone);

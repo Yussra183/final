@@ -420,7 +420,7 @@ public class OrderServiceImpl implements OrderService {
                        updated_at = CURRENT_TIMESTAMP
                  WHERE id = :id
                    AND rider_id = :riderId
-                   AND status = 'ASSIGNED'
+                   AND status IN ('ASSIGNED', 'PICKUP_CONFIRMATION_PENDING')
                 RETURNING id
                 """)
                 .setParameter("riderId", actorId)
