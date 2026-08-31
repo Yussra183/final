@@ -101,6 +101,14 @@ export interface NearbySellersMapProps {
    * the seller picker so a seller can tap to drop a pin.
    */
   onMapTap?: (coords: { lat: number; lng: number }) => void;
+  /**
+   * Radius (km) of the "you're very close" buffer around the user's
+   * resolved centre. Accepted for API parity with the native build;
+   * the web fallback currently has no native circle primitive so we
+   * simply pass it through. The customer Home relies on the native
+   * component for the visible ring.
+   */
+  proximityBufferKm?: number;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -228,10 +236,13 @@ export function NearbySellersMap({
   includeCenterInFit = true,
   showUserPin = true,
   onMapTap,
-  // recenterTo / recenterToken are accepted for API parity with the
-  // native component but have no effect on web (no camera to drive).
+  // recenterTo / recenterToken / proximityBufferKm are accepted for
+  // API parity with the native component but have no effect on web
+  // (the web fallback uses a canvas projection with no native
+  // circle primitive).
   recenterTo: _recenterTo,
   recenterToken: _recenterToken,
+  proximityBufferKm: _proximityBufferKm,
   style,
 }: NearbySellersMapProps) {
   const finiteMarkers = useMemo(

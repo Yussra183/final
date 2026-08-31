@@ -24,8 +24,18 @@ import {
  * The error is cosmetic (the flag controls only the dev-menu screen
  * brightness) and is harmless, so we silence it via LogBox. Real errors
  * are unaffected.
+ *
+ * The second entry silences the well-understood "Network request
+ * failed" message thrown by React Native's fetch when the device
+ * can't reach the Spring Boot backend. The seller / rider / supplier
+ * permit upload screens translate this into a friendly in-app Alert
+ * (`friendlyUploadError` in `src/utils/uploadError.ts`); suppressing
+ * the dev red overlay lets that Alert surface to the user instead of
+ * being covered. The raw `console.error` lines are still emitted to
+ * Metro / `adb logcat` for debugging — LogBox only ignores the
+ * overlay, not the log itself.
  */
-LogBox.ignoreLogs(["Unable to activate keep awake"]);
+LogBox.ignoreLogs([/Unable to activate keep awake/i, /Network request failed/]);
 
 export default function RootLayout() {
   // Probe candidate hosts on first mount so `API_CONFIG.BASE_URL` reflects

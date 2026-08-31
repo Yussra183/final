@@ -41,6 +41,7 @@ import { StatusPill } from "./StatusPill";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
 import { useStore } from "../store/StoreContext";
 import { savePdfToDevice, openSavedPdf } from "../utils/savePdf";
+import { friendlyUploadError } from "../utils/uploadError";
 import { API_CONFIG } from "../api/config";
 import { SupplierApplicationsApi } from "../api/endpoints";
 import {
@@ -378,9 +379,7 @@ export function SupplierVerificationSection({ onApplicationChange }: Props) {
       setUploadSuccess(`✅ ${humanLabel} uploaded successfully.`);
     } catch (err) {
       console.error("[SupplierVerificationSection] upload error", err);
-      setActionError(
-        (err as Error)?.message ?? "Could not upload the document.",
-      );
+      setActionError(friendlyUploadError(err));
     } finally {
       setUploading((prev) => ({ ...prev, [slotType]: false }));
     }

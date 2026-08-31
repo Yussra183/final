@@ -228,6 +228,17 @@ export default function CustomerHome() {
     return { mappedMarkers: mapped, mappedSellers: eligibleSellers };
   }, [eligibleSellers]);
 
+  // "Near you" count — sellers within the 7 km proximity buffer. Drives
+  // the top-left legend chip so the customer knows how many sellers
+  // sit inside the visible ring without having to read every pin.
+  // Mirrors the same `≤ 7 km` predicate the map uses to colour the
+  // "Near you" pins, so the two never disagree.
+  const nearYouCount = useMemo(() => {
+    return mappedSellers.filter(
+      (s) => isFiniteNumber(s.distanceKm) && s.distanceKm <= 7,
+    ).length;
+  }, [mappedSellers]);
+
   // Open the seller-details screen with the tapped id. From the
   // sheet we close the bottom sheet first so the route push doesn't
   // collide with the sheet's modal animation.
@@ -453,6 +464,13 @@ export default function CustomerHome() {
           // to street level. "Locate me" still re-centres via
           // `recenterToken` and uses a tighter street-level delta.
           fitMode="auto"
+          // "You're very close" buffer — 7 km translucent ring drawn
+          // around the user's resolved centre. Sellers inside this
+          // radius get a distinct primary-coloured halo + a "Near you"
+          // tag so the customer can see at a glance which shops sit
+          // within quick-rider distance. Mirrors the backend's 25 km
+          // radius filter at a tighter, customer-facing scale.
+          proximityBufferKm={7}
           style={StyleSheet.absoluteFill}
           onMarkerTap={onPinTap}
         />
@@ -470,6 +488,25 @@ export default function CustomerHome() {
             {customerLocationLabel}
           </Text>
         </View>
+
+        {/* "Near you" buffer legend — explains the translucent ring
+            drawn around the user pin. Sits just below the location
+            chip so it never collides with the FAB cluster or the
+            bottom sheet. Pointer-events disabled so it never steals
+            taps from the map. */}
+        {showUserPin &&
+        isFiniteNumber(mapCenter.lat) &&
+        isFiniteNumber(mapCenter.lng) ? (
+          <View style={styles.bufferLegendChip} pointerEvents="none">
+            <View style={styles.bufferLegendDot} />
+            <Text style={styles.bufferLegendText} numberOfLines={1}>
+              Within 7 km •{" "}
+              <Text style={styles.bufferLegendTextBold}>
+                {nearYouCount} near you
+              </Text>
+            </Text>
+          </View>
+        ) : null}
 
         {/* Bottom-right floating button cluster. */}
         <View style={styles.fabCluster}>
@@ -862,6 +899,40 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: Colors.text,
     flexShrink: 1,
+  },
+
+  /* ----- "Near you" buffer legend ----- */
+  bufferLegendChip: {
+    position: "absolute",
+    top: Spacing.md + 44, // sits just below the locationChip
+    left: Spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    boxShadow: "0 2px 4px rgba(0,0,0,0.08)",
+  },
+  bufferLegendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    backgroundColor: "rgba(15, 118, 110, 0.18)",
+  },
+  bufferLegendText: {
+    fontSize: FontSize.xs,
+    fontWeight: "700",
+    color: Colors.textSecondary,
+  },
+  bufferLegendTextBold: {
+    color: Colors.primary,
+    fontWeight: "800",
   },
 
   fabCluster: {

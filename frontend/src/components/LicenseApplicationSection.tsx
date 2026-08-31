@@ -51,6 +51,7 @@ import { AppButton } from "./AppButton";
 import { StatusPill } from "./StatusPill";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
 import { formatDateTime } from "../utils/format";
+import { friendlyUploadError } from "../utils/uploadError";
 import { API_CONFIG } from "../api/config";
 import { PermitsApi } from "../api/endpoints";
 import { useStore } from "../store/StoreContext";
@@ -397,19 +398,13 @@ export function LicenseApplicationSection({ user, permit: permitProp }: Props) {
         "[LicenseApplicationSection] pickFile error",
         (err as Error)?.message,
       );
-      const rawMessage = (err as Error)?.message ?? "";
       // Translate the cryptic RN "Network request failed" into an
       // actionable hint. The seller is almost always on a different
       // network than the laptop running the Spring Boot backend, or
-      // the backend isn't running yet on the dev machine.
-      const isNetworkFailure =
-        rawMessage.toLowerCase().includes("network request failed") ||
-        (err as { code?: string })?.code === "NETWORK";
-      const friendly = isNetworkFailure
-        ? "Cannot reach the server. Make sure your phone is on the same Wi-Fi as the laptop running the backend, then try again."
-        : rawMessage ||
-          "Could not upload the selected file. Please try again.";
-      setActionError(friendly);
+      // the backend isn't running yet on the dev machine. The matching
+      // `LogBox.ignoreLogs` filter in `app/_layout.tsx` keeps the dev
+      // red overlay from covering this Alert.
+      setActionError(friendlyUploadError(err));
     } finally {
       setUploading((prev) => ({ ...prev, [documentType]: false }));
     }

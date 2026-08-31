@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Circle, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { Colors, FontSize, Radius } from "../../../constants/colors";
 import { regionForPoints } from "../LiveTrackingMap/region";
 import type { StyleProp, ViewStyle } from "react-native";
@@ -61,6 +61,20 @@ const UNGUJA_FALLBACK_REGION = {
   latitudeDelta: 0.6,
   longitudeDelta: 0.6,
 };
+
+/**
+ * Customer Home "you're very close" buffer — 7 km circle drawn
+ * around the user's resolved centre. Sellers whose `distanceKm`
+ * is ≤ this radius get a distinct "Near you" visual cue (a thicker
+ * accent halo + pill) so the customer can pick the closest shop
+ * at a glance.
+ *
+ * 7 km is the typical walking / quick-rider distance on Unguja —
+ * the customer expects a same-village seller to feel reachable in
+ * a few minutes, and the buffer turns that expectation into
+ * something they can see on the map.
+ */
+export const PROXIMITY_BUFFER_KM = 7;
 
 /**
  * Clamp a region's centre + deltas so the resulting camera rect stays
@@ -197,6 +211,18 @@ export interface NearbySellersMapProps {
    * Marker taps do NOT fire this — they go through `onMarkerTap`.
    */
   onMapTap?: (coords: { lat: number; lng: number }) => void;
+  /**
+   * Radius (km) of the "you're very close" buffer drawn around
+   * the user's resolved centre. When set AND `center` is finite
+   * AND `showUserPin` is true, a translucent circle appears on the
+   * map so the customer can see which sellers sit inside the
+   * buffer. Sellers whose `distanceKm` ≤ this radius also get a
+   * distinct "Near you" visual cue on their pin.
+   *
+   * Defaults to `PROXIMITY_BUFFER_KM` (7 km). Pass `0` or a
+   * negative value to disable the buffer entirely.
+   */
+  proximityBufferKm?: number;
   /** Wrapper style. Pass `{ flex: 1 }` to make the map fill its parent. */
   style?: StyleProp<ViewStyle>;
 }
@@ -213,6 +239,7 @@ export function NearbySellersMap({
   selectedId,
   onMarkerTap,
   onMapTap,
+  proximityBufferKm = PROXIMITY_BUFFER_KM,
   style,
 }: NearbySellersMapProps) {
   const mapRef = useRef<MapView | null>(null);
@@ -546,6 +573,28 @@ export function NearbySellersMap({
         minDelta={0.01}
         maxDelta={0.6}
       >
+        {/* "You're very close" buffer — translucent circle around the
+            user when their resolved centre is finite AND the user
+            pin is visible. `radius` is in METERS on react-native-maps,
+            so we convert km → m once. The circle is intentionally
+            drawn BEFORE the markers so the pins render on top of it
+            and remain tappable. Drawn behind the user pin too — the
+            "You" pin sits in the centre by design. */}
+        {showUserPin &&
+        Number.isFinite(center.lat) &&
+        Number.isFinite(center.lng) &&
+        proximityBufferKm > 0 ? (
+          <Circle
+            center={{ latitude: center.lat, longitude: center.lng }}
+            radius={proximityBufferKm * 1000}
+            strokeColor={Colors.primary}
+            strokeWidth={1.5}
+            fillColor="rgba(15, 118, 110, 0.10)"
+            // `tracksViewChanges` defaults to true on Android, which
+            // is fine here — the circle has no custom children, just
+            // props, and the props are stable across renders.
+          />
+        ) : null}
         {clusteredMarkers.map((m) => {
           const richName = m.name ?? m.label;
           // Cluster helper assigns `_renderCoord` so two sellers
@@ -568,6 +617,16 @@ export function NearbySellersMap({
               : m.status === "Closed"
                 ? Colors.border
                 : m.color ?? "#0F766E";
+          // "Near you" — true when the seller sits inside the
+          // proximity buffer around the customer's resolved centre.
+          // Drives a thicker accent halo + a "Near you" pill on the
+          // pin label so the customer can pick the closest shop
+          // visually without reading every distance number.
+          const isNearYou =
+            proximityBufferKm > 0 &&
+            typeof m.distanceKm === "number" &&
+            Number.isFinite(m.distanceKm) &&
+            m.distanceKm <= proximityBufferKm;
           if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
             return null;
           }
@@ -612,6 +671,7 @@ export function NearbySellersMap({
                 style={[
                   styles.pinWrap,
                   selectedId === m.id || m.selected === true ? styles.pinWrapSelected : null,
+                  isNearYou ? styles.pinWrapNear : null,
                 ]}
                 collapsable={false}
               >
@@ -619,19 +679,37 @@ export function NearbySellersMap({
                   style={[
                     styles.pinHalo,
                     {
-                      borderColor: haloColor,
-                      borderWidth: selectedId === m.id || m.selected === true ? 3 : 2,
-                      opacity: selectedId === m.id || m.selected === true ? 1 : 0.92,
+                      borderColor: isNearYou ? Colors.primary : haloColor,
+                      borderWidth: isNearYou
+                        ? 3
+                        : selectedId === m.id || m.selected === true
+                          ? 3
+                          : 2,
+                      opacity: isNearYou
+                        ? 1
+                        : selectedId === m.id || m.selected === true
+                          ? 1
+                          : 0.92,
                     },
                   ]}
                 >
                   <View
                     style={[
                       styles.pin,
-                      { backgroundColor: showAlertBadge ? "#E96B2C" : m.color ?? "#0F766E" },
+                      {
+                        backgroundColor: showAlertBadge
+                          ? "#E96B2C"
+                          : isNearYou
+                            ? Colors.primary
+                            : m.color ?? "#0F766E",
+                      },
                     ]}
                   >
-                    <Ionicons name="storefront" size={16} color="#FFF" />
+                    <Ionicons
+                      name={isNearYou ? "walk-outline" : "storefront"}
+                      size={16}
+                      color="#FFF"
+                    />
                   </View>
                 </View>
                 {showAlertBadge ? (
@@ -641,6 +719,18 @@ export function NearbySellersMap({
                         (typeof m.badgeCount === "number" && m.badgeCount > 0
                           ? `${m.badgeCount} NEW`
                           : "NEW ORDER")}
+                    </Text>
+                  </View>
+                ) : null}
+                {isNearYou ? (
+                  // "Near you" pill — sits ABOVE the pin bubble so it
+                  // reads as a tag rather than a status pill. Uses
+                  // the brand primary colour to mirror the buffer
+                  // circle and clearly signal "inside the 7 km ring".
+                  <View style={styles.nearYouBadge} pointerEvents="none">
+                    <Ionicons name="walk-outline" size={9} color="#FFF" />
+                    <Text style={styles.nearYouBadgeText} numberOfLines={1}>
+                      Near you
                     </Text>
                   </View>
                 ) : null}
@@ -752,6 +842,13 @@ const styles = StyleSheet.create({
     // themselves even when their coords coincide with a seller's.
     zIndex: 20,
   },
+  pinWrapNear: {
+    // "Near you" sellers get a small lift so their bubble + badge
+    // paint above the ordinary pins on the same point. Without this,
+    // two stacked sellers could be the same z-index and the rendering
+    // order would be undefined.
+    zIndex: 55,
+  },
   pinHalo: {
     // Outer ring around the pin bubble. Color / width come from the
     // seller status (success for open, border for closed, self-tinted
@@ -816,6 +913,29 @@ const styles = StyleSheet.create({
     color: "#C2410C",
     fontSize: FontSize.xs - 2,
     fontWeight: "900",
+  },
+  // "Near you" tag — sits above the pin bubble so it reads as a
+  // small label, not a status pill. Uses the same brand primary
+  // colour as the proximity circle so the two cues reinforce each
+  // other.
+  nearYouBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    marginTop: -4,
+    marginBottom: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primary,
+    alignSelf: "center",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+  },
+  nearYouBadgeText: {
+    color: "#FFF",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.3,
   },
   pinLabelName: {
     color: Colors.text,

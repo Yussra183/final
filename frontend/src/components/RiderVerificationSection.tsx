@@ -38,6 +38,7 @@ import { StatusPill } from "./StatusPill";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
 import { useStore } from "../store/StoreContext";
 import { savePdfToDevice, openSavedPdf } from "../utils/savePdf";
+import { friendlyUploadError } from "../utils/uploadError";
 import { API_CONFIG } from "../api/config";
 import { RiderPermitsApi } from "../api/endpoints";
 import {
@@ -397,9 +398,7 @@ export function RiderVerificationSection() {
       setUploadSuccess(`✅ ${humanLabel} uploaded successfully.`);
     } catch (err) {
       console.error("[RiderVerificationSection] upload error", err);
-      setActionError(
-        (err as Error)?.message ?? "Could not upload the document.",
-      );
+      setActionError(friendlyUploadError(err));
     } finally {
       setUploading((prev) => ({ ...prev, [slotType]: false }));
     }
