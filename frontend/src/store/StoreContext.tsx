@@ -207,6 +207,16 @@ interface StoreShape {
    * the order. Flips `assigned` → `accepted` and nulls `riderId`.
    */
   cancelHold: (orderId: string) => Promise<void>;
+  /**
+   * Seller-side housekeeping — hides a completed / cancelled / rejected
+   * order from this seller's view only (the customer, rider, and admin
+   * see their own lists unchanged). The server has no delete endpoint
+   * for orders, so this is a local-only filter: subsequent refreshes
+   * will skip the order until the seller clears their hidden set
+   * (e.g. via a future "show hidden" toggle). Refuses to remove any
+   * order that is still in an active state.
+   */
+  hideCompletedOrder: (orderId: string) => Promise<void>;
   /** Orders currently eligible for this user to claim. */
   availableOrdersForUser: () => Order[];
   /** Legacy verbs kept for screens still on the in-memory mock. */
@@ -694,6 +704,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<GasProduct[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  /**
+   * Order ids the seller has locally hidden from their orders screen.
+   * Backend has no DELETE /api/orders/{id} endpoint, so a seller who
+   * wants to declutter the Delivered / Rejected tabs can dismiss a
+   * finished row here. Customer / rider / admin views are untouched;
+   * the ids are scoped per browser session.
+   */
+  const [hiddenOrderIds, setHiddenOrderIds] = useState<Set<string>>(new Set());
   const [restockRequests, setRestockRequests] = useState<RestockRequest[]>([]);
   /**
    * Suppliers whose application is currently APPROVED — drives the
@@ -1240,7 +1258,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [run],
   );
 
-  const logout = useCallback(() => setSession(null), []);
+  const logout = useCallback(() => {
+    setSession(null);
+    // Hidden order ids are a per-seller view; clearing on logout keeps
+    // the next seller (or guest on the same device) from inheriting
+    // the previous owner's hidden list.
+    setHiddenOrderIds(new Set());
+  }, []);
 
   // ---- Selectors -------------------------------------------------------
   const getUser = useCallback((id: string) => users.find((u) => u.id === id), [users]);
@@ -1278,18 +1302,26 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // both sides to a string before comparing so historical orders
       // returned by the API always match the signed-in user.
       const uid = String(userId);
+      // Seller-only: filter out rows the seller has locally dismissed
+      // from their Delivered / Rejected tabs. Other roles share the
+      // raw list so the customer, rider, and admin still see the
+      // full history.
+      const visible =
+        role === "seller" && hiddenOrderIds.size > 0
+          ? orders.filter((o) => !hiddenOrderIds.has(o.id))
+          : orders;
       switch (role) {
         case "customer":
-          return orders.filter((o) => String(o.customerId) === uid);
+          return visible.filter((o) => String(o.customerId) === uid);
         case "seller":
-          return orders.filter((o) => String(o.sellerId) === uid);
+          return visible.filter((o) => String(o.sellerId) === uid);
         case "rider": {
           // A rider sees every order where they are the assigned rider
           // (or, when the backend hasn't assigned yet, every order on
           // the dispatch queue). The seller-rider scoping that used to
           // live in a local mock map is now enforced server-side via
           // `GET /api/orders/dispatch/available`.
-          const filtered = orders.filter(
+          const filtered = visible.filter(
             (o) =>
               o.riderId === uid ||
               // Fall back: if `riderId` isn't set yet (dispatch queue),
@@ -1300,12 +1332,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         }
         case "admin":
         case "supplier":
-          return orders;
+          return visible;
         default:
           return [];
       }
     },
-    [orders, sortByUpdatedDesc],
+    [orders, hiddenOrderIds, sortByUpdatedDesc],
   );
   const getRestockForSupplier = useCallback(
     (supplierId: string) =>
@@ -1555,6 +1587,52 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       applyServiceResult(updated, []);
     },
     [session, applyServiceResult],
+  );
+
+  /**
+   * Seller-side housekeeping — hides an order from this seller's list
+   * only. The backend has no DELETE /api/orders/{id} route (orders are
+   * an audit ledger), so this is a local filter: the seller sees one
+   * fewer row in Delivered / Rejected; the customer, rider, and admin
+   * still see the order in their own views. Refuses to hide anything
+   * still in an active lifecycle state so an accidental tap can't lose
+   * a real, in-flight order.
+   */
+  const HIDEABLE_STATUSES: ReadonlyArray<OrderStatus> = [
+    "delivered",
+    "cancelled",
+    "rejected",
+  ];
+  const hideCompletedOrder = useCallback(
+    async (orderId: string) => {
+      if (!session) throw new OrderServiceError("NOT_AUTHORIZED", "Not signed in.");
+      if (session.user.role !== "seller") {
+        throw new OrderServiceError(
+          "FORBIDDEN",
+          "Only sellers can hide their own orders.",
+        );
+      }
+      const target = orders.find((o) => o.id === orderId);
+      if (!target) throw new OrderServiceError("NOT_FOUND", "Order not found.");
+      if (String(target.sellerId) !== String(session.user.id)) {
+        throw new OrderServiceError(
+          "FORBIDDEN",
+          "You can only hide orders from your own shop.",
+        );
+      }
+      if (!HIDEABLE_STATUSES.includes(target.status)) {
+        throw new OrderServiceError(
+          "INVALID_STATE",
+          "Only delivered, cancelled, or rejected orders can be removed.",
+        );
+      }
+      setHiddenOrderIds((prev) => {
+        const next = new Set(prev);
+        next.add(orderId);
+        return next;
+      });
+    },
+    [session, orders],
   );
 
   /**
@@ -3358,6 +3436,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       requestPickupConfirmation,
       confirmPickup,
       cancelHold,
+      hideCompletedOrder,
       availableOrdersForUser,
       updateOrderStatus,
       assignRider,
@@ -3462,6 +3541,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       requestPickupConfirmation,
       confirmPickup,
       cancelHold,
+      hideCompletedOrder,
       availableOrdersForUser,
       updateOrderStatus,
       assignRider,

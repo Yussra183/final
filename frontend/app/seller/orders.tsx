@@ -150,6 +150,7 @@ function OrderCard({
   onReject,
   onView,
   onConfirmPickup,
+  onDelete,
 }: {
   order: Order;
   tab: TabKey;
@@ -157,7 +158,12 @@ function OrderCard({
   onReject: (o: Order) => void;
   onView: (o: Order) => void;
   onConfirmPickup: (o: Order) => void;
+  onDelete: (o: Order) => void;
 }) {
+  const isFinished =
+    order.status === "delivered" ||
+    order.status === "cancelled" ||
+    order.status === "rejected";
   const first = order.items[0];
   const awaitingPickupConfirmation = order.status === "pickup_pending";
   return (
@@ -267,6 +273,21 @@ function OrderCard({
           >
             <Ionicons name="hand-left-outline" size={16} color={Colors.textInverse} />
             <Text style={styles.actionBtnText}>Confirm Pickup</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {/* Finished orders (delivered / cancelled / rejected) can be
+            hidden from this seller's list. The backend keeps the row so
+            the customer, rider, and admin still see it. */}
+        {isFinished ? (
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.btnDelete]}
+            onPress={() => onDelete(order)}
+          >
+            <Ionicons name="trash-outline" size={16} color={Colors.danger} />
+            <Text style={[styles.actionBtnText, styles.btnDeleteText]}>
+              Delete
+            </Text>
           </TouchableOpacity>
         ) : null}
 
@@ -460,6 +481,7 @@ export default function SellerOrders() {
     rejectOrder,
     refresh,
     confirmPickup,
+    hideCompletedOrder,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<TabKey>("new");
@@ -610,6 +632,37 @@ export default function SellerOrders() {
     );
   };
 
+  /**
+   * Seller-side housekeeping — hides a finished order from the Delivered
+   * and Rejected tabs. The backend has no DELETE /api/orders/{id} route
+   * (orders are an audit ledger), so this is a local-only filter: the
+   * row disappears from this seller's view; the customer, rider, and
+   * admin still see it. A confirm dialog prevents accidental loss.
+   */
+  const onDelete = (o: Order) => {
+    Alert.alert(
+      "Remove this order?",
+      `This will remove order #${o.id.slice(-4)} from your Delivered / Rejected list. The order record stays in the system so the customer and rider can still see it — only your view is cleared.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await hideCompletedOrder(o.id);
+            } catch (err) {
+              Alert.alert(
+                "Could not remove order",
+                (err as Error)?.message ?? "Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <SellerHeader title="Orders" />
@@ -648,6 +701,7 @@ export default function SellerOrders() {
               onReject={onReject}
               onView={setDetailsOrder}
               onConfirmPickup={onConfirmPickup}
+              onDelete={onDelete}
             />
           ))
         )}
@@ -821,6 +875,14 @@ const styles = StyleSheet.create({
   btnAccept: { backgroundColor: Colors.success },
   btnReject: { backgroundColor: Colors.danger },
   btnConfirmPickup: { backgroundColor: Colors.warning },
+  // Ghost-style delete — outlined danger button that sits next to the
+  // muted "View Details" button on finished orders so the two read as
+  // a related pair (read vs. remove).
+  btnDelete: {
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.danger,
+  },
   btnView: {
     backgroundColor: Colors.primarySoft,
     borderWidth: 1,
@@ -885,6 +947,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   btnViewText: { color: Colors.primary },
+  btnDeleteText: { color: Colors.danger },
 
   // Modal — order detail
   modalBackdrop: {

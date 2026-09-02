@@ -73,8 +73,14 @@ public class OrderEntity {
     @Column(name = "total", nullable = false, precision = 12, scale = 2)
     private BigDecimal total;
 
+    /**
+     * Persisted as the uppercase enum <em>name</em> (EnumType.STRING),
+     * not the lowercase {@link OrderStatus#toJson() wire form} — so the
+     * column must fit {@code PICKUP_CONFIRMATION_PENDING} (27 chars),
+     * not {@code "pickup_pending"} (14). See V22.
+     */
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false, length = 20)
+    @Column(name = "status", nullable = false, length = 32)
     private OrderStatus status;
 
     @Column(name = "delivery_address", nullable = false, length = 500)

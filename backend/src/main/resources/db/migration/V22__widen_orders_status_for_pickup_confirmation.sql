@@ -1,0 +1,32 @@
+-- =============================================================================
+-- V22 — Widen `orders.status` so PICKUP_CONFIRMATION_PENDING fits.
+-- =============================================================================
+-- `OrderEntity.status` is mapped `@Enumerated(EnumType.STRING)`, so the
+-- column stores the *uppercase enum name*, not the lowercase JSON wire
+-- form. V2 sized the column VARCHAR(20) against the wire forms — the
+-- header comment there even documents it as "lowercase wire form" —
+-- which was true for every status that existed at the time.
+--
+-- V20 then introduced the pickup-confirmation workflow, whose new state
+-- persists as:
+--
+--     PICKUP_CONFIRMATION_PENDING   -- 27 characters
+--
+-- Seven characters too long. Every rider tap on "Request Pickup
+-- Confirmation" issued an UPDATE that Postgres rejected with
+--
+--     ERROR: value too long for type character varying(20)
+--
+-- The service layer, transition table and hold logic were all correct;
+-- the write simply could not land. The DataIntegrityViolationException
+-- fell through to GlobalExceptionHandler's catch-all, so the rider saw
+-- the opaque "An unexpected error occurred" (HTTP 500) instead of any
+-- actionable message.
+--
+-- Widened to 32 to leave headroom for future statuses without forcing
+-- another migration. This is a widening ALTER — no rewrite of existing
+-- rows, no data loss, and every value already stored remains valid.
+-- =============================================================================
+
+ALTER TABLE orders
+    ALTER COLUMN status TYPE VARCHAR(32);
