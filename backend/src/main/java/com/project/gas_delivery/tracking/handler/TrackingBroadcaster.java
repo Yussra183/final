@@ -4,8 +4,8 @@ import com.project.gas_delivery.tracking.dto.LocationUpdateMessage;
 import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
+import jakarta.annotation.Nonnull;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -48,7 +48,7 @@ public class TrackingBroadcaster {
      * {@code orderId}. Errors are swallowed — a slow client must never
      * stall the broadcast path.
      */
-    public void broadcast(Long orderId, @NonNull LocationUpdateMessage msg) {
+    public void broadcast(Long orderId, @Nonnull LocationUpdateMessage msg) {
         String json;
         try {
             json = objectMapper.writeValueAsString(msg);
@@ -69,7 +69,7 @@ public class TrackingBroadcaster {
      * operations feature. The same broadcaster, the same WebSocket
      * sessions, the same envelope — only the channel key is different.
      */
-    public void broadcastTrip(Long tripId, @NonNull LocationUpdateMessage msg) {
+    public void broadcastTrip(Long tripId, @Nonnull LocationUpdateMessage msg) {
         String json;
         try {
             json = objectMapper.writeValueAsString(msg);
@@ -87,7 +87,7 @@ public class TrackingBroadcaster {
      * Send a single frame to one session — used by the service to
      * replay the cached position right after a SUBSCRIBE.
      */
-    public void sendToSession(String sessionId, @NonNull LocationUpdateMessage msg) {
+    public void sendToSession(String sessionId, @Nonnull LocationUpdateMessage msg) {
         WebSocketSession session = registry.get(sessionId);
         if (session == null || !session.isOpen()) return;
         try {

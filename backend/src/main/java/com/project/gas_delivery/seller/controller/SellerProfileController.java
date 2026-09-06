@@ -6,7 +6,7 @@ import com.project.gas_delivery.order.exception.NotAuthorizedException;
 import com.project.gas_delivery.seller.dto.SellerProfileDto;
 import com.project.gas_delivery.seller.service.SellerProfileService;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.lang.Nullable;
+import jakarta.annotation.Nullable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;

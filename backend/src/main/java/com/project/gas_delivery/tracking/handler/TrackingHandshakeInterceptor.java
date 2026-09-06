@@ -8,8 +8,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.http.server.ServletServerHttpResponse;
-import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
+import jakarta.annotation.Nonnull;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
@@ -47,10 +47,10 @@ public class TrackingHandshakeInterceptor implements HandshakeInterceptor {
 
     @Override
     public boolean beforeHandshake(
-            @NonNull ServerHttpRequest request,
-            @NonNull ServerHttpResponse response,
-            @NonNull WebSocketHandler wsHandler,
-            @NonNull Map<String, Object> attributes
+            @Nonnull ServerHttpRequest request,
+            @Nonnull ServerHttpResponse response,
+            @Nonnull WebSocketHandler wsHandler,
+            @Nonnull Map<String, Object> attributes
     ) {
         // The browser/RN `WebSocket` constructor can't carry custom
         // HTTP headers, so native clients pass the bearer token on the
@@ -108,10 +108,10 @@ public class TrackingHandshakeInterceptor implements HandshakeInterceptor {
 
     @Override
     public void afterHandshake(
-            @NonNull ServerHttpRequest request,
-            @NonNull ServerHttpResponse response,
-            @NonNull WebSocketHandler wsHandler,
-            @NonNull Exception exception
+            @Nonnull ServerHttpRequest request,
+            @Nonnull ServerHttpResponse response,
+            @Nonnull WebSocketHandler wsHandler,
+            @Nonnull Exception exception
     ) {
         // no-op — registration happens in the handler's afterConnectionEstablished
     }

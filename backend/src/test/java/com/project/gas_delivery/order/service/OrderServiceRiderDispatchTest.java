@@ -130,6 +130,7 @@ class OrderServiceRiderDispatchTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void riderCanAcceptOrderFromAnySellerAndBecomesBusy() {
         RiderProfileEntity profile = riderProfile(7L, true);
         OrderEntity before = order(101L, 15L, "Seller A", OrderStatus.ACCEPTED, null);
@@ -196,6 +197,7 @@ class OrderServiceRiderDispatchTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void sameRiderCanLaterAcceptOrderFromDifferentSeller() {
         RiderProfileEntity profile = riderProfile(7L, false);
         OrderEntity completedOrder = order(101L, 15L, "Seller A", OrderStatus.IN_TRANSIT, 7L);

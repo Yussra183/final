@@ -12,7 +12,7 @@ import com.project.gas_delivery.permit.service.PermitService.DocumentStream;
 import com.project.gas_delivery.permit.service.SellerApplicationPdfService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
-import org.springframework.core.io.PathResource;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -135,7 +135,7 @@ public class PermitController {
                 .contentLength(stream.sizeBytes())
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "inline; filename=\"" + filename + "\"")
-                .body(new PathResource(stream.path()));
+                .body(new FileSystemResource(stream.path()));
     }
 
     @GetMapping("/me/license")

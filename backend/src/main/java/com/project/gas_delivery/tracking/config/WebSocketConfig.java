@@ -3,7 +3,7 @@ package com.project.gas_delivery.tracking.config;
 import com.project.gas_delivery.tracking.handler.TrackingHandshakeInterceptor;
 import com.project.gas_delivery.tracking.handler.TrackingWebSocketHandler;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.lang.NonNull;
+import jakarta.annotation.Nonnull;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
@@ -36,7 +36,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     }
 
     @Override
-    public void registerWebSocketHandlers(@NonNull WebSocketHandlerRegistry registry) {
+    public void registerWebSocketHandlers(@Nonnull WebSocketHandlerRegistry registry) {
         registry.addHandler(handler, "/ws/tracking")
                 .addInterceptors(handshakeInterceptor)
                 .setAllowedOriginPatterns("*");

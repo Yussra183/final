@@ -8,8 +8,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
+import jakarta.annotation.Nonnull;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -77,14 +77,14 @@ public class TrackingWebSocketHandler extends TextWebSocketHandler {
     // ---- Lifecycle ------------------------------------------------------
 
     @Override
-    public void afterConnectionEstablished(@NonNull WebSocketSession session) {
+    public void afterConnectionEstablished(@Nonnull WebSocketSession session) {
         registry.register(session);
         log.info("Tracking socket opened sid={} actor={}",
                 session.getId(), registry.actorIdOf(session));
     }
 
     @Override
-    public void afterConnectionClosed(@NonNull WebSocketSession session, @NonNull CloseStatus status) {
+    public void afterConnectionClosed(@Nonnull WebSocketSession session, @Nonnull CloseStatus status) {
         registry.unregister(session.getId());
         trackingService.unsubscribe(session.getId());
         log.info("Tracking socket closed sid={} status={}",
@@ -92,7 +92,7 @@ public class TrackingWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    public void handleTransportError(@NonNull WebSocketSession session, @NonNull Throwable exception) {
+    public void handleTransportError(@Nonnull WebSocketSession session, @Nonnull Throwable exception) {
         log.warn("Tracking transport error sid={} msg={}",
                 session.getId(), exception.getMessage());
         try {
@@ -106,8 +106,8 @@ public class TrackingWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(
-            @NonNull WebSocketSession session,
-            @NonNull TextMessage message
+            @Nonnull WebSocketSession session,
+            @Nonnull TextMessage message
     ) {
         final JsonNode frame;
         try {
@@ -239,7 +239,7 @@ public class TrackingWebSocketHandler extends TextWebSocketHandler {
 
     private static String textOr(JsonNode node, String field, String fallback) {
         JsonNode v = node.get(field);
-        return v == null || v.isNull() ? fallback : v.asText();
+        return v == null || v.isNull() ? fallback : v.asString();
     }
 
     private static Long longOr(JsonNode node, String field) {
