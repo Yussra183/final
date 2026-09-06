@@ -283,7 +283,12 @@ public class PermitService {
             seller.setActive(true);
             userRepository.save(seller);
         }
-        gasCatalogProvisioningService.provisionForSeller(permit.getSellerId());
+        // Note: the seller is intentionally NOT seeded with inventory on
+        // approval. Each seller adds their own products (and stock
+        // quantities) via the seller-side product screens. Auto-provisioning
+        // the full brand/size catalog here made every freshly approved
+        // seller falsely appear as if they stocked every gas, which broke
+        // the customer-side gas filter.
 
         notificationService.notify(
                 permit.getSellerId(),

@@ -37,7 +37,15 @@ public class ProductService {
 
     @Transactional(readOnly = true)
     public List<ProductDto> listAll() {
-        return map(productRepository.findAll());
+        // Active-only — mirrors the same `active = TRUE` gate that
+        // `reserveStock` and the seller-profile enrichment use. Inactive
+        // rows are kept in the DB (soft-delete) but must not surface on
+        // the customer side; the frontend gas filter requires
+        // `stock > 0` AND `active !== false`, but `ProductDto` does not
+        // expose `active`, so the only safe place to drop them is here.
+        return map(productRepository.findAll().stream()
+                .filter(ProductEntity::isActive)
+                .toList());
     }
 
     @Transactional(readOnly = true)

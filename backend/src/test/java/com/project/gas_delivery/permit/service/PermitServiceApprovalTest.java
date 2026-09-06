@@ -51,7 +51,7 @@ class PermitServiceApprovalTest {
     }
 
     @Test
-    void approve_activatesSeller_andProvisionsCatalog_beforeNotification() {
+    void approve_activatesSeller_andDoesNotAutoProvisionCatalog_beforeNotification() {
         SellerPermitEntity permit = new SellerPermitEntity(7L, "Shop");
         setField(permit, "id", 55L);
         permit.setStatus(PermitStatus.PENDING);
@@ -72,7 +72,9 @@ class PermitServiceApprovalTest {
         service.approve(55L, 1L, null);
 
         verify(userRepository).save(seller);
-        verify(gasCatalogProvisioningService).provisionForSeller(7L);
+        // Inventory must NOT be auto-provisioned on approval — each seller
+        // adds their own products and stock via the seller-side screens.
+        verify(gasCatalogProvisioningService, never()).provisionForSeller(7L);
         verify(notificationService).notify(eq(7L), eq("permit"), anyString(), anyString(), anyString());
     }
 

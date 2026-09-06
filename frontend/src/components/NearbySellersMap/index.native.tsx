@@ -595,6 +595,44 @@ export function NearbySellersMap({
             // props, and the props are stable across renders.
           />
         ) : null}
+        {/* User "you are here" pin — rendered BEFORE the seller pins
+            so that seller pins (which already carry a higher `zIndex`
+            via `pinWrap` / `pinWrapNear`) paint on top of it. This
+            keeps the user pin visible at default zoom (it draws under
+            sellers), but also stops sellers registered to the same
+            coarse centroid as the customer from being visually
+            hidden behind the user pin — the dominant cause of
+            "the marker exists but I can't see it" reports for sellers
+            whose saved `lat`/`lng` happens to coincide with the
+            customer default. The user pin is decorative and not
+            tappable so layering does not change interaction. */}
+        {showUserPin &&
+        Number.isFinite(center.lat) &&
+        Number.isFinite(center.lng) ? (
+          <Marker
+            key="__user__"
+            coordinate={{ latitude: center.lat, longitude: center.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+            // Intentionally no `onPress` — the user pin is decorative.
+          >
+            <View
+              style={[styles.pinWrap, styles.pinWrapUser]}
+              pointerEvents="none"
+              collapsable={false}
+            >
+              <View style={[styles.pin, styles.pinUser]}>
+                <Ionicons name="navigate" size={16} color="#FFF" />
+              </View>
+              <View style={styles.pinLabel}>
+                <Text style={styles.pinLabelText} numberOfLines={1}>
+                  You
+                </Text>
+              </View>
+            </View>
+          </Marker>
+        ) : null}
+
         {clusteredMarkers.map((m) => {
           const richName = m.name ?? m.label;
           // Cluster helper assigns `_renderCoord` so two sellers
@@ -774,38 +812,6 @@ export function NearbySellersMap({
           );
         })}
 
-        {/* User "you are here" pin — mirrors the synthetic web-fallback
-            pin so the user always sees themselves on the canvas
-            alongside every nearby seller. Renders only when the
-            resolved `center` is finite AND `showUserPin` is on (the
-            customer Home's privacy toggle). Non-tappable so a stray
-            tap can't open a phantom seller-details screen. */}
-        {showUserPin &&
-        Number.isFinite(center.lat) &&
-        Number.isFinite(center.lng) ? (
-          <Marker
-            key="__user__"
-            coordinate={{ latitude: center.lat, longitude: center.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
-            // Intentionally no `onPress` — the user pin is decorative.
-          >
-            <View
-              style={[styles.pinWrap, styles.pinWrapUser]}
-              pointerEvents="none"
-              collapsable={false}
-            >
-              <View style={[styles.pin, styles.pinUser]}>
-                <Ionicons name="navigate" size={16} color="#FFF" />
-              </View>
-              <View style={styles.pinLabel}>
-                <Text style={styles.pinLabelText} numberOfLines={1}>
-                  You
-                </Text>
-              </View>
-            </View>
-          </Marker>
-        ) : null}
       </MapView>
 
       <View style={styles.attribution} pointerEvents="none">
