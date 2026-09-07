@@ -40,6 +40,7 @@ import {
   AdminStatTile,
   AdminTable,
   AdminTabs,
+  AdminUserDeleteActions,
 } from "../../src/components/admin";
 import { AdminTableColumn } from "../../src/components/admin/AdminTable";
 import { Colors, FontSize, Radius, Spacing } from "../../constants/colors";
@@ -301,6 +302,14 @@ function RidersTab() {
                         variant="secondary"
                         size="sm"
                         onPress={() => openRider(r)}
+                      />
+                      <AdminUserDeleteActions
+                        user={{
+                          id: r.id,
+                          fullName: r.fullName,
+                          isActive: r.isActive,
+                        }}
+                        onChanged={reload}
                       />
                     </View>
                   )}

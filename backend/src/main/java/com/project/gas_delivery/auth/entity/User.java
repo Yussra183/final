@@ -60,6 +60,25 @@ public class User {
     @Column(name = "is_active", nullable = false)
     private boolean active = true;
 
+    /**
+     * Timestamp the admin disabled this account. NULL means "not
+     * admin-deactivated" — every fresh registration and every pending
+     * permit has NULL here. When non-null, the row is locked from
+     * login across every role (the {@code AuthServiceImpl.login} gate
+     * also covers the historical SELLER exemption for permit-pending
+     * accounts).
+     */
+    @Column(name = "deactivated_at")
+    private Instant deactivatedAt;
+
+    /** Admin user id who flipped {@link #deactivatedAt}. NULL until set. */
+    @Column(name = "deactivated_by")
+    private Long deactivatedBy;
+
+    /** Free-text reason captured at deactivation time, max 500 chars. */
+    @Column(name = "deactivation_reason", length = 500)
+    private String deactivationReason;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -153,6 +172,30 @@ public class User {
 
     public void setActive(boolean active) {
         this.active = active;
+    }
+
+    public Instant getDeactivatedAt() {
+        return deactivatedAt;
+    }
+
+    public void setDeactivatedAt(Instant deactivatedAt) {
+        this.deactivatedAt = deactivatedAt;
+    }
+
+    public Long getDeactivatedBy() {
+        return deactivatedBy;
+    }
+
+    public void setDeactivatedBy(Long deactivatedBy) {
+        this.deactivatedBy = deactivatedBy;
+    }
+
+    public String getDeactivationReason() {
+        return deactivationReason;
+    }
+
+    public void setDeactivationReason(String deactivationReason) {
+        this.deactivationReason = deactivationReason;
     }
 
     public Instant getCreatedAt() {

@@ -70,4 +70,23 @@ public class SessionService {
     public Role roleOf(String token) {
         return resolve(token).map(User::getRole).orElse(null);
     }
+
+    /**
+     * Invalidate every live session for a given user id. Used by the
+     * admin user-deletion flow when an account is deactivated so the
+     * user is logged out immediately rather than waiting for token
+     * expiry. No-op if the user has no live tokens. Returns the number
+     * of tokens removed (handy for logging / tests).
+     */
+    public int invalidateAll(Long userId) {
+        if (userId == null) return 0;
+        int removed = 0;
+        for (var entry : tokens.entrySet()) {
+            if (userId.equals(entry.getValue())) {
+                tokens.remove(entry.getKey(), userId);
+                removed++;
+            }
+        }
+        return removed;
+    }
 }

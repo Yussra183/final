@@ -42,6 +42,7 @@ import {
   AdminStatTile,
   AdminTable,
   AdminTabs,
+  AdminUserDeleteActions,
   ApplicationStatusBadge,
 } from "../../src/components/admin";
 import { AdminTableColumn } from "../../src/components/admin/AdminTable";
@@ -307,6 +308,14 @@ function SellersTab() {
                         variant="secondary"
                         size="sm"
                         onPress={() => setViewTarget(s)}
+                      />
+                      <AdminUserDeleteActions
+                        user={{
+                          id: s.id,
+                          fullName: s.fullName,
+                          isActive: s.isActive,
+                        }}
+                        onChanged={reload}
                       />
                     </View>
                   )}

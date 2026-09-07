@@ -942,6 +942,47 @@ export const AdminApi = {
     type?: string;
     read?: boolean;
   }) => api.get<AdminNotification[]>("/api/admin/notifications", filter),
+
+  // ---- Admin write surface (V23 / user-deletion) ---------------------
+
+  /**
+   * Soft-deactivate a Seller / Rider / Supplier. The backend sets
+   * {@code isActive = false}, records {@code deactivatedAt} /
+   * {@code deactivatedBy} / {@code reason}, and invalidates any live
+   * session — returns the updated {@link AdminUser}. Sending no body
+   * is fine; the admin may pass an optional {@code reason} for audit.
+   *
+   * <p>This endpoint is server-side admin-gated by {@code AdminGuard},
+   * not by hiding the button client-side.</p>
+   */
+  deactivateUser: (id: string, reason?: string) =>
+    api.post<AdminUser>(
+      `/api/admin/users/${encodeURIComponent(id)}/deactivate`,
+      { reason: reason ?? null },
+    ),
+
+  /**
+   * Reverse {@link AdminApi.deactivateUser}. Idempotent — the backend
+   * returns the current row even if the user was already active.
+   */
+  reactivateUser: (id: string) =>
+    api.post<AdminUser>(
+      `/api/admin/users/${encodeURIComponent(id)}/reactivate`,
+      {},
+    ),
+
+  /**
+   * Hard-delete a Seller / Rider / Supplier account. The backend
+   * refuses with HTTP 409 if the user still owns in-flight
+   * transactions; the response body's {@code code} field carries the
+   * specific blocker (e.g. {@code ACTIVE_ORDERS},
+   * {@code ACTIVE_DELIVERIES}). On success the response is a small
+   * {@code {id, deleted:true}} envelope.
+   */
+  deleteUser: (id: string) =>
+    api.delete<{ id: string; deleted: boolean }>(
+      `/api/admin/users/${encodeURIComponent(id)}`,
+    ),
 };
 
 // ---- Complaints --------------------------------------------------------

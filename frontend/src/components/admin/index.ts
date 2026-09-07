@@ -45,3 +45,5 @@ export { AdminAvatar } from "./AdminAvatar";
 export { AdminIcon } from "./Icon";
 export type { AdminIconName } from "./Icon";
 export { adminIconGlyph } from "./Icon";
+export { AdminUserDeleteActions } from "./AdminUserDeleteActions";
+export type { AdminUserDeleteActionsProps } from "./AdminUserDeleteActions";

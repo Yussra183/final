@@ -41,6 +41,7 @@ import {
   AdminStatTile,
   AdminTable,
   AdminTabs,
+  AdminUserDeleteActions,
 } from "../../src/components/admin";
 import { AdminTableColumn } from "../../src/components/admin/AdminTable";
 import {
@@ -239,6 +240,7 @@ function SuppliersTab() {
                         size="sm"
                         onPress={() => setViewTarget(s)}
                       />
+                      <AdminUserDeleteActions user={s} onChanged={reload} />
                     </View>
                   )}
                 />

@@ -80,4 +80,20 @@ public interface PaymentRepository extends JpaRepository<PaymentEntity, Long> {
             """)
     List<Object[]> aggregateDailyRevenue(@Param("from") Instant from,
                                          @Param("to") Instant to);
+
+    // ---- Admin write surface (user-deletion active-operations guard) --
+
+    /**
+     * Count of payments referencing the given seller in a not-yet-final
+     * state. A seller cannot be deactivated / hard-deleted while a
+     * payment is still pending. COMPLETED payments are intentionally NOT
+     * a blocker, per the project rule that transaction history must
+     * survive user deletion.
+     */
+    @Query("""
+            SELECT COUNT(p) FROM PaymentEntity p
+             WHERE p.sellerId = :sellerId
+               AND p.status = com.project.gas_delivery.payment.enums.PaymentStatus.PENDING
+            """)
+    long countPendingBySellerId(@Param("sellerId") Long sellerId);
 }

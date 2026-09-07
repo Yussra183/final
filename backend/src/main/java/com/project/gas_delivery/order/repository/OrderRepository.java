@@ -168,4 +168,38 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
 
     /** Orders placed against one seller — used for the seller detail panel. */
     long countBySellerId(Long sellerId);
+
+    // ---- Admin write surface (user-deletion active-operations guard) --
+
+    /**
+     * Count of non-terminal orders referencing the given seller. A seller
+     * cannot be deactivated / hard-deleted while customers are still
+     * waiting on fulfilment. Non-terminal = every status except
+     * DELIVERED, CANCELLED, REJECTED (the three "admit no further
+     * transitions" values per {@link OrderStatus} javadoc).
+     */
+    @Query("""
+            SELECT COUNT(o) FROM OrderEntity o
+             WHERE o.sellerId = :sellerId
+               AND o.status NOT IN (
+                   com.project.gas_delivery.order.enums.OrderStatus.DELIVERED,
+                   com.project.gas_delivery.order.enums.OrderStatus.CANCELLED,
+                   com.project.gas_delivery.order.enums.OrderStatus.REJECTED)
+            """)
+    long countActiveBySellerId(@Param("sellerId") Long sellerId);
+
+    /**
+     * Count of non-terminal orders assigned to the given rider. A rider
+     * cannot be deactivated / hard-deleted while they still own an
+     * in-flight delivery. Same terminal set as the seller variant.
+     */
+    @Query("""
+            SELECT COUNT(o) FROM OrderEntity o
+             WHERE o.riderId = :riderId
+               AND o.status NOT IN (
+                   com.project.gas_delivery.order.enums.OrderStatus.DELIVERED,
+                   com.project.gas_delivery.order.enums.OrderStatus.CANCELLED,
+                   com.project.gas_delivery.order.enums.OrderStatus.REJECTED)
+            """)
+    long countActiveByRiderId(@Param("riderId") Long riderId);
 }

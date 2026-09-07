@@ -108,6 +108,18 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 409 Conflict — request was well-formed but the current data state
+     * forbids it. Used by the admin user-deletion flow when a Seller,
+     * Rider, or Supplier is still referenced by an in-flight transaction.
+     * The exception's {@code code} is surfaced as the body's {@code code}
+     * field so the frontend can show a targeted message.
+     */
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<Map<String, Object>> handleConflict(ConflictException ex) {
+        return ApiErrorBody.of(HttpStatus.CONFLICT, ex.getMessage(), ex.getCode(), null);
+    }
+
+    /**
      * Order Flow: a customer/seller/rider attempted to act on an order
      * they don't own. 403 with {@code code=NOT_AUTHORIZED}.
      */

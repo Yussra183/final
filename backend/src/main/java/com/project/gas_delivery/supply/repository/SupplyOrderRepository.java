@@ -48,4 +48,24 @@ public interface SupplyOrderRepository extends JpaRepository<SupplyOrderEntity, 
              ORDER BY s.createdAt DESC
             """)
     List<SupplyOrderEntity> findUnclaimedPending();
+
+    // ---- Admin write surface (user-deletion active-operations guard) --
+
+    /**
+     * Count of non-terminal supply orders referencing the given
+     * supplier. A supplier cannot be deactivated / hard-deleted while a
+     * gas-restock request is still in flight. Non-terminal = every
+     * status except DELIVERED, REJECTED, CANCELLED (the three terminal
+     * {@link com.project.gas_delivery.supply.enums.SupplyOrderStatus}
+     * values per its javadoc).
+     */
+    @Query("""
+            SELECT COUNT(s) FROM SupplyOrderEntity s
+             WHERE s.supplierId = :supplierId
+               AND s.status NOT IN (
+                   com.project.gas_delivery.supply.enums.SupplyOrderStatus.DELIVERED,
+                   com.project.gas_delivery.supply.enums.SupplyOrderStatus.REJECTED,
+                   com.project.gas_delivery.supply.enums.SupplyOrderStatus.CANCELLED)
+            """)
+    long countActiveBySupplierId(@Param("supplierId") Long supplierId);
 }

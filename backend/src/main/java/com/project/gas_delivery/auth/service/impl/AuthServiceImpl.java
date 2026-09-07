@@ -274,6 +274,21 @@ public class AuthServiceImpl implements AuthService {
             throw new BadCredentialsException("Account is disabled");
         }
 
+        // Admin deactivation (V23) — overrides the SELLER exemption above.
+        // A pending-permit seller can still log in (`is_active=false`,
+        // `deactivated_at=null`), but an admin-disabled seller (any role)
+        // carries a non-null `deactivated_at` and is locked out across
+        // every role, including SELLER. Checked AFTER the is_active gate
+        // so the legacy path keeps its message for users that were
+        // disabled before V23.
+        if (user.getDeactivatedAt() != null) {
+            if (LOG.isInfoEnabled()) {
+                LOG.info("[AUTH_DIAG] branch=admin_deactivated user_id={} role={}",
+                        user.getId(), user.getRole());
+            }
+            throw new BadCredentialsException("Account is disabled");
+        }
+
         if (user.getRole() == Role.RIDER
                 && !riderApplicationRepository
                         .findRiderIdsByStatus(PermitStatus.APPROVED)
